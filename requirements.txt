@@ -1,0 +1,9 @@
+# Runtime dependencies for aetherfy-vectors
+# Core HTTP client for API communication
+requests>=2.28.0,<3.0.0
+
+# Data validation and serialization (optional but recommended)
+pydantic>=1.10.0,<3.0.0
+
+# Type hints support for older Python versions
+typing-extensions>=4.0.0

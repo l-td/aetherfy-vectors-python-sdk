@@ -1,0 +1,97 @@
+"""
+Custom exceptions for Aetherfy Vectors SDK.
+
+These exceptions provide specific error handling for various scenarios
+that can occur when interacting with the global vector database service.
+"""
+
+from typing import Optional, Dict, Any
+
+
+class AetherfyVectorsException(Exception):
+    """Base exception for all Aetherfy Vectors errors."""
+
+    def __init__(
+        self,
+        message: str,
+        request_id: Optional[str] = None,
+        status_code: Optional[int] = None,
+        details: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__(message)
+        self.message = message
+        self.request_id = request_id
+        self.status_code = status_code
+        self.details = details or {}
+
+    def __str__(self) -> str:
+        base_msg = self.message
+        if self.request_id:
+            base_msg += f" (Request ID: {self.request_id})"
+        return base_msg
+
+
+class AuthenticationError(AetherfyVectorsException):
+    """Invalid or missing API key."""
+
+    def __init__(self, message: str = "Invalid or missing API key", **kwargs):
+        super().__init__(message, **kwargs)
+
+
+class RateLimitExceededError(AetherfyVectorsException):
+    """Customer has exceeded their usage limits."""
+
+    def __init__(
+        self,
+        message: str = "Rate limit exceeded",
+        retry_after: Optional[int] = None,
+        **kwargs,
+    ):
+        super().__init__(message, **kwargs)
+        self.retry_after = retry_after
+
+    def __str__(self) -> str:
+        base_msg = super().__str__()
+        if self.retry_after:
+            base_msg += f" (Retry after {self.retry_after} seconds)"
+        return base_msg
+
+
+class ServiceUnavailableError(AetherfyVectorsException):
+    """Backend service is temporarily unavailable."""
+
+    def __init__(self, message: str = "Service temporarily unavailable", **kwargs):
+        super().__init__(message, **kwargs)
+
+
+class ValidationError(AetherfyVectorsException):
+    """Invalid request parameters or data."""
+
+    def __init__(self, message: str = "Invalid request parameters", **kwargs):
+        super().__init__(message, **kwargs)
+
+
+class CollectionNotFoundError(AetherfyVectorsException):
+    """Specified collection does not exist."""
+
+    def __init__(self, collection_name: str, **kwargs):
+        message = f"Collection '{collection_name}' not found"
+        super().__init__(message, **kwargs)
+        self.collection_name = collection_name
+
+
+class PointNotFoundError(AetherfyVectorsException):
+    """Specified point does not exist."""
+
+    def __init__(self, point_id: str, collection_name: str, **kwargs):
+        message = f"Point '{point_id}' not found in collection '{collection_name}'"
+        super().__init__(message, **kwargs)
+        self.point_id = point_id
+        self.collection_name = collection_name
+
+
+class RequestTimeoutError(AetherfyVectorsException):
+    """Request timed out."""
+
+    def __init__(self, message: str = "Request timed out", **kwargs):
+        super().__init__(message, **kwargs)
