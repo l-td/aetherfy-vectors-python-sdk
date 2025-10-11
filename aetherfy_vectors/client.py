@@ -193,7 +193,9 @@ class AetherfyVectorsClient:
             if "size" in vectors_config and "distance" in vectors_config:
                 config = VectorConfig(
                     size=vectors_config["size"],
-                    distance=self._normalize_distance_metric(vectors_config["distance"]),
+                    distance=self._normalize_distance_metric(
+                        vectors_config["distance"]
+                    ),
                 )
             else:
                 # Handle qdrant-client format
@@ -202,7 +204,9 @@ class AetherfyVectorsClient:
                     raise ValueError("Vector size must be specified")
                 config = VectorConfig(
                     size=int(size),
-                    distance=self._normalize_distance_metric(vectors_config.get("distance", "Cosine")),
+                    distance=self._normalize_distance_metric(
+                        vectors_config.get("distance", "Cosine")
+                    ),
                 )
         elif isinstance(vectors_config, VectorConfig):
             config = vectors_config
