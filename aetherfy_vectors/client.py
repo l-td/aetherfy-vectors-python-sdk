@@ -123,6 +123,45 @@ class AetherfyVectorsClient:
         except requests.RequestException as e:
             raise AetherfyVectorsException(f"Request failed: {str(e)}")
 
+    def _normalize_distance_metric(
+        self, distance: Union[str, DistanceMetric]
+    ) -> DistanceMetric:
+        """Normalize distance metric to proper DistanceMetric enum.
+
+        Args:
+            distance: Distance metric as string or DistanceMetric enum.
+
+        Returns:
+            Normalized DistanceMetric enum value.
+
+        Raises:
+            ValueError: If distance metric is invalid.
+        """
+        if isinstance(distance, DistanceMetric):
+            return distance
+
+        # Normalize string to capitalized format matching Qdrant API
+        distance_map = {
+            "cosine": DistanceMetric.COSINE,
+            "euclidean": DistanceMetric.EUCLIDEAN,
+            "euclid": DistanceMetric.EUCLIDEAN,
+            "dot": DistanceMetric.DOT,
+            "manhattan": DistanceMetric.MANHATTAN,
+        }
+
+        normalized = distance_map.get(distance.lower())
+        if normalized:
+            return normalized
+
+        # Try to create DistanceMetric directly (handles already-capitalized strings)
+        try:
+            return DistanceMetric(distance)
+        except ValueError:
+            raise ValueError(
+                f"Invalid distance metric: {distance}. "
+                f"Must be one of: {', '.join(d.value for d in DistanceMetric)}"
+            )
+
     # Collection Management Methods
 
     def create_collection(
@@ -154,7 +193,7 @@ class AetherfyVectorsClient:
             if "size" in vectors_config and "distance" in vectors_config:
                 config = VectorConfig(
                     size=vectors_config["size"],
-                    distance=DistanceMetric(vectors_config["distance"]),
+                    distance=self._normalize_distance_metric(vectors_config["distance"]),
                 )
             else:
                 # Handle qdrant-client format
@@ -163,7 +202,7 @@ class AetherfyVectorsClient:
                     raise ValueError("Vector size must be specified")
                 config = VectorConfig(
                     size=int(size),
-                    distance=DistanceMetric(vectors_config.get("distance", "Cosine")),
+                    distance=self._normalize_distance_metric(vectors_config.get("distance", "Cosine")),
                 )
         elif isinstance(vectors_config, VectorConfig):
             config = vectors_config
@@ -174,7 +213,7 @@ class AetherfyVectorsClient:
 
         # Override distance if provided separately (for compatibility)
         if distance:
-            config.distance = distance
+            config.distance = self._normalize_distance_metric(distance)
 
         data = {"name": collection_name, "vectors": config.to_dict()}
 
