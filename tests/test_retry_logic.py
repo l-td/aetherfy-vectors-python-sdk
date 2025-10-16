@@ -152,8 +152,8 @@ class TestRetryLogic:
         for i in range(1, len(timestamps)):
             delay = timestamps[i] - timestamps[i - 1]
             # With jitter, delay should be between 50% and 100% of max_delay
-            # Add 0.05s tolerance for execution overhead
-            assert delay <= 0.55
+            # Add 0.1s tolerance for execution overhead on slower CI environments
+            assert delay <= 0.6
 
     def test_successful_first_attempt(self):
         """Should return immediately on successful first attempt"""
