@@ -6,8 +6,9 @@ and data validation across the SDK.
 """
 
 import json
+import random
 import time
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, Callable
 from urllib.parse import urljoin, urlparse
 
 from .exceptions import ValidationError, AetherfyVectorsException
@@ -224,13 +225,21 @@ def format_points_for_upsert(points: List[Dict[str, Any]]) -> List[Dict[str, Any
     return formatted_points
 
 
-def retry_with_backoff(func, max_retries: int = 3, base_delay: float = 1.0):
+def retry_with_backoff(
+    func: Callable,
+    max_retries: int = 3,
+    base_delay: float = 1.0,
+    max_delay: float = 30.0,
+    retry_condition: Optional[Callable[[Exception], bool]] = None,
+):
     """Retry function with exponential backoff.
 
     Args:
         func: Function to retry.
         max_retries: Maximum number of retries.
         base_delay: Base delay between retries in seconds.
+        max_delay: Maximum delay cap in seconds.
+        retry_condition: Optional function to determine if error is retryable.
 
     Returns:
         Function result.
@@ -238,6 +247,8 @@ def retry_with_backoff(func, max_retries: int = 3, base_delay: float = 1.0):
     Raises:
         Last exception if all retries fail.
     """
+    from .exceptions import is_retryable_error
+
     last_exception = None
 
     for attempt in range(max_retries + 1):
@@ -245,8 +256,16 @@ def retry_with_backoff(func, max_retries: int = 3, base_delay: float = 1.0):
             return func()
         except Exception as e:
             last_exception = e
-            if attempt < max_retries:
-                delay = base_delay * (2**attempt)
+
+            # Check if error is retryable
+            should_retry = (
+                retry_condition(e) if retry_condition else is_retryable_error(e)
+            )
+
+            if should_retry and attempt < max_retries:
+                delay = min(base_delay * (2**attempt), max_delay)
+                # Add jitter (50-100% of delay)
+                delay = delay * (0.5 + 0.5 * random.random())
                 time.sleep(delay)
             else:
                 break

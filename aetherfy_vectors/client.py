@@ -83,14 +83,16 @@ class AetherfyVectorsClient:
         endpoint: str,
         data: Optional[Dict[str, Any]] = None,
         params: Optional[Dict[str, Any]] = None,
+        enable_retry: bool = True,
     ) -> Any:
-        """Make HTTP request to the API.
+        """Make HTTP request to the API with retry logic.
 
         Args:
             method: HTTP method (GET, POST, PUT, DELETE).
             endpoint: API endpoint path.
             data: Request body data.
             params: Query parameters.
+            enable_retry: Whether to enable retry logic (default: True).
 
         Returns:
             Response data.
@@ -98,30 +100,41 @@ class AetherfyVectorsClient:
         Raises:
             AetherfyVectorsException: If request fails.
         """
-        url = build_api_url(self.endpoint, endpoint)
+        from .utils import retry_with_backoff
 
-        try:
-            response = requests.request(
-                method=method,
-                url=url,
-                headers=self.auth_headers,
-                json=data if data is not None else None,
-                params=params,
-                timeout=self.timeout,
+        def make_single_request():
+            url = build_api_url(self.endpoint, endpoint)
+
+            try:
+                response = requests.request(
+                    method=method,
+                    url=url,
+                    headers=self.auth_headers,
+                    json=data if data is not None else None,
+                    params=params,
+                    timeout=self.timeout,
+                )
+
+                if response.status_code in [200, 201]:
+                    return response.json() if response.content else None
+                else:
+                    error_data = response.json() if response.content else {}
+                    raise parse_error_response(error_data, response.status_code)
+
+            except requests.Timeout:
+                raise RequestTimeoutError(
+                    f"Request to {endpoint} timed out after {self.timeout} seconds"
+                )
+            except requests.RequestException as e:
+                raise AetherfyVectorsException(f"Request failed: {str(e)}")
+
+        # Apply retry logic only for write operations (POST, PUT)
+        if enable_retry and method in ["POST", "PUT"]:
+            return retry_with_backoff(
+                make_single_request, max_retries=3, base_delay=1.0
             )
-
-            if response.status_code in [200, 201]:
-                return response.json() if response.content else None
-            else:
-                error_data = response.json() if response.content else {}
-                raise parse_error_response(error_data, response.status_code)
-
-        except requests.Timeout:
-            raise RequestTimeoutError(
-                f"Request to {endpoint} timed out after {self.timeout} seconds"
-            )
-        except requests.RequestException as e:
-            raise AetherfyVectorsException(f"Request failed: {str(e)}")
+        else:
+            return make_single_request()
 
     def _normalize_distance_metric(
         self, distance: Union[str, DistanceMetric]

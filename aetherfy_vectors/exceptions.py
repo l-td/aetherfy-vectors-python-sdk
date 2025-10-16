@@ -95,3 +95,27 @@ class RequestTimeoutError(AetherfyVectorsException):
 
     def __init__(self, message: str = "Request timed out", **kwargs):
         super().__init__(message, **kwargs)
+
+
+class NetworkError(AetherfyVectorsException):
+    """Network connection error."""
+
+    def __init__(self, message: str = "Network connection error", **kwargs):
+        super().__init__(message, **kwargs)
+
+
+def is_retryable_error(error: Exception) -> bool:
+    """Check if an error should be retried.
+
+    Args:
+        error: The exception to check.
+
+    Returns:
+        True if error is retryable, False otherwise.
+    """
+    return (
+        isinstance(error, ServiceUnavailableError)
+        or isinstance(error, RequestTimeoutError)
+        or isinstance(error, NetworkError)
+        or (isinstance(error, RateLimitExceededError) and error.retry_after is not None)
+    )
