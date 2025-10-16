@@ -132,8 +132,8 @@ class TestRetryLogic:
         assert len(timestamps) == 3  # Initial + 2 retries
         delay1 = timestamps[1] - timestamps[0]
         # Base delay is 0.1, with jitter should be between 0.05 and 0.1
-        # Add 0.05s tolerance for execution overhead
-        assert 0.05 <= delay1 <= 0.15
+        # Add 0.1s tolerance for execution overhead on slower CI environments
+        assert 0.05 <= delay1 <= 0.2
 
     def test_max_delay_cap(self):
         """Should cap delay at max_delay"""

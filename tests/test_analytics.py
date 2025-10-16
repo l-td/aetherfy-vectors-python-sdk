@@ -271,6 +271,54 @@ class TestAnalyticsErrorHandling:
         assert "Failed to retrieve top collections" in str(exc_info.value)
         assert "Service unavailable" in str(exc_info.value)
 
+    @patch('aetherfy_vectors.analytics.requests.get')
+    def test_performance_analytics_empty_response(self, mock_get, analytics_client):
+        """Test handling of empty response body in performance analytics."""
+        mock_response = Mock()
+        mock_response.status_code = 500
+        mock_response.content = None  # Empty response
+        mock_response.json.return_value = {}
+        mock_get.return_value = mock_response
+
+        with pytest.raises(AetherfyVectorsException):
+            analytics_client.get_performance_analytics()
+
+    @patch('aetherfy_vectors.analytics.requests.get')
+    def test_collection_analytics_empty_response(self, mock_get, analytics_client):
+        """Test handling of empty response body in collection analytics."""
+        mock_response = Mock()
+        mock_response.status_code = 500
+        mock_response.content = None  # Empty response
+        mock_response.json.return_value = {}
+        mock_get.return_value = mock_response
+
+        with pytest.raises(AetherfyVectorsException):
+            analytics_client.get_collection_analytics("test_collection")
+
+    @patch('aetherfy_vectors.analytics.requests.get')
+    def test_usage_stats_empty_response(self, mock_get, analytics_client):
+        """Test handling of empty response body in usage stats."""
+        mock_response = Mock()
+        mock_response.status_code = 500
+        mock_response.content = None  # Empty response
+        mock_response.json.return_value = {}
+        mock_get.return_value = mock_response
+
+        with pytest.raises(AetherfyVectorsException):
+            analytics_client.get_usage_stats()
+
+    @patch('aetherfy_vectors.analytics.requests.get')
+    def test_top_collections_empty_response(self, mock_get, analytics_client):
+        """Test handling of empty response body in top collections."""
+        mock_response = Mock()
+        mock_response.status_code = 500
+        mock_response.content = None  # Empty response
+        mock_response.json.return_value = {}
+        mock_get.return_value = mock_response
+
+        with pytest.raises(AetherfyVectorsException):
+            analytics_client.get_top_collections()
+
 
 class TestAnalyticsModels:
     """Test analytics data model functionality."""

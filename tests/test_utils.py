@@ -189,6 +189,10 @@ class TestParseErrorResponse:
         error = parse_error_response(response_data, 429)
         assert isinstance(error, RateLimitExceededError)
         assert error.retry_after == 60
+        # Test that string representation includes retry_after
+        error_str = str(error)
+        assert "Rate limit exceeded" in error_str
+        assert "Retry after 60 seconds" in error_str
 
     def test_parse_error_response_502(self):
         """Test parsing 502 service unavailable error."""
