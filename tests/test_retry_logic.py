@@ -73,22 +73,29 @@ class TestRetryLogic:
 
         assert mock_fn.call_count == 1
 
-    def test_exponential_backoff(self):
+    @patch('time.sleep')
+    def test_exponential_backoff(self, mock_sleep):
         """Should apply exponential backoff delays"""
-        timestamps = []
-
-        def failing_fn():
-            timestamps.append(time.time())
-            raise ServiceUnavailableError("Service Unavailable")
+        mock_fn = Mock(side_effect=ServiceUnavailableError("Service Unavailable"))
 
         with pytest.raises(ServiceUnavailableError):
-            retry_with_backoff(failing_fn, max_retries=3, base_delay=0.1)
+            retry_with_backoff(mock_fn, max_retries=3, base_delay=0.1)
 
-        # Check that delays increase exponentially
-        assert len(timestamps) == 4  # Initial + 3 retries
-        delay1 = timestamps[1] - timestamps[0]
-        delay2 = timestamps[2] - timestamps[1]
-        assert delay2 > delay1
+        # Should have 3 sleep calls (one per retry)
+        assert mock_sleep.call_count == 3
+
+        # Get the actual delay values
+        delays = [call[0][0] for call in mock_sleep.call_args_list]
+
+        # Base delays before jitter: 0.1, 0.2, 0.4 (exponential: base * 2^attempt)
+        # With jitter (50-100%), delays should be in ranges:
+        # delay1: 0.05-0.1, delay2: 0.1-0.2, delay3: 0.2-0.4
+        assert 0.05 <= delays[0] <= 0.1
+        assert 0.1 <= delays[1] <= 0.2
+        assert 0.2 <= delays[2] <= 0.4
+
+        # Verify exponential growth: third delay should be greater than first
+        assert delays[2] > delays[0]
 
     def test_max_retries_exhausted(self):
         """Should fail after exhausting retries"""
@@ -117,43 +124,50 @@ class TestRetryLogic:
 
         assert mock_fn.call_count == 1
 
-    def test_jitter_applied(self):
+    @patch('time.sleep')
+    def test_jitter_applied(self, mock_sleep):
         """Should apply jitter to prevent thundering herd"""
-        timestamps = []
-
-        def failing_fn():
-            timestamps.append(time.time())
-            raise ServiceUnavailableError("Service Unavailable")
+        mock_fn = Mock(side_effect=ServiceUnavailableError("Service Unavailable"))
 
         with pytest.raises(ServiceUnavailableError):
-            retry_with_backoff(failing_fn, max_retries=2, base_delay=0.1)
+            retry_with_backoff(mock_fn, max_retries=2, base_delay=0.1)
 
-        # Check that delays have jitter (not exact exponential)
-        assert len(timestamps) == 3  # Initial + 2 retries
-        delay1 = timestamps[1] - timestamps[0]
-        # Base delay is 0.1, with jitter should be between 0.05 and 0.1
-        # Add 0.1s tolerance for execution overhead on slower CI environments
-        assert 0.05 <= delay1 <= 0.2
+        # Should have 2 sleep calls (one per retry)
+        assert mock_sleep.call_count == 2
 
-    def test_max_delay_cap(self):
+        # Get the actual delay values
+        delays = [call[0][0] for call in mock_sleep.call_args_list]
+
+        # Base delay is 0.1, with jitter (50-100%) should be between 0.05 and 0.1
+        # Base delay for retry 2 is 0.2, with jitter should be between 0.1 and 0.2
+        assert 0.05 <= delays[0] <= 0.1
+        assert 0.1 <= delays[1] <= 0.2
+
+        # Verify that jitter was actually applied (delays should not be exact exponential values)
+        # With jitter, it's very unlikely (probability < 0.01) that both delays are at exact maximum
+        assert not (delays[0] == 0.1 and delays[1] == 0.2)
+
+    @patch('time.sleep')
+    def test_max_delay_cap(self, mock_sleep):
         """Should cap delay at max_delay"""
-        timestamps = []
-
-        def failing_fn():
-            timestamps.append(time.time())
-            raise ServiceUnavailableError("Service Unavailable")
+        mock_fn = Mock(side_effect=ServiceUnavailableError("Service Unavailable"))
 
         with pytest.raises(ServiceUnavailableError):
             retry_with_backoff(
-                failing_fn, max_retries=10, base_delay=1.0, max_delay=0.5
+                mock_fn, max_retries=10, base_delay=1.0, max_delay=0.5
             )
 
-        # Check that delays don't exceed max_delay
-        for i in range(1, len(timestamps)):
-            delay = timestamps[i] - timestamps[i - 1]
-            # With jitter, delay should be between 50% and 100% of max_delay
-            # Add 0.1s tolerance for execution overhead on slower CI environments
-            assert delay <= 0.6
+        # Should have 10 sleep calls (one per retry)
+        assert mock_sleep.call_count == 10
+
+        # Get the actual delay values
+        delays = [call[0][0] for call in mock_sleep.call_args_list]
+
+        # Without cap: 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, ...
+        # With max_delay=0.5, all delays after first should be capped at 0.5
+        # With jitter (50-100%), delays should be in range [0.25, 0.5]
+        for delay in delays:
+            assert 0.25 <= delay <= 0.5
 
     def test_successful_first_attempt(self):
         """Should return immediately on successful first attempt"""
