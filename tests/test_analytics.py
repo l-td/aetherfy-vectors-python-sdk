@@ -223,9 +223,53 @@ class TestAnalyticsErrorHandling:
     def test_timeout_handling(self, mock_get, analytics_client):
         """Test timeout handling in analytics requests."""
         mock_get.side_effect = requests.Timeout("Request timed out")
-        
+
         with pytest.raises(AetherfyVectorsException):
             analytics_client.get_performance_analytics()
+
+    @patch('aetherfy_vectors.analytics.requests.get')
+    def test_collection_analytics_request_exception(self, mock_get, analytics_client):
+        """Test RequestException handling in collection analytics."""
+        mock_get.side_effect = requests.RequestException("Network error")
+
+        with pytest.raises(AetherfyVectorsException) as exc_info:
+            analytics_client.get_collection_analytics("test_collection")
+
+        assert "Failed to retrieve collection analytics" in str(exc_info.value)
+        assert "Network error" in str(exc_info.value)
+
+    @patch('aetherfy_vectors.analytics.requests.get')
+    def test_region_performance_request_exception(self, mock_get, analytics_client):
+        """Test RequestException handling in region performance."""
+        mock_get.side_effect = requests.RequestException("Connection error")
+
+        with pytest.raises(AetherfyVectorsException) as exc_info:
+            analytics_client.get_region_performance()
+
+        assert "Failed to retrieve region performance" in str(exc_info.value)
+        assert "Connection error" in str(exc_info.value)
+
+    @patch('aetherfy_vectors.analytics.requests.get')
+    def test_cache_analytics_request_exception(self, mock_get, analytics_client):
+        """Test RequestException handling in cache analytics."""
+        mock_get.side_effect = requests.RequestException("Timeout error")
+
+        with pytest.raises(AetherfyVectorsException) as exc_info:
+            analytics_client.get_cache_analytics()
+
+        assert "Failed to retrieve cache analytics" in str(exc_info.value)
+        assert "Timeout error" in str(exc_info.value)
+
+    @patch('aetherfy_vectors.analytics.requests.get')
+    def test_top_collections_request_exception(self, mock_get, analytics_client):
+        """Test RequestException handling in top collections."""
+        mock_get.side_effect = requests.RequestException("Service unavailable")
+
+        with pytest.raises(AetherfyVectorsException) as exc_info:
+            analytics_client.get_top_collections()
+
+        assert "Failed to retrieve top collections" in str(exc_info.value)
+        assert "Service unavailable" in str(exc_info.value)
 
 
 class TestAnalyticsModels:
