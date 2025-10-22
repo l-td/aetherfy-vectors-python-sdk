@@ -22,7 +22,7 @@ from .models import (
     CollectionAnalytics,
     UsageStats,
 )
-from .exceptions import AetherfyVectorsException, RequestTimeoutError
+from .exceptions import AetherfyVectorsException, RequestTimeoutError, ValidationError
 from .utils import (
     validate_vector,
     validate_collection_name,
@@ -75,7 +75,9 @@ class AetherfyVectorsClient:
         }
 
         # Initialize schema cache for ETag-based validation
-        self._schema_cache: Dict[str, Dict[str, Any]] = {}  # {collection_name: {schema, etag}}
+        self._schema_cache: Dict[
+            str, Dict[str, Any]
+        ] = {}  # {collection_name: {schema, etag}}
 
         # Initialize analytics client
         self.analytics = AnalyticsClient(self.endpoint, self.auth_headers, timeout)
@@ -158,7 +160,7 @@ class AetherfyVectorsClient:
             "size": vector_config.get("size"),
             "distance": vector_config.get("distance"),
             "etag": schema_version,
-            "full_config": result
+            "full_config": result,
         }
 
         # Cache it
@@ -355,7 +357,9 @@ class AetherfyVectorsClient:
         expected_dim = schema.get("size")
         if expected_dim:
             for point in points:
-                vector = point.get("vector") if isinstance(point, dict) else point.vector
+                vector = (
+                    point.get("vector") if isinstance(point, dict) else point.vector
+                )
                 if not vector or not isinstance(vector, (list, tuple)):
                     raise ValueError("Each point must have a vector array")
 
@@ -379,47 +383,44 @@ class AetherfyVectorsClient:
 
         # Make request with If-Match header (ETag)
         data = {"points": formatted_points}
-        headers = self.auth_headers.copy()
+
+        # Add If-Match header if we have an ETag
+        extra_headers = {}
         if schema.get("etag"):
-            headers["If-Match"] = schema["etag"]
+            extra_headers["If-Match"] = schema["etag"]
 
         try:
-            # Use custom headers for this request
-            response = requests.put(
-                f"{self.endpoint}/collections/{collection_name}/points",
-                json=data,
-                headers=headers,
-                timeout=self.timeout
-            )
+            # Use existing _make_request method with custom headers
+            # We need to temporarily add the If-Match header
+            original_headers = self.auth_headers.copy()
+            if extra_headers:
+                self.auth_headers.update(extra_headers)
 
+            try:
+                response = self._make_request(
+                    "PUT", f"collections/{collection_name}/points", data
+                )
+                return True
+            finally:
+                # Restore original headers
+                self.auth_headers = original_headers
+
+        except ValidationError as e:
             # Handle 412 Precondition Failed (schema changed)
-            if response.status_code == 412:
+            if e.status_code == 412:
                 self.clear_schema_cache(collection_name)
-                error_data = response.json()
-                raise AetherfyVectorsException(
-                    f"Schema changed for collection '{collection_name}'. "
-                    f"Please retry your request. {error_data.get('error', {}).get('message', '')}"
+                raise ValidationError(
+                    f"Schema changed for collection '{collection_name}'. Please retry your request.",
+                    status_code=412,
                 )
 
-            # Handle 400 Bad Request (validation error from backend)
-            if response.status_code == 400:
-                error_data = response.json()
-                error_message = error_data.get('error', {}).get('message', 'Validation error')
-                raise ValueError(error_message)
+            # Handle 400 Bad Request (validation error from backend or client-side)
+            # Re-raise as ValueError for backward compatibility
+            raise ValueError(str(e))
 
-            # Handle 500+ Server Errors
-            if response.status_code >= 500:
-                error_data = response.json() if response.content else {}
-                error_message = error_data.get('error', {}).get('message', 'Server error occurred')
-                raise AetherfyVectorsException(f"Server error: {error_message}")
-
-            response.raise_for_status()
-            return True
-
-        except requests.exceptions.RequestException as e:
-            if isinstance(e, (ValueError, AetherfyVectorsException)):
-                raise
-            raise AetherfyVectorsException(f"Upsert failed: {str(e)}")
+        except AetherfyVectorsException as e:
+            # Re-raise other errors
+            raise
 
     def delete(
         self,

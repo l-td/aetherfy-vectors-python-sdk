@@ -172,10 +172,17 @@ class TestPointOperations:
     
     def test_upsert_points_success(self, client, mock_requests, mock_successful_response, sample_points):
         """Test successful point upsert."""
+        # Pre-populate schema cache to avoid schema fetch call
+        client._schema_cache["test_collection"] = {
+            "size": 4,  # Matches sample_points vector length
+            "distance": "Cosine",
+            "etag": "test123"
+        }
+
         mock_requests.request.return_value = mock_successful_response({})
-        
+
         result = client.upsert("test_collection", sample_points)
-        
+
         assert result is True
         mock_requests.request.assert_called_once()
         args, kwargs = mock_requests.request.call_args
@@ -185,15 +192,22 @@ class TestPointOperations:
     
     def test_upsert_point_objects(self, client, mock_requests, mock_successful_response):
         """Test upsert with Point objects."""
+        # Pre-populate schema cache to avoid schema fetch call
+        client._schema_cache["test_collection"] = {
+            "size": 3,  # Matches Point vector length
+            "distance": "Cosine",
+            "etag": "test123"
+        }
+
         mock_requests.request.return_value = mock_successful_response({})
-        
+
         points = [
             Point(id="point_1", vector=[0.1, 0.2, 0.3], payload={"test": True}),
             Point(id="point_2", vector=[0.4, 0.5, 0.6])
         ]
-        
+
         result = client.upsert("test_collection", points)
-        
+
         assert result is True
         args, kwargs = mock_requests.request.call_args
         assert len(kwargs["json"]["points"]) == 2

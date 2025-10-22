@@ -126,10 +126,19 @@ def parse_error_response(
         RequestTimeoutError,
     )
 
-    message = response_data.get("message", "Unknown error")
-    request_id = response_data.get("request_id")
-    error_code = response_data.get("error_code")
-    details = response_data.get("details", {})
+    # Handle nested error format from backend: {"error": {"code": "...", "message": "..."}}
+    if "error" in response_data and isinstance(response_data["error"], dict):
+        error_obj = response_data["error"]
+        message = error_obj.get("message", "Unknown error")
+        error_code = error_obj.get("code")
+        request_id = response_data.get("request_id")
+        details = error_obj
+    else:
+        # Handle flat format: {"message": "...", "error_code": "..."}
+        message = response_data.get("message", "Unknown error")
+        request_id = response_data.get("request_id")
+        error_code = response_data.get("error_code")
+        details = response_data.get("details", {})
 
     # Map status codes to exceptions
     if status_code == 401:
@@ -169,6 +178,11 @@ def parse_error_response(
                 details=details,
             )
     elif status_code == 400:
+        return ValidationError(
+            message, request_id=request_id, status_code=status_code, details=details
+        )
+    elif status_code == 412:
+        # Schema version mismatch - return ValidationError to trigger cache clear
         return ValidationError(
             message, request_id=request_id, status_code=status_code, details=details
         )
