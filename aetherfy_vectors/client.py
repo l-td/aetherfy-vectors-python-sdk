@@ -74,6 +74,9 @@ class AetherfyVectorsClient:
             "User-Agent": "aetherfy-vectors-python/1.0.0",
         }
 
+        # Initialize schema cache for ETag-based validation
+        self._schema_cache: Dict[str, Dict[str, Any]] = {}  # {collection_name: {schema, etag}}
+
         # Initialize analytics client
         self.analytics = AnalyticsClient(self.endpoint, self.auth_headers, timeout)
 
@@ -135,6 +138,39 @@ class AetherfyVectorsClient:
             )
         else:
             return make_single_request()
+
+    # Schema Cache Helpers
+
+    def _get_cached_schema(self, collection_name: str) -> Optional[Dict[str, Any]]:
+        """Get cached schema for a collection if available."""
+        return self._schema_cache.get(collection_name)
+
+    def _fetch_and_cache_schema(self, collection_name: str) -> Dict[str, Any]:
+        """Fetch collection schema from API and cache it with ETag."""
+        response = self._make_request("GET", f"collections/{collection_name}")
+
+        # Extract schema info
+        result = response.get("result", {})
+        schema_version = response.get("schema_version")
+        vector_config = result.get("config", {}).get("params", {}).get("vectors", {})
+
+        schema = {
+            "size": vector_config.get("size"),
+            "distance": vector_config.get("distance"),
+            "etag": schema_version,
+            "full_config": result
+        }
+
+        # Cache it
+        self._schema_cache[collection_name] = schema
+        return schema
+
+    def clear_schema_cache(self, collection_name: Optional[str] = None) -> None:
+        """Clear schema cache for a collection or all collections."""
+        if collection_name:
+            self._schema_cache.pop(collection_name, None)
+        else:
+            self._schema_cache.clear()
 
     def _normalize_distance_metric(
         self, distance: Union[str, DistanceMetric]
@@ -310,6 +346,24 @@ class AetherfyVectorsClient:
         """
         validate_collection_name(collection_name)
 
+        # Get schema (from cache or fetch)
+        schema = self._get_cached_schema(collection_name)
+        if not schema:
+            schema = self._fetch_and_cache_schema(collection_name)
+
+        # Validate vector dimensions
+        expected_dim = schema.get("size")
+        if expected_dim:
+            for point in points:
+                vector = point.get("vector") if isinstance(point, dict) else point.vector
+                if not vector or not isinstance(vector, (list, tuple)):
+                    raise ValueError("Each point must have a vector array")
+
+                if len(vector) != expected_dim:
+                    raise ValueError(
+                        f"Vector dimension mismatch: expected {expected_dim}, got {len(vector)}"
+                    )
+
         # Convert Point objects to dictionaries if needed
         formatted_points = []
         for point in points:
@@ -323,9 +377,49 @@ class AetherfyVectorsClient:
         # Validate and format points
         formatted_points = format_points_for_upsert(formatted_points)
 
+        # Make request with If-Match header (ETag)
         data = {"points": formatted_points}
-        self._make_request("PUT", f"collections/{collection_name}/points", data)
-        return True
+        headers = self.auth_headers.copy()
+        if schema.get("etag"):
+            headers["If-Match"] = schema["etag"]
+
+        try:
+            # Use custom headers for this request
+            response = requests.put(
+                f"{self.endpoint}/collections/{collection_name}/points",
+                json=data,
+                headers=headers,
+                timeout=self.timeout
+            )
+
+            # Handle 412 Precondition Failed (schema changed)
+            if response.status_code == 412:
+                self.clear_schema_cache(collection_name)
+                error_data = response.json()
+                raise AetherfyVectorsException(
+                    f"Schema changed for collection '{collection_name}'. "
+                    f"Please retry your request. {error_data.get('error', {}).get('message', '')}"
+                )
+
+            # Handle 400 Bad Request (validation error from backend)
+            if response.status_code == 400:
+                error_data = response.json()
+                error_message = error_data.get('error', {}).get('message', 'Validation error')
+                raise ValueError(error_message)
+
+            # Handle 500+ Server Errors
+            if response.status_code >= 500:
+                error_data = response.json() if response.content else {}
+                error_message = error_data.get('error', {}).get('message', 'Server error occurred')
+                raise AetherfyVectorsException(f"Server error: {error_message}")
+
+            response.raise_for_status()
+            return True
+
+        except requests.exceptions.RequestException as e:
+            if isinstance(e, (ValueError, AetherfyVectorsException)):
+                raise
+            raise AetherfyVectorsException(f"Upsert failed: {str(e)}")
 
     def delete(
         self,
