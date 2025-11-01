@@ -25,8 +25,11 @@ def test_endpoint():
 
 
 @pytest.fixture
-def client(api_key, test_endpoint):
-    """AetherfyVectorsClient fixture with test configuration."""
+def client(api_key, test_endpoint, mock_requests):
+    """AetherfyVectorsClient fixture with test configuration.
+
+    Note: mock_requests is a dependency to ensure requests are mocked before client init.
+    """
     return AetherfyVectorsClient(
         api_key=api_key,
         endpoint=test_endpoint,
@@ -42,6 +45,36 @@ def mock_requests():
         # Ensure exception classes are properly set up
         mock.Timeout = requests.Timeout
         mock.RequestException = requests.RequestException
+        mock.ConnectionError = requests.ConnectionError
+
+        # Create a mock session that behaves like the patched requests module
+        mock_session = Mock()
+
+        # Wrap the request method to merge headers properly like a real session does
+        def session_request_wrapper(*args, **kwargs):
+            # Merge session headers with request headers
+            merged_headers = mock_session.headers.copy()
+            if 'headers' in kwargs and kwargs['headers']:
+                merged_headers.update(kwargs['headers'])
+            kwargs['headers'] = merged_headers
+            return mock.request(*args, **kwargs)
+
+        mock_session.request = session_request_wrapper
+        mock_session.get = mock.get
+        mock_session.post = mock.post
+        mock_session.put = mock.put
+        mock_session.delete = mock.delete
+
+        # Mock headers with a real dict so .update() works
+        mock_session.headers = {}
+        mock_session.close = Mock()
+
+        # Mock mount method for HTTPAdapter mounting
+        mock_session.mount = Mock()
+
+        # Mock Session() to return our mock session
+        mock.Session.return_value = mock_session
+
         yield mock
 
 

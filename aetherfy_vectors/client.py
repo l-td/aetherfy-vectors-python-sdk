@@ -7,7 +7,7 @@ that routes requests through the global vector database service.
 
 from typing import List, Dict, Any, Optional, Union
 import requests
-import json
+from requests.adapters import HTTPAdapter
 
 from .auth import APIKeyManager
 from .analytics import AnalyticsClient
@@ -22,7 +22,12 @@ from .models import (
     CollectionAnalytics,
     UsageStats,
 )
-from .exceptions import AetherfyVectorsException, RequestTimeoutError, ValidationError
+from .exceptions import (
+    AetherfyVectorsException,
+    RequestTimeoutError,
+    ValidationError,
+    NetworkError,
+)
 from .utils import (
     validate_vector,
     validate_collection_name,
@@ -74,13 +79,45 @@ class AetherfyVectorsClient:
             "User-Agent": "aetherfy-vectors-python/1.0.0",
         }
 
+        # Initialize HTTP session with connection pooling
+        # This prevents TCP/TLS handshake overhead on every request
+        self.session = self._create_session()
+
         # Initialize schema cache for ETag-based validation
         self._schema_cache: Dict[
             str, Dict[str, Any]
         ] = {}  # {collection_name: {schema, etag}}
 
-        # Initialize analytics client
-        self.analytics = AnalyticsClient(self.endpoint, self.auth_headers, timeout)
+        # Initialize analytics client with shared session
+        self.analytics = AnalyticsClient(
+            self.endpoint, self.auth_headers, timeout, session=self.session
+        )
+
+    def _create_session(self) -> requests.Session:
+        """Create a requests Session with connection pooling and retry logic.
+
+        Returns:
+            Configured requests Session object with persistent connections.
+        """
+        session = requests.Session()
+
+        # Configure connection pooling via HTTPAdapter
+        # This keeps connections alive and reuses them across requests
+        adapter = HTTPAdapter(
+            pool_connections=10,  # Number of connection pools to cache
+            pool_maxsize=50,  # Max connections to keep in pool
+            max_retries=0,  # No automatic retries (we handle this ourselves)
+            pool_block=False,  # Don't block when pool is full
+        )
+
+        # Mount adapter for both HTTP and HTTPS
+        session.mount("http://", adapter)
+        session.mount("https://", adapter)
+
+        # Set default headers on session
+        session.headers.update(self.auth_headers)
+
+        return session
 
     def _make_request(
         self,
@@ -89,6 +126,7 @@ class AetherfyVectorsClient:
         data: Optional[Dict[str, Any]] = None,
         params: Optional[Dict[str, Any]] = None,
         enable_retry: bool = True,
+        headers: Optional[Dict[str, str]] = None,
     ) -> Any:
         """Make HTTP request to the API with retry logic.
 
@@ -98,6 +136,7 @@ class AetherfyVectorsClient:
             data: Request body data.
             params: Query parameters.
             enable_retry: Whether to enable retry logic (default: True).
+            headers: Additional headers to include in request.
 
         Returns:
             Response data.
@@ -111,12 +150,13 @@ class AetherfyVectorsClient:
             url = build_api_url(self.endpoint, endpoint)
 
             try:
-                response = requests.request(
+                # Use session for persistent connections instead of requests.request()
+                response = self.session.request(
                     method=method,
                     url=url,
-                    headers=self.auth_headers,
                     json=data if data is not None else None,
                     params=params,
+                    headers=headers,  # Pass additional headers if provided
                     timeout=self.timeout,
                 )
 
@@ -130,7 +170,11 @@ class AetherfyVectorsClient:
                 raise RequestTimeoutError(
                     f"Request to {endpoint} timed out after {self.timeout} seconds"
                 )
+            except requests.ConnectionError as e:
+                # Network connection errors should be retryable
+                raise NetworkError(f"Network connection failed: {str(e)}")
             except requests.RequestException as e:
+                # Other request errors - generic exception
                 raise AetherfyVectorsException(f"Request failed: {str(e)}")
 
         # Apply retry logic only for write operations (POST, PUT)
@@ -390,20 +434,14 @@ class AetherfyVectorsClient:
             extra_headers["If-Match"] = schema["etag"]
 
         try:
-            # Use existing _make_request method with custom headers
-            # We need to temporarily add the If-Match header
-            original_headers = self.auth_headers.copy()
-            if extra_headers:
-                self.auth_headers.update(extra_headers)
-
-            try:
-                response = self._make_request(
-                    "PUT", f"collections/{collection_name}/points", data
-                )
-                return True
-            finally:
-                # Restore original headers
-                self.auth_headers = original_headers
+            # Pass If-Match header directly to the request
+            response = self._make_request(
+                "PUT",
+                f"collections/{collection_name}/points",
+                data,
+                headers=extra_headers if extra_headers else None,
+            )
+            return True
 
         except ValidationError as e:
             # Handle 412 Precondition Failed (schema changed)
@@ -614,8 +652,9 @@ class AetherfyVectorsClient:
     # Utility Methods
 
     def close(self) -> None:
-        """Close the client connection (for compatibility)."""
-        pass
+        """Close the client connection and cleanup resources."""
+        if hasattr(self, "session"):
+            self.session.close()
 
     def __enter__(self):
         """Context manager entry."""

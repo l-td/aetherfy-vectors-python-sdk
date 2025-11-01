@@ -17,7 +17,11 @@ class AnalyticsClient:
     """Client for retrieving analytics data from Aetherfy backend."""
 
     def __init__(
-        self, base_url: str, auth_headers: Dict[str, str], timeout: float = 30.0
+        self,
+        base_url: str,
+        auth_headers: Dict[str, str],
+        timeout: float = 30.0,
+        session: Optional[requests.Session] = None,
     ):
         """Initialize analytics client.
 
@@ -25,10 +29,12 @@ class AnalyticsClient:
             base_url: Base URL for API requests.
             auth_headers: Authentication headers.
             timeout: Request timeout in seconds.
+            session: Optional requests Session for connection pooling.
         """
         self.base_url = base_url
         self.auth_headers = auth_headers
         self.timeout = timeout
+        self.session = session if session is not None else requests
 
     def get_performance_analytics(
         self, time_range: str = "24h", region: Optional[str] = None
@@ -52,7 +58,7 @@ class AnalyticsClient:
         url = build_api_url(self.base_url, "analytics/performance")
 
         try:
-            response = requests.get(
+            response = self.session.get(
                 url, headers=self.auth_headers, params=params, timeout=self.timeout
             )
 
@@ -87,7 +93,7 @@ class AnalyticsClient:
         url = build_api_url(self.base_url, f"analytics/collections/{collection_name}")
 
         try:
-            response = requests.get(
+            response = self.session.get(
                 url, headers=self.auth_headers, params=params, timeout=self.timeout
             )
 
@@ -115,7 +121,7 @@ class AnalyticsClient:
         url = build_api_url(self.base_url, "analytics/usage")
 
         try:
-            response = requests.get(
+            response = self.session.get(
                 url, headers=self.auth_headers, timeout=self.timeout
             )
 
@@ -149,7 +155,7 @@ class AnalyticsClient:
         url = build_api_url(self.base_url, "analytics/regions")
 
         try:
-            response = requests.get(
+            response = self.session.get(
                 url, headers=self.auth_headers, params=params, timeout=self.timeout
             )
 
@@ -180,7 +186,7 @@ class AnalyticsClient:
         url = build_api_url(self.base_url, "analytics/cache")
 
         try:
-            response = requests.get(
+            response = self.session.get(
                 url, headers=self.auth_headers, params=params, timeout=self.timeout
             )
 
@@ -219,7 +225,7 @@ class AnalyticsClient:
         url = build_api_url(self.base_url, "analytics/collections/top")
 
         try:
-            response = requests.get(
+            response = self.session.get(
                 url, headers=self.auth_headers, params=params, timeout=self.timeout
             )
 
