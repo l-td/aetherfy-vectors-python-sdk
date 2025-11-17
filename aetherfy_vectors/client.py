@@ -47,13 +47,16 @@ class AetherfyVectorsClient:
     global replication, and zero DevOps complexity.
     """
 
-    DEFAULT_ENDPOINT = "https://vectors.aetherfy.com"
+    DEFAULT_MANAGEMENT_ENDPOINT = "https://aetherfy.com/api/dashboard"
+    DEFAULT_DATA_ENDPOINT = "https://vectors.aetherfy.com"
     DEFAULT_TIMEOUT = 30.0
 
     def __init__(
         self,
         api_key: Optional[str] = None,
-        endpoint: str = DEFAULT_ENDPOINT,
+        endpoint: Optional[str] = None,
+        management_endpoint: Optional[str] = None,
+        data_endpoint: Optional[str] = None,
         timeout: float = DEFAULT_TIMEOUT,
         **kwargs,
     ):
@@ -61,14 +64,30 @@ class AetherfyVectorsClient:
 
         Args:
             api_key: Aetherfy API key. If None, will try environment variables.
-            endpoint: API endpoint URL (default: https://vectors.aetherfy.com).
+            endpoint: (Deprecated) Single endpoint URL for backward compatibility.
+            management_endpoint: Endpoint for collection CRUD operations (default: https://aetherfy.com/api/dashboard).
+            data_endpoint: Endpoint for vector operations (default: https://vectors.aetherfy.com).
             timeout: Request timeout in seconds (default: 30.0).
             **kwargs: Additional parameters for compatibility.
 
         Raises:
             AuthenticationError: If API key is invalid or missing.
         """
-        self.endpoint = endpoint.rstrip("/")
+        # Set up dual endpoints for separation of concerns
+        # Management endpoint: collection CRUD (dashboard handles limits, billing, metadata)
+        # Data endpoint: vector operations (vectordb backend handles Qdrant)
+        if endpoint and not management_endpoint and not data_endpoint:
+            # Legacy single-endpoint mode for backward compatibility
+            self.management_endpoint = endpoint.rstrip("/")
+            self.data_endpoint = endpoint.rstrip("/")
+        else:
+            self.management_endpoint = (
+                management_endpoint or self.DEFAULT_MANAGEMENT_ENDPOINT
+            ).rstrip("/")
+            self.data_endpoint = (data_endpoint or self.DEFAULT_DATA_ENDPOINT).rstrip(
+                "/"
+            )
+
         self.timeout = timeout
 
         # Initialize authentication
@@ -88,10 +107,19 @@ class AetherfyVectorsClient:
             str, Dict[str, Any]
         ] = {}  # {collection_name: {schema, etag}}
 
-        # Initialize analytics client with shared session
+        # Initialize analytics client with shared session (uses data endpoint)
         self.analytics = AnalyticsClient(
-            self.endpoint, self.auth_headers, timeout, session=self.session
+            self.data_endpoint, self.auth_headers, timeout, session=self.session
         )
+
+    @property
+    def endpoint(self) -> str:
+        """Get endpoint for backward compatibility.
+
+        Returns the data_endpoint as the primary endpoint since that's where
+        most operations (vector operations) are performed.
+        """
+        return self.data_endpoint
 
     def _create_session(self) -> requests.Session:
         """Create a requests Session with connection pooling and retry logic.
@@ -127,6 +155,7 @@ class AetherfyVectorsClient:
         params: Optional[Dict[str, Any]] = None,
         enable_retry: bool = True,
         headers: Optional[Dict[str, str]] = None,
+        base_url: Optional[str] = None,
     ) -> Any:
         """Make HTTP request to the API with retry logic.
 
@@ -137,6 +166,7 @@ class AetherfyVectorsClient:
             params: Query parameters.
             enable_retry: Whether to enable retry logic (default: True).
             headers: Additional headers to include in request.
+            base_url: Base URL to use (defaults to data_endpoint for vector operations).
 
         Returns:
             Response data.
@@ -147,7 +177,9 @@ class AetherfyVectorsClient:
         from .utils import retry_with_backoff
 
         def make_single_request():
-            url = build_api_url(self.endpoint, endpoint)
+            # Use provided base_url or default to data_endpoint
+            url_base = base_url if base_url is not None else self.data_endpoint
+            url = build_api_url(url_base, endpoint)
 
             try:
                 # Use session for persistent connections instead of requests.request()
@@ -314,9 +346,16 @@ class AetherfyVectorsClient:
         if distance:
             config.distance = self._normalize_distance_metric(distance)
 
-        data = {"name": collection_name, "vectors": config.to_dict()}
+        # Use dashboard format for collection creation
+        data = {
+            "name": collection_name,
+            "config": {"params": {"vectors": config.to_dict()}},
+        }
 
-        self._make_request("POST", "collections", data)
+        # Use management endpoint for collection CRUD
+        self._make_request(
+            "POST", "collections", data, base_url=self.management_endpoint
+        )
         return True
 
     def delete_collection(self, collection_name: str, **kwargs) -> bool:
@@ -330,7 +369,12 @@ class AetherfyVectorsClient:
             True if collection was deleted successfully.
         """
         validate_collection_name(collection_name)
-        self._make_request("DELETE", f"collections/{collection_name}")
+        # Use management endpoint for collection CRUD
+        self._make_request(
+            "DELETE",
+            f"collections?name={collection_name}",
+            base_url=self.management_endpoint,
+        )
         return True
 
     def get_collections(self, **kwargs) -> List[Collection]:
@@ -342,7 +386,10 @@ class AetherfyVectorsClient:
         Returns:
             List of Collection objects.
         """
-        response = self._make_request("GET", "collections")
+        # Use management endpoint for collection CRUD
+        response = self._make_request(
+            "GET", "collections", base_url=self.management_endpoint
+        )
         return [Collection.from_dict(col) for col in response.get("collections", [])]
 
     def collection_exists(self, collection_name: str, **kwargs) -> bool:
@@ -356,7 +403,12 @@ class AetherfyVectorsClient:
             True if collection exists, False otherwise.
         """
         try:
-            self._make_request("GET", f"collections/{collection_name}")
+            # Use management endpoint for collection CRUD
+            self._make_request(
+                "GET",
+                f"collections?name={collection_name}",
+                base_url=self.management_endpoint,
+            )
             return True
         except AetherfyVectorsException:
             return False
@@ -372,7 +424,12 @@ class AetherfyVectorsClient:
             Collection object with details.
         """
         validate_collection_name(collection_name)
-        response = self._make_request("GET", f"collections/{collection_name}")
+        # Use management endpoint for collection CRUD
+        response = self._make_request(
+            "GET",
+            f"collections?name={collection_name}",
+            base_url=self.management_endpoint,
+        )
         return Collection.from_dict(response)
 
     # Point Management Methods
@@ -668,5 +725,8 @@ class AetherfyVectorsClient:
         """String representation of the client."""
         masked_key = self.auth_manager.mask_api_key()
         return (
-            f"AetherfyVectorsClient(endpoint='{self.endpoint}', api_key='{masked_key}')"
+            f"AetherfyVectorsClient("
+            f"management_endpoint='{self.management_endpoint}', "
+            f"data_endpoint='{self.data_endpoint}', "
+            f"api_key='{masked_key}')"
         )

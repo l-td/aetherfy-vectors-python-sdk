@@ -67,41 +67,41 @@ class TestCollectionManagement:
     def test_create_collection_success(self, client, mock_requests, mock_successful_response):
         """Test successful collection creation."""
         mock_requests.request.return_value = mock_successful_response({})
-        
+
         config = VectorConfig(size=128, distance=DistanceMetric.COSINE)
         result = client.create_collection("test_collection", config)
-        
+
         assert result is True
         mock_requests.request.assert_called_once()
         args, kwargs = mock_requests.request.call_args
         assert kwargs["method"] == "POST"
         assert "collections" in kwargs["url"]
         assert kwargs["json"]["name"] == "test_collection"
-        assert kwargs["json"]["vectors"]["size"] == 128
+        assert kwargs["json"]["config"]["params"]["vectors"]["size"] == 128
     
     def test_create_collection_with_dict_config(self, client, mock_requests, mock_successful_response):
         """Test collection creation with dictionary config."""
         mock_requests.request.return_value = mock_successful_response({})
-        
+
         config = {"size": 256, "distance": "Euclidean"}
         result = client.create_collection("test_collection", config)
-        
+
         assert result is True
         args, kwargs = mock_requests.request.call_args
-        assert kwargs["json"]["vectors"]["size"] == 256
-        assert kwargs["json"]["vectors"]["distance"] == "Euclidean"
+        assert kwargs["json"]["config"]["params"]["vectors"]["size"] == 256
+        assert kwargs["json"]["config"]["params"]["vectors"]["distance"] == "Euclidean"
     
     def test_delete_collection_success(self, client, mock_requests, mock_successful_response):
         """Test successful collection deletion."""
         mock_requests.request.return_value = mock_successful_response({})
-        
+
         result = client.delete_collection("test_collection")
-        
+
         assert result is True
         mock_requests.request.assert_called_once()
         args, kwargs = mock_requests.request.call_args
         assert kwargs["method"] == "DELETE"
-        assert "collections/test_collection" in kwargs["url"]
+        assert "collections?name=test_collection" in kwargs["url"]
     
     def test_get_collections_success(self, client, mock_requests, mock_successful_response):
         """Test successful collections retrieval."""
