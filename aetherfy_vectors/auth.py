@@ -81,10 +81,7 @@ class APIKeyManager:
         Returns:
             Dictionary containing authentication headers.
         """
-        return {
-            "Authorization": f"Bearer {self.api_key}",
-            "X-API-Key": self.api_key,
-        }
+        return {"Authorization": f"Bearer {self.api_key}"}
 
     def is_test_key(self) -> bool:
         """Check if the API key is a test key.

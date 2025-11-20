@@ -143,23 +143,21 @@ class TestAuthenticationHeaders:
         """Test authentication headers generation."""
         api_key = "afy_live_1234567890abcdef"
         manager = APIKeyManager(api_key)
-        
+
         headers = manager.get_auth_headers()
-        
+
         assert "Authorization" in headers
-        assert "X-API-Key" in headers
         assert headers["Authorization"] == f"Bearer {api_key}"
-        assert headers["X-API-Key"] == api_key
     
     def test_auth_headers_are_dict(self):
         """Test that auth headers return a dictionary."""
         api_key = "afy_test_1234567890abcdef"
         manager = APIKeyManager(api_key)
-        
+
         headers = manager.get_auth_headers()
-        
+
         assert isinstance(headers, dict)
-        assert len(headers) == 2
+        assert len(headers) == 1
 
 
 class TestAPIKeyUtilities:

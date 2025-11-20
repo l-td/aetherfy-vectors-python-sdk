@@ -32,7 +32,6 @@ class TestClientInitialization:
         assert client.timeout == 15.0
         assert client.auth_manager.api_key == api_key
         assert "Authorization" in client.auth_headers
-        assert "X-API-Key" in client.auth_headers
     
     def test_client_init_default_endpoint(self, api_key):
         """Test client initialization with default endpoint."""
