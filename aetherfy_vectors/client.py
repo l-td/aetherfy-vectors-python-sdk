@@ -264,6 +264,7 @@ class AetherfyVectorsClient:
         collection_name: str,
         vectors_config: Union[VectorConfig, Dict[str, Any]],
         distance: Optional[DistanceMetric] = None,
+        description: Optional[str] = None,
         **kwargs,
     ) -> bool:
         """Create a new collection.
@@ -272,6 +273,7 @@ class AetherfyVectorsClient:
             collection_name: Name of the collection to create.
             vectors_config: Vector configuration or dict with size/distance.
             distance: Distance metric (deprecated, use vectors_config).
+            description: Optional collection description (max 500 characters).
             **kwargs: Additional parameters for compatibility.
 
         Returns:
@@ -314,7 +316,11 @@ class AetherfyVectorsClient:
         if distance:
             config.distance = self._normalize_distance_metric(distance)
 
-        data = {"name": collection_name, "vectors": config.to_dict()}
+        data = {
+            "name": collection_name,
+            "vectors": config.to_dict(),
+            "description": description,
+        }
 
         self._make_request("POST", "collections", data)
         return True

@@ -73,6 +73,7 @@ class Collection:
 
     name: str
     config: VectorConfig
+    description: Optional[str] = None
     points_count: Optional[int] = None
     status: Optional[str] = None
 
@@ -90,6 +91,7 @@ class Collection:
         return cls(
             name=data["name"],
             config=config,
+            description=data.get("description"),
             points_count=data.get("points_count"),
             status=data.get("status"),
         )

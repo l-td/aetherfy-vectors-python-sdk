@@ -81,14 +81,38 @@ class TestCollectionManagement:
     def test_create_collection_with_dict_config(self, client, mock_requests, mock_successful_response):
         """Test collection creation with dictionary config."""
         mock_requests.request.return_value = mock_successful_response({})
-        
+
         config = {"size": 256, "distance": "Euclidean"}
         result = client.create_collection("test_collection", config)
-        
+
         assert result is True
         args, kwargs = mock_requests.request.call_args
         assert kwargs["json"]["vectors"]["size"] == 256
         assert kwargs["json"]["vectors"]["distance"] == "Euclidean"
+
+    def test_create_collection_with_description(self, client, mock_requests, mock_successful_response):
+        """Test collection creation with description."""
+        mock_requests.request.return_value = mock_successful_response({})
+
+        config = VectorConfig(size=128, distance=DistanceMetric.COSINE)
+        description = "Test collection for product embeddings"
+        result = client.create_collection("test_collection", config, description=description)
+
+        assert result is True
+        args, kwargs = mock_requests.request.call_args
+        assert kwargs["json"]["name"] == "test_collection"
+        assert kwargs["json"]["description"] == description
+
+    def test_create_collection_without_description(self, client, mock_requests, mock_successful_response):
+        """Test collection creation without description sends null."""
+        mock_requests.request.return_value = mock_successful_response({})
+
+        config = VectorConfig(size=128, distance=DistanceMetric.COSINE)
+        result = client.create_collection("test_collection", config)
+
+        assert result is True
+        args, kwargs = mock_requests.request.call_args
+        assert kwargs["json"]["description"] is None
     
     def test_delete_collection_success(self, client, mock_requests, mock_successful_response):
         """Test successful collection deletion."""
