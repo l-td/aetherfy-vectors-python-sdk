@@ -379,7 +379,8 @@ class AetherfyVectorsClient:
         """
         validate_collection_name(collection_name)
         response = self._make_request("GET", f"collections/{collection_name}")
-        return Collection.from_dict(response)
+        collection_data = response.get("result", response)
+        return Collection.from_dict(collection_data)
 
     # Point Management Methods
 
