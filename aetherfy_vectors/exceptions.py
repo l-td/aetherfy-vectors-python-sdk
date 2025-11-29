@@ -104,6 +104,37 @@ class NetworkError(AetherfyVectorsException):
         super().__init__(message, **kwargs)
 
 
+class SchemaValidationError(AetherfyVectorsException):
+    """Payload failed schema validation."""
+
+    def __init__(self, errors: list, **kwargs):
+        """Initialize SchemaValidationError.
+
+        Args:
+            errors: List of VectorValidationError objects.
+            **kwargs: Additional exception parameters.
+        """
+        self.errors = errors
+
+        # Create human-readable message
+        messages = []
+        for vector_error in errors:
+            for error in vector_error.get("errors", []):
+                messages.append(f"Vector {vector_error['index']}: {error['message']}")
+
+        message = f"Schema validation failed:\n" + "\n".join(messages)
+        super().__init__(message, **kwargs)
+
+
+class SchemaNotFoundError(AetherfyVectorsException):
+    """No schema defined for collection."""
+
+    def __init__(self, collection_name: str, **kwargs):
+        message = f"No schema defined for collection '{collection_name}'"
+        super().__init__(message, **kwargs)
+        self.collection_name = collection_name
+
+
 def is_retryable_error(error: Exception) -> bool:
     """Check if an error should be retried.
 

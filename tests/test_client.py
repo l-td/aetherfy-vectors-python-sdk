@@ -195,34 +195,67 @@ class TestPointOperations:
     
     def test_upsert_points_success(self, client, mock_requests, mock_successful_response, sample_points):
         """Test successful point upsert."""
-        # Pre-populate schema cache to avoid schema fetch call
-        client._schema_cache["test_collection"] = {
-            "size": 4,  # Matches sample_points vector length
-            "distance": "Cosine",
-            "etag": "test123"
-        }
+        # Mock GET /collections/{name} - vector config
+        collection_response = mock_successful_response({
+            'result': {
+                'config': {
+                    'params': {
+                        'vectors': {'size': 4, 'distance': 'Cosine'}
+                    }
+                }
+            },
+            'schema_version': 'test123'
+        })
 
-        mock_requests.request.return_value = mock_successful_response({})
+        # Mock GET /api/v1/schema/{name} - no payload schema (404)
+        from aetherfy_vectors.exceptions import AetherfyVectorsException
+        schema_404_error = AetherfyVectorsException("Schema not found", status_code=404)
+
+        # Mock PUT /collections/{name}/points - upsert
+        upsert_response = mock_successful_response({})
+
+        mock_requests.request.side_effect = [
+            collection_response,  # GET vector config
+            schema_404_error,     # GET payload schema (404)
+            upsert_response       # PUT upsert
+        ]
 
         result = client.upsert("test_collection", sample_points)
 
         assert result is True
-        mock_requests.request.assert_called_once()
-        args, kwargs = mock_requests.request.call_args
+        assert mock_requests.request.call_count == 3
+        # Check the PUT call (third call)
+        args, kwargs = mock_requests.request.call_args_list[2]
         assert kwargs["method"] == "PUT"
         assert "collections/test_collection/points" in kwargs["url"]
         assert len(kwargs["json"]["points"]) == 2
     
     def test_upsert_point_objects(self, client, mock_requests, mock_successful_response):
         """Test upsert with Point objects."""
-        # Pre-populate schema cache to avoid schema fetch call
-        client._schema_cache["test_collection"] = {
-            "size": 3,  # Matches Point vector length
-            "distance": "Cosine",
-            "etag": "test123"
-        }
+        # Mock GET /collections/{name} - vector config
+        collection_response = mock_successful_response({
+            'result': {
+                'config': {
+                    'params': {
+                        'vectors': {'size': 3, 'distance': 'Cosine'}
+                    }
+                }
+            },
+            'schema_version': 'test123'
+        })
 
-        mock_requests.request.return_value = mock_successful_response({})
+        # Mock GET /api/v1/schema/{name} - no payload schema (404)
+        from aetherfy_vectors.exceptions import AetherfyVectorsException
+        schema_404_error = AetherfyVectorsException("Schema not found", status_code=404)
+
+        # Mock PUT /collections/{name}/points - upsert
+        upsert_response = mock_successful_response({})
+
+        mock_requests.request.side_effect = [
+            collection_response,  # GET vector config
+            schema_404_error,     # GET payload schema (404)
+            upsert_response       # PUT upsert
+        ]
 
         points = [
             Point(id="point_1", vector=[0.1, 0.2, 0.3], payload={"test": True}),
@@ -232,7 +265,8 @@ class TestPointOperations:
         result = client.upsert("test_collection", points)
 
         assert result is True
-        args, kwargs = mock_requests.request.call_args
+        # Check the PUT call (third call)
+        args, kwargs = mock_requests.request.call_args_list[2]
         assert len(kwargs["json"]["points"]) == 2
         assert kwargs["json"]["points"][0]["payload"]["test"] is True
     

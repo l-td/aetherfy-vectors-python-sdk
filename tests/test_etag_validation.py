@@ -42,9 +42,12 @@ class TestETagValidation:
     def test_schema_cache_on_first_upsert(self, client, mock_requests, mock_collection_response, mock_successful_upsert_response):
         """Test that schema is fetched and cached on first upsert"""
         # First call: GET collection info
-        # Second call: PUT upsert
+        # Second call: GET payload schema (returns 404 - no schema)
+        # Third call: PUT upsert
+        schema_404_error = AetherfyVectorsException("Schema not found", status_code=404)
         mock_requests.request.side_effect = [
             Mock(status_code=200, json=lambda: mock_collection_response, content=True),
+            schema_404_error,
             mock_successful_upsert_response()
         ]
 
@@ -52,36 +55,40 @@ class TestETagValidation:
         points = [{"id": "1", "vector": [0.1] * 768, "payload": {}}]
         client.upsert("test-collection", points)
 
-        # Should have called request twice (GET schema, PUT upsert)
-        assert mock_requests.request.call_count == 2
+        # Should have called request 3 times (GET collection, GET schema, PUT upsert)
+        assert mock_requests.request.call_count == 3
         assert "test-collection" in client._schema_cache
 
     def test_schema_cache_reused_on_subsequent_upserts(self, client, mock_requests, mock_collection_response, mock_successful_upsert_response):
         """Test that cached schema is reused on subsequent upserts"""
-        # First upsert: GET schema + PUT upsert
-        # Second upsert: only PUT (cache hit)
+        # First upsert: GET collection + GET payload schema (404) + PUT upsert
+        # Second upsert: only PUT (both caches hit)
+        schema_404_error = AetherfyVectorsException("Schema not found", status_code=404)
         mock_requests.request.side_effect = [
-            Mock(status_code=200, json=lambda: mock_collection_response, content=True),  # GET schema
+            Mock(status_code=200, json=lambda: mock_collection_response, content=True),  # GET collection
+            schema_404_error,  # GET payload schema (404)
             mock_successful_upsert_response(),  # First PUT
-            mock_successful_upsert_response(),  # Second PUT (no GET)
+            mock_successful_upsert_response(),  # Second PUT (no GETs)
         ]
 
         points = [{"id": "1", "vector": [0.1] * 768, "payload": {}}]
 
-        # First upsert - should fetch schema
+        # First upsert - should fetch schemas
         client.upsert("test-collection", points)
         call_count_after_first = mock_requests.request.call_count
 
         # Second upsert - should use cache
         client.upsert("test-collection", points)
 
-        # Should only add one more call (PUT), not two (GET+PUT)
+        # Should only add one more call (PUT), not three (GET+GET+PUT)
         assert mock_requests.request.call_count == call_count_after_first + 1
 
     def test_etag_sent_in_upsert_header(self, client, mock_requests, mock_collection_response, mock_successful_upsert_response):
         """Test that ETag is sent in If-Match header"""
+        schema_404_error = AetherfyVectorsException("Schema not found", status_code=404)
         mock_requests.request.side_effect = [
             Mock(status_code=200, json=lambda: mock_collection_response, content=True),
+            schema_404_error,
             mock_successful_upsert_response()
         ]
 
@@ -89,8 +96,8 @@ class TestETagValidation:
         points = [{"id": "1", "vector": [0.1] * 768, "payload": {}}]
         client.upsert("test-collection", points)
 
-        # Check If-Match header was sent in the PUT request (second call)
-        put_call_kwargs = mock_requests.request.call_args_list[1][1]
+        # Check If-Match header was sent in the PUT request (third call)
+        put_call_kwargs = mock_requests.request.call_args_list[2][1]
         assert "If-Match" in put_call_kwargs["headers"]
         assert put_call_kwargs["headers"]["If-Match"] == "abc12345"
 
@@ -119,7 +126,8 @@ class TestETagValidation:
 
     def test_schema_changed_412_response(self, client, mock_requests, mock_collection_response):
         """Test handling of 412 response when schema changes"""
-        # Mock GET schema, then mock 412 error on PUT
+        # Mock GET collection, GET schema (404), then mock 412 error on PUT
+        schema_404_error = AetherfyVectorsException("Schema not found", status_code=404)
         mock_412_response = Mock()
         mock_412_response.status_code = 412
         mock_412_response.json.return_value = {
@@ -132,6 +140,7 @@ class TestETagValidation:
 
         mock_requests.request.side_effect = [
             Mock(status_code=200, json=lambda: mock_collection_response, content=True),
+            schema_404_error,
             mock_412_response
         ]
 
@@ -175,7 +184,8 @@ class TestETagValidation:
 
     def test_backend_validation_error_400(self, client, mock_requests, mock_collection_response):
         """Test handling of 400 validation error from backend"""
-        # Mock GET schema, then mock 400 error on PUT
+        # Mock GET collection, GET schema (404), then mock 400 error on PUT
+        schema_404_error = AetherfyVectorsException("Schema not found", status_code=404)
         mock_400_response = Mock()
         mock_400_response.status_code = 400
         mock_400_response.json.return_value = {
@@ -188,6 +198,7 @@ class TestETagValidation:
 
         mock_requests.request.side_effect = [
             Mock(status_code=200, json=lambda: mock_collection_response, content=True),
+            schema_404_error,
             mock_400_response
         ]
 
@@ -203,7 +214,8 @@ class TestETagValidation:
 
     def test_server_error_500(self, client, mock_requests, mock_collection_response):
         """Test handling of 500 server error"""
-        # Mock GET schema, then mock 500 error on PUT
+        # Mock GET collection, GET schema (404), then mock 500 error on PUT
+        schema_404_error = AetherfyVectorsException("Schema not found", status_code=404)
         mock_500_response = Mock()
         mock_500_response.status_code = 500
         mock_500_response.json.return_value = {
@@ -215,6 +227,7 @@ class TestETagValidation:
 
         mock_requests.request.side_effect = [
             Mock(status_code=200, json=lambda: mock_collection_response, content=True),
+            schema_404_error,
             mock_500_response
         ]
 

@@ -27,6 +27,14 @@ from .exceptions import (
     RequestTimeoutError,
     ValidationError,
     NetworkError,
+    SchemaValidationError,
+    SchemaNotFoundError,
+)
+from .schema import (
+    Schema,
+    FieldDefinition,
+    AnalysisResult,
+    validate_vectors,
 )
 from .utils import (
     validate_vector,
@@ -83,10 +91,15 @@ class AetherfyVectorsClient:
         # This prevents TCP/TLS handshake overhead on every request
         self.session = self._create_session()
 
-        # Initialize schema cache for ETag-based validation
+        # Initialize schema cache for ETag-based validation (vector configs)
         self._schema_cache: Dict[
             str, Dict[str, Any]
         ] = {}  # {collection_name: {schema, etag}}
+
+        # Initialize payload schema cache for schema validation
+        self._payload_schema_cache: Dict[
+            str, Dict[str, Any]
+        ] = {}  # {collection_name: {schema: Schema, etag: str, enforcement_mode: str}}
 
         # Initialize analytics client with shared session
         self.analytics = AnalyticsClient(
@@ -396,10 +409,13 @@ class AetherfyVectorsClient:
 
         Returns:
             True if upsert was successful.
+
+        Raises:
+            SchemaValidationError: If payloads fail schema validation.
         """
         validate_collection_name(collection_name)
 
-        # Get schema (from cache or fetch)
+        # Get vector config schema (from cache or fetch)
         schema = self._get_cached_schema(collection_name)
         if not schema:
             schema = self._fetch_and_cache_schema(collection_name)
@@ -429,16 +445,61 @@ class AetherfyVectorsClient:
             else:
                 raise ValueError("Points must be Point objects or dictionaries")
 
+        # Get payload schema for validation (if exists)
+        payload_schema_data = self._payload_schema_cache.get(collection_name)
+        if payload_schema_data is None:  # Not cached yet (different from cached None)
+            # Try to fetch schema from server
+            try:
+                schema_result = self.get_schema(collection_name)
+                if schema_result is None:
+                    # Cache the fact that no schema exists to avoid repeated fetches
+                    self._payload_schema_cache[collection_name] = {
+                        "schema": None,
+                        "enforcement_mode": "off",
+                        "etag": None,
+                    }
+                payload_schema_data = self._payload_schema_cache.get(collection_name)
+            except:
+                # Error fetching schema - cache None to avoid retrying
+                self._payload_schema_cache[collection_name] = {
+                    "schema": None,
+                    "enforcement_mode": "off",
+                    "etag": None,
+                }
+                payload_schema_data = None
+
+        # Client-side payload validation
+        if payload_schema_data and payload_schema_data["schema"]:
+            enforcement_mode = payload_schema_data.get("enforcement_mode", "off")
+
+            # Only validate if enforcement is not 'off'
+            if enforcement_mode != "off":
+                validation_errors = validate_vectors(
+                    formatted_points, payload_schema_data["schema"]
+                )
+                if validation_errors:
+                    # Only raise error in strict mode
+                    if enforcement_mode == "strict":
+                        # Convert to dict format for exception
+                        errors_dict = [e.to_dict() for e in validation_errors]
+                        raise SchemaValidationError(errors_dict)
+                    # In warn mode, just log the warnings (client-side logging would go here)
+                    # For now, we allow the request to proceed
+
         # Validate and format points
         formatted_points = format_points_for_upsert(formatted_points)
 
-        # Make request with If-Match header (ETag)
+        # Make request with If-Match headers (for both schemas)
         data = {"points": formatted_points}
 
-        # Add If-Match header if we have an ETag
+        # Add If-Match headers if we have ETags
         extra_headers = {}
         if schema.get("etag"):
             extra_headers["If-Match"] = schema["etag"]
+
+        # Add schema ETag for payload validation
+        if payload_schema_data and payload_schema_data.get("etag"):
+            extra_headers["If-Match"] = payload_schema_data["etag"]
 
         try:
             # Pass If-Match header directly to the request
@@ -454,10 +515,50 @@ class AetherfyVectorsClient:
             # Handle 412 Precondition Failed (schema changed)
             if e.status_code == 412:
                 self.clear_schema_cache(collection_name)
-                raise ValidationError(
-                    f"Schema changed for collection '{collection_name}'. Please retry your request.",
-                    status_code=412,
-                )
+                self._payload_schema_cache.pop(collection_name, None)
+
+                # Fetch updated schema and re-validate
+                updated_schema = None
+                try:
+                    self.get_schema(collection_name)
+                    updated_schema = self._payload_schema_cache.get(collection_name)
+                    if updated_schema and updated_schema["schema"]:
+                        enforcement_mode = updated_schema.get("enforcement_mode", "off")
+                        if enforcement_mode != "off":
+                            validation_errors = validate_vectors(
+                                formatted_points, updated_schema["schema"]
+                            )
+                            if validation_errors and enforcement_mode == "strict":
+                                errors_dict = [e.to_dict() for e in validation_errors]
+                                raise SchemaValidationError(errors_dict)
+                except SchemaValidationError:
+                    # Re-raise schema validation errors
+                    raise
+                except:
+                    # Ignore other errors during schema refresh
+                    updated_schema = self._payload_schema_cache.get(collection_name)
+
+                # Retry the upsert with updated schema
+                try:
+                    extra_headers_retry = {}
+                    if schema.get("etag"):
+                        extra_headers_retry["If-Match"] = schema["etag"]
+                    if updated_schema and updated_schema.get("etag"):
+                        extra_headers_retry["If-Match"] = updated_schema["etag"]
+
+                    response = self._make_request(
+                        "PUT",
+                        f"collections/{collection_name}/points",
+                        data,
+                        headers=extra_headers_retry if extra_headers_retry else None,
+                    )
+                    return True
+                except:
+                    # If retry also fails, raise the original 412 error
+                    raise ValidationError(
+                        f"Schema changed for collection '{collection_name}'. Please retry your request.",
+                        status_code=412,
+                    )
 
             # Handle 400 Bad Request (validation error from backend or client-side)
             # Re-raise as ValueError for backward compatibility
@@ -617,6 +718,142 @@ class AetherfyVectorsClient:
             "POST", f"collections/{collection_name}/points/count", data
         )
         return response.get("count", 0)
+
+    # Schema Management Methods
+
+    def get_schema(self, collection_name: str) -> Optional[Schema]:
+        """Get schema for a collection.
+
+        Args:
+            collection_name: Name of the collection.
+
+        Returns:
+            Schema object if schema is defined, None otherwise.
+
+        Raises:
+            SchemaNotFoundError: If no schema is defined for the collection.
+        """
+        validate_collection_name(collection_name)
+
+        try:
+            response = self._make_request("GET", f"api/v1/schema/{collection_name}")
+
+            schema = Schema.from_dict(response["schema"])
+            etag = response["etag"]
+            enforcement_mode = response["enforcement_mode"]
+
+            # Cache it
+            self._payload_schema_cache[collection_name] = {
+                "schema": schema,
+                "etag": etag,
+                "enforcement_mode": enforcement_mode,
+            }
+
+            return schema
+
+        except AetherfyVectorsException as e:
+            if e.status_code == 404:
+                return None
+            raise
+
+    def set_schema(
+        self, collection_name: str, schema: Schema, enforcement: str = "off"
+    ) -> str:
+        """Set schema for a collection.
+
+        Args:
+            collection_name: Name of the collection.
+            schema: Schema definition.
+            enforcement: Enforcement mode - 'off', 'warn', or 'strict' (default: 'off').
+
+        Returns:
+            ETag of the new schema.
+
+        Raises:
+            ValidationError: If schema or enforcement mode is invalid.
+        """
+        validate_collection_name(collection_name)
+
+        if enforcement not in ["off", "warn", "strict"]:
+            raise ValueError("enforcement must be 'off', 'warn', or 'strict'")
+
+        data = {"schema": schema.to_dict(), "enforcement_mode": enforcement}
+
+        response = self._make_request("PUT", f"api/v1/schema/{collection_name}", data)
+        etag = response["etag"]
+
+        # Update cache
+        self._payload_schema_cache[collection_name] = {
+            "schema": schema,
+            "etag": etag,
+            "enforcement_mode": enforcement,
+        }
+
+        return etag
+
+    def delete_schema(self, collection_name: str) -> bool:
+        """Remove schema from a collection.
+
+        Args:
+            collection_name: Name of the collection.
+
+        Returns:
+            True if schema was deleted successfully.
+
+        Raises:
+            SchemaNotFoundError: If no schema is defined for the collection.
+        """
+        validate_collection_name(collection_name)
+
+        try:
+            self._make_request("DELETE", f"api/v1/schema/{collection_name}")
+
+            # Clear from cache
+            self._payload_schema_cache.pop(collection_name, None)
+
+            return True
+
+        except AetherfyVectorsException as e:
+            if e.status_code == 404:
+                raise SchemaNotFoundError(collection_name)
+            raise
+
+    def analyze_schema(
+        self, collection_name: str, sample_size: int = 1000
+    ) -> AnalysisResult:
+        """Analyze existing data to understand payload structure.
+
+        Args:
+            collection_name: Name of the collection to analyze.
+            sample_size: Number of vectors to sample (100-10000, default: 1000).
+
+        Returns:
+            Analysis result including field presence, types, and suggested schema.
+
+        Raises:
+            ValidationError: If sample_size is out of range.
+            CollectionNotFoundError: If collection doesn't exist.
+        """
+        validate_collection_name(collection_name)
+
+        if sample_size < 100 or sample_size > 10000:
+            raise ValueError("sample_size must be between 100 and 10000")
+
+        data = {"sample_size": sample_size}
+        response = self._make_request(
+            "POST", f"api/v1/schema/{collection_name}/analyze", data
+        )
+
+        return AnalysisResult.from_dict(response)
+
+    def refresh_schema(self, collection_name: str) -> None:
+        """Force refresh of cached schema.
+
+        Args:
+            collection_name: Name of the collection.
+        """
+        self._payload_schema_cache.pop(collection_name, None)
+        self.get_schema(collection_name)
 
     # Analytics Methods (SDK-specific)
 

@@ -15,6 +15,8 @@ from .exceptions import (
     AuthenticationError,
     RateLimitExceededError,
     ServiceUnavailableError,
+    SchemaValidationError,
+    SchemaNotFoundError,
 )
 from .models import (
     SearchResult,
@@ -24,6 +26,11 @@ from .models import (
     CollectionAnalytics,
     UsageStats,
 )
+from .schema import (
+    Schema,
+    FieldDefinition,
+    AnalysisResult,
+)
 
 __all__ = [
     "AetherfyVectorsClient",
@@ -31,10 +38,15 @@ __all__ = [
     "AuthenticationError",
     "RateLimitExceededError",
     "ServiceUnavailableError",
+    "SchemaValidationError",
+    "SchemaNotFoundError",
     "SearchResult",
     "Point",
     "Collection",
     "PerformanceAnalytics",
     "CollectionAnalytics",
     "UsageStats",
+    "Schema",
+    "FieldDefinition",
+    "AnalysisResult",
 ]
