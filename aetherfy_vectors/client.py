@@ -736,7 +736,7 @@ class AetherfyVectorsClient:
         validate_collection_name(collection_name)
 
         try:
-            response = self._make_request("GET", f"api/v1/schema/{collection_name}")
+            response = self._make_request("GET", f"schema/{collection_name}")
 
             schema = Schema.from_dict(response["schema"])
             etag = response["etag"]
@@ -779,7 +779,7 @@ class AetherfyVectorsClient:
 
         data = {"schema": schema.to_dict(), "enforcement_mode": enforcement}
 
-        response = self._make_request("PUT", f"api/v1/schema/{collection_name}", data)
+        response = self._make_request("PUT", f"schema/{collection_name}", data)
         etag = response["etag"]
 
         # Update cache
@@ -806,7 +806,7 @@ class AetherfyVectorsClient:
         validate_collection_name(collection_name)
 
         try:
-            self._make_request("DELETE", f"api/v1/schema/{collection_name}")
+            self._make_request("DELETE", f"schema/{collection_name}")
 
             # Clear from cache
             self._payload_schema_cache.pop(collection_name, None)
@@ -840,9 +840,7 @@ class AetherfyVectorsClient:
             raise ValueError("sample_size must be between 100 and 10000")
 
         data = {"sample_size": sample_size}
-        response = self._make_request(
-            "POST", f"api/v1/schema/{collection_name}/analyze", data
-        )
+        response = self._make_request("POST", f"schema/{collection_name}/analyze", data)
 
         return AnalysisResult.from_dict(response)
 
