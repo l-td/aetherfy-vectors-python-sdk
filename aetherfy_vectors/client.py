@@ -63,6 +63,7 @@ class AetherfyVectorsClient:
         api_key: Optional[str] = None,
         endpoint: str = DEFAULT_ENDPOINT,
         timeout: float = DEFAULT_TIMEOUT,
+        workspace: Optional[str] = None,
         **kwargs,
     ):
         """Initialize Aetherfy Vectors client.
@@ -71,6 +72,10 @@ class AetherfyVectorsClient:
             api_key: Aetherfy API key. If None, will try environment variables.
             endpoint: API endpoint URL (default: https://vectors.aetherfy.com).
             timeout: Request timeout in seconds (default: 30.0).
+            workspace: Workspace name for multi-agent coordination.
+                - Set to 'auto' to auto-detect from AETHERFY_WORKSPACE environment variable
+                - Set to a string to use a specific workspace
+                - Leave None for no workspace (collections are not namespaced)
             **kwargs: Additional parameters for compatibility.
 
         Raises:
@@ -78,6 +83,14 @@ class AetherfyVectorsClient:
         """
         self.endpoint = endpoint.rstrip("/")
         self.timeout = timeout
+
+        # Initialize workspace (auto-detect or explicit)
+        if workspace == "auto":
+            import os
+
+            self.workspace = os.getenv("AETHERFY_WORKSPACE")
+        else:
+            self.workspace = workspace
 
         # Initialize authentication
         self.auth_manager = APIKeyManager(api_key)
@@ -131,6 +144,33 @@ class AetherfyVectorsClient:
         session.headers.update(self.auth_headers)
 
         return session
+
+    def _scope_collection(self, collection_name: str) -> str:
+        """Scope a collection name with workspace prefix if workspace is set.
+
+        Args:
+            collection_name: The collection name to scope.
+
+        Returns:
+            Scoped collection name (workspace/collection) if workspace is set,
+            otherwise returns the original collection name.
+        """
+        if self.workspace:
+            return f"{self.workspace}/{collection_name}"
+        return collection_name
+
+    def _unscope_collection(self, scoped_name: str) -> str:
+        """Remove workspace prefix from a collection name.
+
+        Args:
+            scoped_name: The scoped collection name.
+
+        Returns:
+            Unscoped collection name (without workspace prefix).
+        """
+        if self.workspace and scoped_name.startswith(f"{self.workspace}/"):
+            return scoped_name[len(self.workspace) + 1 :]
+        return scoped_name
 
     def _make_request(
         self,
@@ -329,8 +369,10 @@ class AetherfyVectorsClient:
         if distance:
             config.distance = self._normalize_distance_metric(distance)
 
+        scoped_name = self._scope_collection(collection_name)
+
         data = {
-            "name": collection_name,
+            "name": scoped_name,
             "vectors": config.to_dict(),
             "description": description,
         }
@@ -349,7 +391,8 @@ class AetherfyVectorsClient:
             True if collection was deleted successfully.
         """
         validate_collection_name(collection_name)
-        self._make_request("DELETE", f"collections/{collection_name}")
+        scoped_name = self._scope_collection(collection_name)
+        self._make_request("DELETE", f"collections/{scoped_name}")
         return True
 
     def get_collections(self, **kwargs) -> List[Collection]:
@@ -362,7 +405,19 @@ class AetherfyVectorsClient:
             List of Collection objects.
         """
         response = self._make_request("GET", "collections")
-        return [Collection.from_dict(col) for col in response.get("collections", [])]
+        collections = response.get("collections", [])
+
+        # If workspace is set, filter and unscope collection names
+        if self.workspace:
+            workspace_prefix = f"{self.workspace}/"
+            filtered_collections = []
+            for col in collections:
+                if col.get("name", "").startswith(workspace_prefix):
+                    col["name"] = self._unscope_collection(col["name"])
+                    filtered_collections.append(col)
+            return [Collection.from_dict(col) for col in filtered_collections]
+
+        return [Collection.from_dict(col) for col in collections]
 
     def collection_exists(self, collection_name: str, **kwargs) -> bool:
         """Check if a collection exists.
@@ -374,8 +429,9 @@ class AetherfyVectorsClient:
         Returns:
             True if collection exists, False otherwise.
         """
+        scoped_name = self._scope_collection(collection_name)
         try:
-            self._make_request("GET", f"collections/{collection_name}")
+            self._make_request("GET", f"collections/{scoped_name}")
             return True
         except AetherfyVectorsException:
             return False
@@ -391,8 +447,12 @@ class AetherfyVectorsClient:
             Collection object with details.
         """
         validate_collection_name(collection_name)
-        response = self._make_request("GET", f"collections/{collection_name}")
+        scoped_name = self._scope_collection(collection_name)
+        response = self._make_request("GET", f"collections/{scoped_name}")
         collection_data = response.get("result", response)
+        # Unscope the collection name in the result
+        if self.workspace and collection_data.get("name"):
+            collection_data["name"] = self._unscope_collection(collection_data["name"])
         return Collection.from_dict(collection_data)
 
     # Point Management Methods
@@ -415,10 +475,12 @@ class AetherfyVectorsClient:
         """
         validate_collection_name(collection_name)
 
+        scoped_name = self._scope_collection(collection_name)
+
         # Get vector config schema (from cache or fetch)
-        schema = self._get_cached_schema(collection_name)
+        schema = self._get_cached_schema(scoped_name)
         if not schema:
-            schema = self._fetch_and_cache_schema(collection_name)
+            schema = self._fetch_and_cache_schema(scoped_name)
 
         # Validate vector dimensions
         expected_dim = schema.get("size")
@@ -446,22 +508,23 @@ class AetherfyVectorsClient:
                 raise ValueError("Points must be Point objects or dictionaries")
 
         # Get payload schema for validation (if exists)
-        payload_schema_data = self._payload_schema_cache.get(collection_name)
+        payload_schema_data = self._payload_schema_cache.get(scoped_name)
         if payload_schema_data is None:  # Not cached yet (different from cached None)
             # Try to fetch schema from server
             try:
+                # get_schema will handle scoping internally
                 schema_result = self.get_schema(collection_name)
                 if schema_result is None:
                     # Cache the fact that no schema exists to avoid repeated fetches
-                    self._payload_schema_cache[collection_name] = {
+                    self._payload_schema_cache[scoped_name] = {
                         "schema": None,
                         "enforcement_mode": "off",
                         "etag": None,
                     }
-                payload_schema_data = self._payload_schema_cache.get(collection_name)
+                payload_schema_data = self._payload_schema_cache.get(scoped_name)
             except:
                 # Error fetching schema - cache None to avoid retrying
-                self._payload_schema_cache[collection_name] = {
+                self._payload_schema_cache[scoped_name] = {
                     "schema": None,
                     "enforcement_mode": "off",
                     "etag": None,
@@ -505,7 +568,7 @@ class AetherfyVectorsClient:
             # Pass If-Match header directly to the request
             response = self._make_request(
                 "PUT",
-                f"collections/{collection_name}/points",
+                f"collections/{scoped_name}/points",
                 data,
                 headers=extra_headers if extra_headers else None,
             )
@@ -514,7 +577,7 @@ class AetherfyVectorsClient:
         except ValidationError as e:
             # Handle 412 Precondition Failed (schema changed)
             if e.status_code == 412:
-                self.clear_schema_cache(collection_name)
+                self.clear_schema_cache(scoped_name)
                 self._payload_schema_cache.pop(collection_name, None)
 
                 # Fetch updated schema and re-validate
@@ -548,7 +611,7 @@ class AetherfyVectorsClient:
 
                     response = self._make_request(
                         "PUT",
-                        f"collections/{collection_name}/points",
+                        f"collections/{scoped_name}/points",
                         data,
                         headers=extra_headers_retry if extra_headers_retry else None,
                     )
@@ -586,6 +649,8 @@ class AetherfyVectorsClient:
         """
         validate_collection_name(collection_name)
 
+        scoped_name = self._scope_collection(collection_name)
+
         if isinstance(points_selector, list):
             # Delete by point IDs
             for point_id in points_selector:
@@ -595,7 +660,7 @@ class AetherfyVectorsClient:
             # Delete by filter
             data = {"filter": points_selector}
 
-        self._make_request("POST", f"collections/{collection_name}/points/delete", data)
+        self._make_request("POST", f"collections/{scoped_name}/points/delete", data)
         return True
 
     def retrieve(
@@ -620,14 +685,14 @@ class AetherfyVectorsClient:
         """
         validate_collection_name(collection_name)
 
+        scoped_name = self._scope_collection(collection_name)
+
         for point_id in ids:
             validate_point_id(point_id)
 
         data = {"ids": ids, "with_payload": with_payload, "with_vector": with_vectors}
 
-        response = self._make_request(
-            "POST", f"collections/{collection_name}/points", data
-        )
+        response = self._make_request("POST", f"collections/{scoped_name}/points", data)
         return response.get("result", [])
 
     # Search Methods
@@ -663,6 +728,8 @@ class AetherfyVectorsClient:
         validate_collection_name(collection_name)
         validate_vector(query_vector)
 
+        scoped_name = self._scope_collection(collection_name)
+
         data = {
             "vector": query_vector,
             "limit": limit,
@@ -681,7 +748,7 @@ class AetherfyVectorsClient:
             data["score_threshold"] = score_threshold
 
         response = self._make_request(
-            "POST", f"collections/{collection_name}/points/search", data
+            "POST", f"collections/{scoped_name}/points/search", data
         )
 
         results = []
@@ -710,12 +777,14 @@ class AetherfyVectorsClient:
         """
         validate_collection_name(collection_name)
 
+        scoped_name = self._scope_collection(collection_name)
+
         data: Dict[str, Any] = {"exact": exact}
         if count_filter:
             data["filter"] = count_filter
 
         response = self._make_request(
-            "POST", f"collections/{collection_name}/points/count", data
+            "POST", f"collections/{scoped_name}/points/count", data
         )
         return response.get("count", 0)
 
@@ -735,15 +804,17 @@ class AetherfyVectorsClient:
         """
         validate_collection_name(collection_name)
 
+        scoped_name = self._scope_collection(collection_name)
+
         try:
-            response = self._make_request("GET", f"schema/{collection_name}")
+            response = self._make_request("GET", f"schema/{scoped_name}")
 
             schema = Schema.from_dict(response["schema"])
             etag = response["etag"]
             enforcement_mode = response["enforcement_mode"]
 
-            # Cache it
-            self._payload_schema_cache[collection_name] = {
+            # Cache it (use scoped name for cache)
+            self._payload_schema_cache[scoped_name] = {
                 "schema": schema,
                 "etag": etag,
                 "enforcement_mode": enforcement_mode,
@@ -774,16 +845,18 @@ class AetherfyVectorsClient:
         """
         validate_collection_name(collection_name)
 
+        scoped_name = self._scope_collection(collection_name)
+
         if enforcement not in ["off", "warn", "strict"]:
             raise ValueError("enforcement must be 'off', 'warn', or 'strict'")
 
         data = {"schema": schema.to_dict(), "enforcement_mode": enforcement}
 
-        response = self._make_request("PUT", f"schema/{collection_name}", data)
+        response = self._make_request("PUT", f"schema/{scoped_name}", data)
         etag = response["etag"]
 
-        # Update cache
-        self._payload_schema_cache[collection_name] = {
+        # Update cache (use scoped name)
+        self._payload_schema_cache[scoped_name] = {
             "schema": schema,
             "etag": etag,
             "enforcement_mode": enforcement,
@@ -805,11 +878,13 @@ class AetherfyVectorsClient:
         """
         validate_collection_name(collection_name)
 
-        try:
-            self._make_request("DELETE", f"schema/{collection_name}")
+        scoped_name = self._scope_collection(collection_name)
 
-            # Clear from cache
-            self._payload_schema_cache.pop(collection_name, None)
+        try:
+            self._make_request("DELETE", f"schema/{scoped_name}")
+
+            # Clear from cache (use scoped name)
+            self._payload_schema_cache.pop(scoped_name, None)
 
             return True
 
@@ -836,13 +911,19 @@ class AetherfyVectorsClient:
         """
         validate_collection_name(collection_name)
 
+        scoped_name = self._scope_collection(collection_name)
+
         if sample_size < 100 or sample_size > 10000:
             raise ValueError("sample_size must be between 100 and 10000")
 
         data = {"sample_size": sample_size}
-        response = self._make_request("POST", f"schema/{collection_name}/analyze", data)
+        response = self._make_request("POST", f"schema/{scoped_name}/analyze", data)
 
-        return AnalysisResult.from_dict(response)
+        # Return with unscoped collection name
+        result = AnalysisResult.from_dict(response)
+        if hasattr(result, "collection"):
+            result.collection = collection_name
+        return result
 
     def refresh_schema(self, collection_name: str) -> None:
         """Force refresh of cached schema.
@@ -850,8 +931,9 @@ class AetherfyVectorsClient:
         Args:
             collection_name: Name of the collection.
         """
-        self._payload_schema_cache.pop(collection_name, None)
-        self.get_schema(collection_name)
+        scoped_name = self._scope_collection(collection_name)
+        self._payload_schema_cache.pop(scoped_name, None)
+        self.get_schema(collection_name)  # get_schema will handle scoping internally
 
     # Analytics Methods (SDK-specific)
 
