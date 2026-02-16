@@ -13,7 +13,7 @@ from aetherfy_vectors import AetherfyVectorsClient
 from aetherfy_vectors.models import VectorConfig, DistanceMetric, Point, SearchResult
 from aetherfy_vectors.exceptions import (
     AuthenticationError, ValidationError, CollectionNotFoundError,
-    RequestTimeoutError
+    RequestTimeoutError, CollectionInUseError
 )
 
 
@@ -409,6 +409,29 @@ class TestErrorHandling:
         """Test validation error for invalid vector."""
         with pytest.raises(ValidationError):
             client.search("test_collection", [])  # Empty vector
+
+    def test_delete_collection_in_use_raises_error(self, client, mock_requests):
+        """Test that deleting a collection in use raises CollectionInUseError."""
+        from unittest.mock import Mock
+        mock_response = Mock()
+        mock_response.status_code = 409
+        mock_response.json.return_value = {
+            "error": {
+                "code": "COLLECTION_IN_USE",
+                "message": "Collection 'test-collection' is in use by agent(s): my-agent",
+                "collection_name": "test-collection",
+                "agents": ["my-agent", "another-agent"]
+            }
+        }
+        mock_response.content = True
+        mock_requests.request.return_value = mock_response
+
+        with pytest.raises(CollectionInUseError) as exc_info:
+            client.delete_collection("test-collection")
+
+        assert exc_info.value.collection_name == "test-collection"
+        assert "my-agent" in exc_info.value.agents
+        assert "another-agent" in exc_info.value.agents
 
 
 class TestContextManager:

@@ -126,6 +126,17 @@ class SchemaValidationError(AetherfyVectorsException):
         super().__init__(message, **kwargs)
 
 
+class CollectionInUseError(AetherfyVectorsException):
+    """Collection cannot be deleted because it is referenced by one or more agents."""
+
+    def __init__(self, collection_name: str, agents: list, **kwargs):
+        agent_list = ", ".join(agents) if agents else "unknown"
+        message = f"Collection '{collection_name}' is in use by agent(s): {agent_list}"
+        super().__init__(message, **kwargs)
+        self.collection_name = collection_name
+        self.agents = agents
+
+
 class SchemaNotFoundError(AetherfyVectorsException):
     """No schema defined for collection."""
 

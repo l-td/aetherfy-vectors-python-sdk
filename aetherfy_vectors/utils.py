@@ -181,6 +181,23 @@ def parse_error_response(
         return ValidationError(
             message, request_id=request_id, status_code=status_code, details=details
         )
+    elif status_code == 409:
+        from .exceptions import CollectionInUseError
+
+        if error_code == "COLLECTION_IN_USE":
+            collection_name = (
+                details.get("collection_name", "unknown")
+                if isinstance(details, dict)
+                else "unknown"
+            )
+            agents = details.get("agents", []) if isinstance(details, dict) else []
+            return CollectionInUseError(
+                collection_name,
+                agents,
+                request_id=request_id,
+                status_code=status_code,
+                details=details,
+            )
     elif status_code == 412:
         # Schema version mismatch - return ValidationError to trigger cache clear
         return ValidationError(

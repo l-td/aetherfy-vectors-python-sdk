@@ -17,6 +17,7 @@ from .exceptions import (
     ServiceUnavailableError,
     SchemaValidationError,
     SchemaNotFoundError,
+    CollectionInUseError,
 )
 from .models import (
     SearchResult,
@@ -40,6 +41,7 @@ __all__ = [
     "ServiceUnavailableError",
     "SchemaValidationError",
     "SchemaNotFoundError",
+    "CollectionInUseError",
     "SearchResult",
     "Point",
     "Collection",
