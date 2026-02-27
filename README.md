@@ -156,6 +156,74 @@ with AetherfyVectorsClient(api_key="your_key") as client:
     # Automatic cleanup
 ```
 
+## 🤝 Multi-Agent Workspaces
+
+Workspaces let multiple agents share vector collections without name collisions. All collections created through a workspace-scoped client are automatically namespaced — agents in the same workspace see each other's collections; agents in different workspaces are fully isolated.
+
+### Creating a workspace-scoped client
+
+```python
+from aetherfy_vectors import AetherfyVectorsClient
+
+client = AetherfyVectorsClient(
+    api_key="afy_live_your_api_key_here",
+    workspace="invoice-pipeline",  # All operations are scoped to this workspace
+)
+```
+
+### How scoping works
+
+Collection names are automatically prefixed — you always use the short name:
+
+```python
+# Create a collection (stored as "invoice-pipeline/documents" internally)
+from aetherfy_vectors.models import VectorConfig, DistanceMetric
+
+client.create_collection("documents", VectorConfig(size=768, distance=DistanceMetric.COSINE))
+
+# Search — no need to know the full scoped name
+results = client.search("documents", query_vector=embedding, limit=10)
+
+# List — only returns collections in your workspace
+collections = client.get_collections()
+# → [CollectionDescription(name='documents', ...)]  (short names, not scoped names)
+```
+
+### Multi-agent example
+
+```python
+# Agent A: extractor
+extractor = AetherfyVectorsClient(api_key=api_key, workspace="invoice-pipeline")
+extractor.create_collection("raw-invoices", VectorConfig(size=768, distance=DistanceMetric.COSINE))
+extractor.upsert("raw-invoices", extracted_points)
+
+# Agent B: classifier — same workspace, sees Agent A's collection
+classifier = AetherfyVectorsClient(api_key=api_key, workspace="invoice-pipeline")
+results = classifier.search("raw-invoices", query_vector=embedding, limit=20)
+```
+
+### Workspace auto-detection from environment
+
+Agents deployed by Aetherfy automatically have `AETHERFY_WORKSPACE` set. The client picks this up if no `workspace` is passed explicitly:
+
+```python
+import os
+
+# In a deployed agent, AETHERFY_WORKSPACE is injected automatically
+client = AetherfyVectorsClient(api_key=os.environ["AETHERFY_API_KEY"])
+# → workspace is auto-detected from AETHERFY_WORKSPACE env var
+```
+
+### No workspace (backward-compatible)
+
+```python
+# No workspace — collections are stored as-is, not scoped
+client = AetherfyVectorsClient(api_key="afy_live_your_key")
+client.create_collection("my-global-collection", VectorConfig(size=768, distance=DistanceMetric.COSINE))
+```
+
+> **Tip:** Create workspaces explicitly in the Aetherfy control plane before use (`afy workspaces create invoice-pipeline`). Agents deployed to a workspace automatically receive the workspace name via `AETHERFY_WORKSPACE`.
+
 ## 📊 Performance Comparison
 
 | Feature | Local Qdrant | Aetherfy Vectors |
