@@ -469,6 +469,7 @@ class TestClientSchemaOperations:
                 }
             },
             'enforcement_mode': 'strict',
+            'description': None,
             'etag': 'abc123'
         }
         mock_response = mock_successful_response(schema_data, 200)
@@ -649,6 +650,7 @@ class TestClientSchemaOperations:
                 }
             },
             'enforcement_mode': 'warn',
+            'description': None,
             'etag': 'new_etag'
         }
         mock_response = mock_successful_response(new_schema_data, 200)
@@ -689,6 +691,7 @@ class TestClientValidationIntegration:
                 }
             },
             'enforcement_mode': 'strict',
+            'description': None,
             'etag': 'schema_etag'
         }
         schema_response = mock_successful_response(schema_data, 200)
@@ -735,6 +738,7 @@ class TestClientValidationIntegration:
                 }
             },
             'enforcement_mode': 'strict',
+            'description': None,
             'etag': 'schema_etag'
         }
         schema_response = mock_successful_response(schema_data, 200)
@@ -812,6 +816,7 @@ class TestClientValidationIntegration:
                 }
             },
             'enforcement_mode': 'warn',
+            'description': None,
             'etag': 'schema_etag'
         }
         schema_response = mock_successful_response(schema_data, 200)
@@ -856,6 +861,7 @@ class TestClientValidationIntegration:
                 }
             },
             'enforcement_mode': 'strict',
+            'description': None,
             'etag': 'old_etag'
         }
         old_schema_response = mock_successful_response(old_schema_data, 200)
@@ -877,6 +883,7 @@ class TestClientValidationIntegration:
                 }
             },
             'enforcement_mode': 'strict',
+            'description': None,
             'etag': 'new_etag'
         }
         new_schema_response = mock_successful_response(new_schema_data, 200)
@@ -925,6 +932,7 @@ class TestClientValidationIntegration:
                 }
             },
             'enforcement_mode': 'off',
+            'description': None,
             'etag': 'schema_etag'
         }
         schema_response = mock_successful_response(schema_data, 200)

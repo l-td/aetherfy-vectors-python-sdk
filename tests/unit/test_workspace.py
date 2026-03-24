@@ -289,7 +289,8 @@ class TestSchemaOperationsWithWorkspace:
         mock_client._make_request.return_value = {
             "schema": {"fields": {}},
             "etag": "schema-v1",
-            "enforcement_mode": "off"
+            "enforcement_mode": "off",
+            "description": None
         }
 
         mock_client.get_schema(collection_name="documents")
@@ -352,7 +353,8 @@ class TestSchemaOperationsWithWorkspace:
         mock_client._make_request.return_value = {
             "schema": {"fields": {}},
             "etag": "schema-v3",
-            "enforcement_mode": "off"
+            "enforcement_mode": "off",
+            "description": None
         }
 
         mock_client.refresh_schema(collection_name="documents")

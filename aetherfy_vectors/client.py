@@ -810,6 +810,7 @@ class AetherfyVectorsClient:
             response = self._make_request("GET", f"schema/{scoped_name}")
 
             schema = Schema.from_dict(response["schema"])
+            schema.description = response.get("description")
             etag = response["etag"]
             enforcement_mode = response["enforcement_mode"]
 
@@ -828,7 +829,11 @@ class AetherfyVectorsClient:
             raise
 
     def set_schema(
-        self, collection_name: str, schema: Schema, enforcement: str = "off"
+        self,
+        collection_name: str,
+        schema: Schema,
+        enforcement: str = "off",
+        description: Optional[str] = None,
     ) -> str:
         """Set schema for a collection.
 
@@ -836,6 +841,7 @@ class AetherfyVectorsClient:
             collection_name: Name of the collection.
             schema: Schema definition.
             enforcement: Enforcement mode - 'off', 'warn', or 'strict' (default: 'off').
+            description: Optional schema description (max 500 characters).
 
         Returns:
             ETag of the new schema.
@@ -850,7 +856,12 @@ class AetherfyVectorsClient:
         if enforcement not in ["off", "warn", "strict"]:
             raise ValueError("enforcement must be 'off', 'warn', or 'strict'")
 
-        data = {"schema": schema.to_dict(), "enforcement_mode": enforcement}
+        data: Dict[str, Any] = {
+            "schema": schema.to_dict(),
+            "enforcement_mode": enforcement,
+        }
+        if description is not None:
+            data["description"] = description
 
         response = self._make_request("PUT", f"schema/{scoped_name}", data)
         etag = response["etag"]

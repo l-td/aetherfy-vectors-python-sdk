@@ -73,6 +73,7 @@ class Schema:
     """Schema definition for a collection's payload structure."""
 
     fields: Dict[str, FieldDefinition]
+    description: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert schema to dictionary format."""
@@ -82,7 +83,7 @@ class Schema:
     def from_dict(cls, data: Dict[str, Any]) -> "Schema":
         """Create Schema from dictionary."""
         fields = {k: FieldDefinition.from_dict(v) for k, v in data["fields"].items()}
-        return cls(fields=fields)
+        return cls(fields=fields, description=data.get("description"))
 
 
 @dataclass
