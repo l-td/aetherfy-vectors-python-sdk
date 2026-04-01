@@ -146,7 +146,21 @@ def parse_error_response(
             message, request_id=request_id, status_code=status_code, details=details
         )
     elif status_code == 429:
-        retry_after = details.get("retry_after")
+        if error_code == "STORAGE_LIMIT_EXCEEDED":
+            from .exceptions import QuotaExceededError
+
+            current = details.get("current") if isinstance(details, dict) else None
+            limit = details.get("limit") if isinstance(details, dict) else None
+            return QuotaExceededError(
+                message,
+                "storage",
+                current=current,
+                limit=limit,
+                request_id=request_id,
+                status_code=status_code,
+                details=details,
+            )
+        retry_after = details.get("retry_after") if isinstance(details, dict) else None
         return RateLimitExceededError(
             message,
             request_id=request_id,
@@ -178,6 +192,20 @@ def parse_error_response(
                 details=details,
             )
     elif status_code == 400:
+        if error_code == "COLLECTION_LIMIT_EXCEEDED":
+            from .exceptions import QuotaExceededError
+
+            current = details.get("current") if isinstance(details, dict) else None
+            limit = details.get("limit") if isinstance(details, dict) else None
+            return QuotaExceededError(
+                message,
+                "collections",
+                current=current,
+                limit=limit,
+                request_id=request_id,
+                status_code=status_code,
+                details=details,
+            )
         return ValidationError(
             message, request_id=request_id, status_code=status_code, details=details
         )

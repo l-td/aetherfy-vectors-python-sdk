@@ -23,6 +23,7 @@ from aetherfy_vectors.exceptions import (
     PointNotFoundError,
     RequestTimeoutError,
     AetherfyVectorsException,
+    QuotaExceededError,
 )
 
 
@@ -240,6 +241,47 @@ class TestParseErrorResponse:
         response_data = {"message": "Bad Request", "request_id": "req_123"}
         error = parse_error_response(response_data, 400)
         assert isinstance(error, ValidationError)
+
+    def test_parse_error_response_400_collection_limit_exceeded(self):
+        """Test that COLLECTION_LIMIT_EXCEEDED maps to QuotaExceededError, not ValidationError."""
+        response_data = {
+            "error": {
+                "code": "COLLECTION_LIMIT_EXCEEDED",
+                "message": "Collection limit reached. Your free plan allows 3 collections.",
+                "current": 3,
+                "limit": 3,
+            }
+        }
+        error = parse_error_response(response_data, 400)
+        assert isinstance(error, QuotaExceededError)
+        assert error.quota_type == "collections"
+        assert error.current == 3
+        assert error.limit == 3
+        assert "Collection limit reached" in str(error)
+
+    def test_parse_error_response_429_storage_limit_exceeded(self):
+        """Test that STORAGE_LIMIT_EXCEEDED maps to QuotaExceededError, not RateLimitExceededError."""
+        response_data = {
+            "error": {
+                "code": "STORAGE_LIMIT_EXCEEDED",
+                "message": "Storage limit exceeded. Your free plan allows 512 MB.",
+                "current": 536870912,
+                "limit": 536870912,
+            }
+        }
+        error = parse_error_response(response_data, 429)
+        assert isinstance(error, QuotaExceededError)
+        assert error.quota_type == "storage"
+        assert error.current == 536870912
+        assert error.limit == 536870912
+        assert "Storage limit exceeded" in str(error)
+
+    def test_parse_error_response_429_rate_limit(self):
+        """Test that plain 429 without STORAGE_LIMIT_EXCEEDED still maps to RateLimitExceededError."""
+        from aetherfy_vectors.exceptions import RateLimitExceededError
+        response_data = {"message": "Too many requests", "request_id": "req_123"}
+        error = parse_error_response(response_data, 429)
+        assert isinstance(error, RateLimitExceededError)
 
     def test_parse_error_response_408(self):
         """Test parsing 408 request timeout error."""

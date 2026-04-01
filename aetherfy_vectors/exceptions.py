@@ -137,6 +137,23 @@ class CollectionInUseError(AetherfyVectorsException):
         self.agents = agents
 
 
+class QuotaExceededError(AetherfyVectorsException):
+    """Tier quota exceeded (e.g. collection count limit)."""
+
+    def __init__(
+        self,
+        message: str,
+        quota_type: str,
+        current: Optional[int] = None,
+        limit: Optional[int] = None,
+        **kwargs,
+    ):
+        super().__init__(message, **kwargs)
+        self.quota_type = quota_type
+        self.current = current
+        self.limit = limit
+
+
 class SchemaNotFoundError(AetherfyVectorsException):
     """No schema defined for collection."""
 
