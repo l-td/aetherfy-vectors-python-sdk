@@ -224,6 +224,40 @@ client.create_collection("my-global-collection", VectorConfig(size=768, distance
 
 > **Tip:** Create workspaces explicitly in the Aetherfy control plane before use (`afy workspaces create invoice-pipeline`). Agents deployed to a workspace automatically receive the workspace name via `AETHERFY_WORKSPACE`.
 
+## 🧩 Payload Schemas
+
+Collections can carry an optional payload schema that the SDK validates against **before** upsert — catching malformed payloads client-side without a round trip. Schemas are cached and automatically revalidated when they change server-side (via ETag).
+
+```python
+from aetherfy_vectors import Schema, FieldDefinition
+
+schema = Schema(
+    fields={
+        "title":    FieldDefinition(type="string",  required=True),
+        "price":    FieldDefinition(type="float",   required=True),
+        "tags":     FieldDefinition(type="array",   required=False, element_type="string"),
+        "in_stock": FieldDefinition(type="boolean", required=False),
+    },
+    description="Product catalog payloads",
+)
+
+# enforcement: "off" (no validation), "warn" (log warnings), "strict" (raise on violation)
+etag = client.set_schema("products", schema, enforcement="strict")
+
+# Inspect or remove the schema
+current = client.get_schema("products")   # returns None if no schema is defined
+client.delete_schema("products")
+```
+
+### Infer a schema from existing data
+
+```python
+analysis = client.analyze_schema("products", sample_size=1000)
+print(analysis.suggested_schema)   # a Schema you can set_schema() directly
+```
+
+Schema violations raise `SchemaValidationError` (with a list of per-field errors). If the server reports a stale schema (`412 Precondition Failed`), the SDK auto-refreshes the cache and retries.
+
 ## 📊 Performance Comparison
 
 | Feature | Local Qdrant | Aetherfy Vectors |
@@ -242,7 +276,9 @@ client.create_collection("my-global-collection", VectorConfig(size=768, distance
 Set your API key using environment variables (recommended):
 
 ```bash
+# Either of these is read automatically
 export AETHERFY_API_KEY="afy_live_your_api_key_here"
+export AETHERFY_VECTORS_API_KEY="afy_live_your_api_key_here"
 ```
 
 Or pass it directly:
@@ -250,6 +286,14 @@ Or pass it directly:
 ```python
 client = AetherfyVectorsClient(api_key="afy_live_your_api_key_here")
 ```
+
+Relevant environment variables:
+
+| Variable | Purpose |
+|----------|---------|
+| `AETHERFY_API_KEY` | Primary API key |
+| `AETHERFY_VECTORS_API_KEY` | Alternative API key (useful when the same process talks to multiple Aetherfy services) |
+| `AETHERFY_WORKSPACE` | Used when the client is constructed with `workspace="auto"` (set automatically on deployed agents) |
 
 ### Python Version Support
 
@@ -310,6 +354,22 @@ results = client.search(
 )
 ```
 
+### Schema Management (Aetherfy-specific)
+
+```python
+# Set, fetch, and remove a payload schema
+etag = client.set_schema(collection_name, schema, enforcement="strict", description=None)
+schema = client.get_schema(collection_name)           # None if not set
+client.delete_schema(collection_name)
+
+# Infer a schema from existing data
+analysis = client.analyze_schema(collection_name, sample_size=1000)  # 100–10000
+
+# Cache control (rarely needed)
+client.refresh_schema(collection_name)
+client.clear_schema_cache(collection_name=None)       # None clears all
+```
+
 ### Analytics (Aetherfy-specific)
 
 ```python
@@ -329,10 +389,19 @@ The SDK provides detailed error handling compatible with qdrant-client:
 
 ```python
 from aetherfy_vectors.exceptions import (
+    AetherfyVectorsException,   # base class for all SDK errors
     AuthenticationError,
     CollectionNotFoundError,
+    PointNotFoundError,
     RateLimitExceededError,
-    ServiceUnavailableError
+    ServiceUnavailableError,
+    ValidationError,
+    RequestTimeoutError,
+    NetworkError,
+    SchemaValidationError,
+    SchemaNotFoundError,
+    CollectionInUseError,
+    QuotaExceededError,
 )
 
 try:
@@ -343,15 +412,22 @@ except AuthenticationError as e:
     print(f"Invalid API key: {e}")
 except RateLimitExceededError as e:
     print(f"Rate limit exceeded. Retry after: {e.retry_after}s")
+except SchemaValidationError as e:
+    for violation in e.errors:
+        print(violation)
+except QuotaExceededError as e:
+    print(f"Quota '{e.quota_type}' exceeded: {e.current}/{e.limit}")
 ```
 
 ## 🔧 Configuration Options
 
 ```python
 client = AetherfyVectorsClient(
-    api_key="your_api_key",           # Required: Your Aetherfy API key
+    api_key="your_api_key",                   # Required (or set AETHERFY_API_KEY)
     endpoint="https://vectors.aetherfy.com",  # Optional: Custom endpoint
-    timeout=30.0,                     # Optional: Request timeout (seconds)
+    timeout=30.0,                             # Optional: Request timeout (seconds)
+    workspace=None,                           # Optional: None, a workspace name, or "auto"
+                                              #           to read AETHERFY_WORKSPACE
 )
 ```
 
