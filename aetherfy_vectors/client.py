@@ -757,6 +757,62 @@ class AetherfyVectorsClient:
 
         return results
 
+    def scroll(
+        self,
+        collection_name: str,
+        limit: int = 10,
+        offset: Optional[Union[str, int]] = None,
+        scroll_filter: Optional[Union[Filter, Dict[str, Any]]] = None,
+        with_payload: bool = True,
+        with_vectors: bool = False,
+        **kwargs,
+    ) -> Dict[str, Any]:
+        """Scroll through points in a collection (Qdrant-compatible pagination).
+
+        Unlike `search`, scroll iterates over points without vector similarity —
+        used for bulk reads, history fetches, and payload-filtered iteration.
+
+        Args:
+            collection_name: Name of the collection.
+            limit: Maximum points per page.
+            offset: Pagination cursor from a previous call's `next_page_offset`.
+            scroll_filter: Payload filter conditions.
+            with_payload: Include payload in results.
+            with_vectors: Include vectors in results.
+            **kwargs: Additional parameters for compatibility.
+
+        Returns:
+            Dict with `points` (list of point dicts) and `next_page_offset`
+            (cursor or None if this was the last page).
+        """
+        validate_collection_name(collection_name)
+
+        scoped_name = self._scope_collection(collection_name)
+
+        data: Dict[str, Any] = {
+            "limit": limit,
+            "with_payload": with_payload,
+            "with_vector": with_vectors,
+        }
+        if offset is not None:
+            data["offset"] = offset
+        if scroll_filter:
+            if isinstance(scroll_filter, Filter):
+                data["filter"] = scroll_filter.to_dict()
+            else:
+                data["filter"] = scroll_filter
+
+        response = self._make_request(
+            "POST", f"collections/{scoped_name}/points/scroll", data
+        )
+
+        # Qdrant scroll response: {"result": {"points": [...], "next_page_offset": ...}, ...}
+        result = response.get("result") or {}
+        return {
+            "points": result.get("points", []),
+            "next_page_offset": result.get("next_page_offset"),
+        }
+
     def count(
         self,
         collection_name: str,

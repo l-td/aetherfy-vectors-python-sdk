@@ -132,6 +132,9 @@ setup(
         "aetherfy_vectors": [
             "py.typed",  # Indicates this package has type hints
         ],
+        "aetherfy_memory": [
+            "py.typed",  # Indicates this package has type hints
+        ],
     },
     # Additional metadata for better discoverability
     platforms=["any"],
