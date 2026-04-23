@@ -85,25 +85,28 @@ class MemoryClient:
         endpoint: str = DEFAULT_ENDPOINT,
         timeout: float = DEFAULT_TIMEOUT,
         workspace: Optional[str] = "auto",
-        _client: Optional[AetherfyVectorsClient] = None,
+        client: Optional[AetherfyVectorsClient] = None,
     ):
         """Initialize a MemoryClient.
 
         Args:
             api_key: Aetherfy API key. Reads AETHERFY_API_KEY if omitted
                 (auto-injected by the control plane at deploy time).
-            endpoint: API endpoint URL.
-            timeout: Request timeout in seconds.
+                Ignored if `client` is provided.
+            endpoint: API endpoint URL. Ignored if `client` is provided.
+            timeout: Request timeout in seconds. Ignored if `client` is provided.
             workspace: Workspace name. Defaults to "auto" (reads
                 AETHERFY_WORKSPACE). Pass None to disable workspace scoping
                 (collections land in a shared namespace — not recommended
-                outside local dev).
-            _client: Internal hook for tests — pass a pre-built
-                AetherfyVectorsClient instance to use instead of constructing
-                one. Not part of the public API.
+                outside local dev). Ignored if `client` is provided.
+            client: Bring-your-own AetherfyVectorsClient. When supplied, all
+                other parameters (api_key, endpoint, timeout, workspace) are
+                ignored and this client is used as-is. Useful when sharing
+                a single vectors client across MemoryClient and other code,
+                or when you need a custom session / retry strategy.
         """
-        if _client is not None:
-            self._client = _client
+        if client is not None:
+            self._client = client
         else:
             self._client = AetherfyVectorsClient(
                 api_key=api_key,

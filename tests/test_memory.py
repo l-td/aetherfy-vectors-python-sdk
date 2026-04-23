@@ -71,7 +71,7 @@ def fake_vectors_client():
 @pytest.fixture
 def memory(fake_vectors_client):
     """A MemoryClient wired to the fake vectors client."""
-    return MemoryClient(_client=fake_vectors_client)
+    return MemoryClient(client=fake_vectors_client)
 
 
 # =============================================================================
@@ -583,6 +583,6 @@ class TestClientLifecycle:
         fake_vectors_client.close.assert_called_once()
 
     def test_context_manager_closes(self, fake_vectors_client):
-        with MemoryClient(_client=fake_vectors_client) as m:
+        with MemoryClient(client=fake_vectors_client) as m:
             assert m.vectors is fake_vectors_client
         fake_vectors_client.close.assert_called_once()
