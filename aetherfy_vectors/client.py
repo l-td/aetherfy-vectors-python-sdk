@@ -1139,8 +1139,38 @@ class AetherfyVectorsClient:
 
         except AetherfyVectorsException as e:
             if e.status_code == 404:
+                # Backend disambiguates the two 404 cases via error.code:
+                #   COLLECTION_NOT_FOUND → collection is gone, evict caches
+                #   SCHEMA_NOT_DEFINED → collection exists but no schema (legit)
+                # Without the code (older backend or unstructured body) we
+                # treat 404 as "no schema set" (return None) without
+                # evicting — same shape as today's behavior. The eviction
+                # path only fires when the backend explicitly tells us
+                # the collection is gone.
+                error_code = self._extract_error_code(e)
+                if error_code == "COLLECTION_NOT_FOUND":
+                    self._schema_cache.pop(scoped_name, None)
+                    self._payload_schema_cache.pop(scoped_name, None)
                 return None
             raise
+
+    @staticmethod
+    def _extract_error_code(exc: "AetherfyVectorsException") -> Optional[str]:
+        """Pull error.code out of an exception's parsed details.
+
+        parse_error_response stashes the backend's error.code under
+        either exc.error_code (flat shape) or exc.details["code"]
+        (nested {"error": {"code": ...}} shape). Both are checked so
+        SDK code can read the code without knowing which body shape
+        the backend used.
+        """
+        code = getattr(exc, "error_code", None)
+        if code:
+            return code
+        details = getattr(exc, "details", None) or {}
+        if isinstance(details, dict):
+            return details.get("code")
+        return None
 
     def set_schema(
         self,
@@ -1220,6 +1250,15 @@ class AetherfyVectorsClient:
 
         except AetherfyVectorsException as e:
             if e.status_code == 404:
+                # Disambiguate via backend's error.code:
+                #   COLLECTION_NOT_FOUND → collection is gone, evict caches.
+                #   SCHEMA_NOT_DEFINED → collection exists, no schema set.
+                # Both surface as SchemaNotFoundError to the caller — the
+                # difference is whether we self-heal the local caches.
+                error_code = self._extract_error_code(e)
+                if error_code == "COLLECTION_NOT_FOUND":
+                    self._schema_cache.pop(scoped_name, None)
+                    self._payload_schema_cache.pop(scoped_name, None)
                 raise SchemaNotFoundError(collection_name)
             raise
 

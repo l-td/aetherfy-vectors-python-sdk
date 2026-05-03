@@ -262,9 +262,15 @@ def parse_error_response(
             message, request_id=request_id, status_code=status_code, details=details
         )
 
-    # Default to base exception
+    # Default to base exception. Pass error_code so SDK-level code can
+    # branch on the backend's stable identifier without poking at the
+    # body-shape-specific details bag.
     return AetherfyVectorsException(
-        message, request_id=request_id, status_code=status_code, details=details
+        message,
+        request_id=request_id,
+        status_code=status_code,
+        details=details,
+        error_code=error_code,
     )
 
 

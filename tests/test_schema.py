@@ -633,6 +633,171 @@ class TestClientSchemaOperations:
         args, kwargs = mock_requests.request.call_args
         assert kwargs['json']['sample_size'] == 1000
 
+    def test_set_schema_404_evicts_caches(self, client, mock_requests, mock_error_response):
+        """PUT /schema/<col> 404 must drop both caches.
+
+        404 here is unambiguous — the schema endpoint requires the
+        collection to exist, so 404 means "collection is gone." Pin
+        the self-healing contract that matches the JS SDK.
+        """
+        # Pre-seed both caches as if the collection had been used before.
+        client._schema_cache['test_collection'] = {
+            'size': 4, 'distance': 'Cosine', 'etag': None, 'full_config': {}
+        }
+        client._payload_schema_cache['test_collection'] = {
+            'schema': None, 'etag': None, 'enforcement_mode': 'off'
+        }
+
+        mock_requests.request.return_value = mock_error_response(
+            message='Collection not found', status_code=404
+        )
+
+        from aetherfy_vectors.schema import Schema, FieldDefinition
+        with pytest.raises(Exception):
+            client.set_schema(
+                'test_collection',
+                Schema(fields={'name': FieldDefinition(type='string', required=False)}),
+                enforcement='off',
+            )
+
+        assert client._get_cached_schema('test_collection') is None
+        assert 'test_collection' not in client._payload_schema_cache
+
+    def test_analyze_schema_404_evicts_caches(self, client, mock_requests, mock_error_response):
+        """POST /schema/<col>/analyze 404 must drop both caches.
+
+        Same contract as set_schema — analyze requires the collection.
+        """
+        client._schema_cache['test_collection'] = {
+            'size': 4, 'distance': 'Cosine', 'etag': None, 'full_config': {}
+        }
+        client._payload_schema_cache['test_collection'] = {
+            'schema': None, 'etag': None, 'enforcement_mode': 'off'
+        }
+
+        mock_requests.request.return_value = mock_error_response(
+            message='Collection not found', status_code=404
+        )
+
+        with pytest.raises(Exception):
+            client.analyze_schema('test_collection', sample_size=1000)
+
+        assert client._get_cached_schema('test_collection') is None
+        assert 'test_collection' not in client._payload_schema_cache
+
+    def test_get_schema_404_collection_not_found_evicts_caches(
+        self, client, mock_requests, mock_error_response
+    ):
+        """GET /schema/<col> 404 with COLLECTION_NOT_FOUND must evict both
+        caches. The backend disambiguates the two 404 cases via
+        error.code; on this code, the collection is gone and the SDK's
+        cached state for it is stale.
+        """
+        client._schema_cache['test_collection'] = {
+            'size': 4, 'distance': 'Cosine', 'etag': None, 'full_config': {}
+        }
+        client._payload_schema_cache['test_collection'] = {
+            'schema': None, 'etag': None, 'enforcement_mode': 'off'
+        }
+
+        mock_requests.request.return_value = mock_error_response(
+            message="Collection 'test_collection' not found",
+            status_code=404,
+            error_code='COLLECTION_NOT_FOUND',
+        )
+
+        result = client.get_schema('test_collection')
+        # get_schema returns None on any 404 (legitimate "no schema" UX);
+        # the difference is whether the caches were evicted.
+        assert result is None
+        assert client._get_cached_schema('test_collection') is None
+        assert 'test_collection' not in client._payload_schema_cache
+
+    def test_get_schema_404_schema_not_defined_keeps_caches(
+        self, client, mock_requests, mock_error_response
+    ):
+        """GET /schema/<col> 404 with SCHEMA_NOT_DEFINED is the legit
+        "collection exists but no schema set" state. SDK must NOT evict
+        — the cached vector-config and payload-schema entries are still
+        valid for that collection. Pin this so a future refactor can't
+        accidentally over-evict.
+        """
+        client._schema_cache['test_collection'] = {
+            'size': 4, 'distance': 'Cosine', 'etag': None, 'full_config': {}
+        }
+        client._payload_schema_cache['test_collection'] = {
+            'schema': None, 'etag': None, 'enforcement_mode': 'off'
+        }
+
+        mock_requests.request.return_value = mock_error_response(
+            message="No schema defined for collection 'test_collection'",
+            status_code=404,
+            error_code='SCHEMA_NOT_DEFINED',
+        )
+
+        result = client.get_schema('test_collection')
+        assert result is None
+        # Both caches survive — the collection is fine, just no schema set.
+        assert client._get_cached_schema('test_collection') is not None
+        assert 'test_collection' in client._payload_schema_cache
+
+    def test_delete_schema_404_collection_not_found_evicts_caches(
+        self, client, mock_requests, mock_error_response
+    ):
+        """DELETE /schema/<col> 404 with COLLECTION_NOT_FOUND evicts
+        both caches AND raises SchemaNotFoundError. The exception shape
+        is preserved (existing API contract); the eviction is the new
+        side effect when the collection is gone.
+        """
+        from aetherfy_vectors.exceptions import SchemaNotFoundError
+
+        client._schema_cache['test_collection'] = {
+            'size': 4, 'distance': 'Cosine', 'etag': None, 'full_config': {}
+        }
+        client._payload_schema_cache['test_collection'] = {
+            'schema': None, 'etag': None, 'enforcement_mode': 'off'
+        }
+
+        mock_requests.request.return_value = mock_error_response(
+            message="Collection 'test_collection' not found",
+            status_code=404,
+            error_code='COLLECTION_NOT_FOUND',
+        )
+
+        with pytest.raises(SchemaNotFoundError):
+            client.delete_schema('test_collection')
+
+        assert client._get_cached_schema('test_collection') is None
+        assert 'test_collection' not in client._payload_schema_cache
+
+    def test_delete_schema_404_schema_not_defined_keeps_caches(
+        self, client, mock_requests, mock_error_response
+    ):
+        """DELETE /schema/<col> 404 with SCHEMA_NOT_DEFINED raises the
+        existing SchemaNotFoundError but keeps the caches.
+        """
+        from aetherfy_vectors.exceptions import SchemaNotFoundError
+
+        client._schema_cache['test_collection'] = {
+            'size': 4, 'distance': 'Cosine', 'etag': None, 'full_config': {}
+        }
+        client._payload_schema_cache['test_collection'] = {
+            'schema': None, 'etag': None, 'enforcement_mode': 'off'
+        }
+
+        mock_requests.request.return_value = mock_error_response(
+            message="No schema defined for collection 'test_collection'",
+            status_code=404,
+            error_code='SCHEMA_NOT_DEFINED',
+        )
+
+        with pytest.raises(SchemaNotFoundError):
+            client.delete_schema('test_collection')
+
+        # Caches preserved — collection is still around.
+        assert client._get_cached_schema('test_collection') is not None
+        assert 'test_collection' in client._payload_schema_cache
+
     def test_refresh_schema(self, client, mock_requests, mock_successful_response):
         """Test schema cache refresh."""
         # Cache an old schema

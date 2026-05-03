@@ -17,12 +17,18 @@ class AetherfyVectorsException(Exception):
         request_id: Optional[str] = None,
         status_code: Optional[int] = None,
         details: Optional[Dict[str, Any]] = None,
+        error_code: Optional[str] = None,
     ):
         super().__init__(message)
         self.message = message
         self.request_id = request_id
         self.status_code = status_code
         self.details = details or {}
+        # error_code carries the backend's stable error identifier
+        # (e.g. COLLECTION_NOT_FOUND, SCHEMA_NOT_DEFINED). The status
+        # code is for the HTTP layer; this is for SDK-level branching
+        # — most importantly disambiguating which kind of 404 happened.
+        self.error_code = error_code
 
     def __str__(self) -> str:
         base_msg = self.message
