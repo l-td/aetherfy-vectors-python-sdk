@@ -177,15 +177,19 @@ class TestMigrationScenarios:
         collections = client.get_collections()
         assert isinstance(collections, list)
         
-        # Point operations
+        # Point operations — vector dim must match the collection size
+        # declared above (128). create_collection now seeds the schema
+        # cache from the caller's config, so the upsert client-side
+        # validator catches dim mismatches that the previous empty-mock
+        # behavior silently let through.
         points = [
-            {"id": "product_1", "vector": [0.1, 0.2, 0.3], "payload": {"name": "Product A"}},
-            {"id": "product_2", "vector": [0.4, 0.5, 0.6], "payload": {"name": "Product B"}}
+            {"id": "product_1", "vector": [0.1] * 128, "payload": {"name": "Product A"}},
+            {"id": "product_2", "vector": [0.2] * 128, "payload": {"name": "Product B"}}
         ]
         client.upsert("products", points)
-        
-        # Search operations
-        results = client.search("products", [0.1, 0.2, 0.3], limit=10)
+
+        # Search operations — same dim contract.
+        results = client.search("products", [0.1] * 128, limit=10)
         assert isinstance(results, list)
     
     def test_advanced_migration_patterns(self, client, mock_requests, mock_successful_response, sample_search_results):
@@ -301,12 +305,14 @@ class TestAPIResponseCompatibility:
     def test_boolean_return_compatibility(self, client, mock_requests, mock_successful_response):
         """Test that operations return boolean values as expected."""
         mock_requests.request.return_value = mock_successful_response({})
-        
-        # These operations should return True on success (qdrant-client compatibility)
+
+        # These operations should return True on success (qdrant-client compatibility).
+        # Vector dim matches the size declared in create_collection — the schema
+        # cache is now seeded from that config, so the upsert validator enforces it.
         config = VectorConfig(size=128, distance=DistanceMetric.COSINE)
         assert client.create_collection("test", config) is True
-        
-        points = [{"id": "1", "vector": [0.1, 0.2, 0.3]}]
+
+        points = [{"id": "1", "vector": [0.1] * 128}]
         assert client.upsert("test", points) is True
         
         assert client.delete("test", ["1"]) is True

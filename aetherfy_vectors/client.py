@@ -180,6 +180,7 @@ class AetherfyVectorsClient:
         params: Optional[Dict[str, Any]] = None,
         enable_retry: bool = True,
         headers: Optional[Dict[str, str]] = None,
+        evict_caches_on_404: Optional[str] = None,
     ) -> Any:
         """Make HTTP request to the API with retry logic.
 
@@ -190,6 +191,13 @@ class AetherfyVectorsClient:
             params: Query parameters.
             enable_retry: Whether to enable retry logic (default: True).
             headers: Additional headers to include in request.
+            evict_caches_on_404: If set, the scoped collection name whose
+                schema and payload-schema caches should be dropped when
+                the response is HTTP 404. Use for collection-scoped ops
+                where 404 unambiguously means "the collection is gone"
+                (cross-client delete or pre-existence check). Don't pass
+                for /schema/<name> reads, where 404 also covers the
+                legitimate "no payload schema set" state.
 
         Returns:
             Response data.
@@ -217,6 +225,13 @@ class AetherfyVectorsClient:
                     return response.json() if response.content else None
                 else:
                     error_data = response.json() if response.content else {}
+                    # Self-healing: a 404 on a collection-scoped op means
+                    # the collection no longer exists upstream (e.g. a
+                    # cross-client delete). Drop the local caches so the
+                    # next call doesn't keep believing the cached entry.
+                    if evict_caches_on_404 is not None and response.status_code == 404:
+                        self._schema_cache.pop(evict_caches_on_404, None)
+                        self._payload_schema_cache.pop(evict_caches_on_404, None)
                     raise parse_error_response(error_data, response.status_code)
 
             except requests.Timeout:
@@ -246,7 +261,11 @@ class AetherfyVectorsClient:
 
     def _fetch_and_cache_schema(self, collection_name: str) -> Dict[str, Any]:
         """Fetch collection schema from API and cache it with ETag."""
-        response = self._make_request("GET", f"collections/{collection_name}")
+        response = self._make_request(
+            "GET",
+            f"collections/{collection_name}",
+            evict_caches_on_404=collection_name,
+        )
 
         # Extract schema info
         result = response.get("result", {})
@@ -378,6 +397,28 @@ class AetherfyVectorsClient:
         }
 
         self._make_request("POST", "collections", data)
+
+        # Prepopulate the schema cache from the request we just authored.
+        # The backend's GET /collections/<name> hits Qdrant, which is
+        # eventually consistent w.r.t. its own writes — a read immediately
+        # after a successful create can briefly return 4xx. Seeding the
+        # cache here makes the next upsert/exists call hit local state
+        # instead of racing the read-after-write window. We have ground
+        # truth (size + distance) directly from the caller, so no extra
+        # network round trip is needed. etag stays None: upsert treats
+        # falsy etag as "no If-Match header," which is correct until a
+        # real GET assigns a schema_version.
+        distance_value = (
+            config.distance.value
+            if isinstance(config.distance, DistanceMetric)
+            else config.distance
+        )
+        self._schema_cache[scoped_name] = {
+            "size": config.size,
+            "distance": distance_value,
+            "etag": None,
+            "full_config": {"config": {"params": {"vectors": config.to_dict()}}},
+        }
         return True
 
     def delete_collection(self, collection_name: str, **kwargs) -> bool:
@@ -392,7 +433,18 @@ class AetherfyVectorsClient:
         """
         validate_collection_name(collection_name)
         scoped_name = self._scope_collection(collection_name)
-        self._make_request("DELETE", f"collections/{scoped_name}")
+        # evict_caches_on_404 here covers the "collection already gone"
+        # case (e.g. cross-client delete that beat us to it) so we don't
+        # leave stale entries when our DELETE hits a 404.
+        self._make_request(
+            "DELETE",
+            f"collections/{scoped_name}",
+            evict_caches_on_404=scoped_name,
+        )
+        # Drop both caches so a subsequent recreate-with-different-shape
+        # doesn't see stale size/distance/etag/payload-schema entries.
+        self._schema_cache.pop(scoped_name, None)
+        self._payload_schema_cache.pop(scoped_name, None)
         return True
 
     def get_collections(self, **kwargs) -> List[Collection]:
@@ -438,8 +490,25 @@ class AetherfyVectorsClient:
                 SDK's collectionExists, which only swallows 404.
         """
         scoped_name = self._scope_collection(collection_name)
+        # Fast path: if this client just created (or recently used) the
+        # collection, the schema cache holds proof of existence. Skip the
+        # network round trip and the read-after-write race against
+        # Qdrant's eventual consistency. delete_collection() clears the
+        # cache, so a stale True after a remote delete is bounded to
+        # cross-client deletes only — and any subsequent operation will
+        # surface the real 404 from the backend.
+        if self._get_cached_schema(scoped_name) is not None:
+            return True
         try:
-            self._make_request("GET", f"collections/{scoped_name}")
+            # evict_caches_on_404 is a no-op here (cache already empty if
+            # we got past the fast-path check), but we pass it so the
+            # contract "collection-scoped 404 → caches dropped" holds
+            # uniformly across every collection-scoped call site.
+            self._make_request(
+                "GET",
+                f"collections/{scoped_name}",
+                evict_caches_on_404=scoped_name,
+            )
             return True
         except AetherfyVectorsException as e:
             if getattr(e, "status_code", None) == 404:
@@ -458,7 +527,11 @@ class AetherfyVectorsClient:
         """
         validate_collection_name(collection_name)
         scoped_name = self._scope_collection(collection_name)
-        response = self._make_request("GET", f"collections/{scoped_name}")
+        response = self._make_request(
+            "GET",
+            f"collections/{scoped_name}",
+            evict_caches_on_404=scoped_name,
+        )
         collection_data = response.get("result", response)
         # Unscope the collection name in the result
         if self.workspace and collection_data.get("name"):
@@ -581,6 +654,7 @@ class AetherfyVectorsClient:
                 f"collections/{scoped_name}/points",
                 data,
                 headers=extra_headers if extra_headers else None,
+                evict_caches_on_404=scoped_name,
             )
             return True
 
@@ -624,6 +698,7 @@ class AetherfyVectorsClient:
                         f"collections/{scoped_name}/points",
                         data,
                         headers=extra_headers_retry if extra_headers_retry else None,
+                        evict_caches_on_404=scoped_name,
                     )
                     return True
                 except:
@@ -670,7 +745,12 @@ class AetherfyVectorsClient:
             # Delete by filter
             data = {"filter": points_selector}
 
-        self._make_request("POST", f"collections/{scoped_name}/points/delete", data)
+        self._make_request(
+            "POST",
+            f"collections/{scoped_name}/points/delete",
+            data,
+            evict_caches_on_404=scoped_name,
+        )
         return True
 
     # ------------------------------------------------------------------
@@ -707,7 +787,10 @@ class AetherfyVectorsClient:
         scoped_name = self._scope_collection(collection_name)
         data = {"payload": payload, "points": points}
         response = self._make_request(
-            "POST", f"collections/{scoped_name}/points/payload", data
+            "POST",
+            f"collections/{scoped_name}/points/payload",
+            data,
+            evict_caches_on_404=scoped_name,
         )
         return response.get("result", response) if response else {}
 
@@ -729,7 +812,10 @@ class AetherfyVectorsClient:
         scoped_name = self._scope_collection(collection_name)
         data = {"payload": payload, "points": points}
         response = self._make_request(
-            "PUT", f"collections/{scoped_name}/points/payload", data
+            "PUT",
+            f"collections/{scoped_name}/points/payload",
+            data,
+            evict_caches_on_404=scoped_name,
         )
         return response.get("result", response) if response else {}
 
@@ -750,7 +836,10 @@ class AetherfyVectorsClient:
         scoped_name = self._scope_collection(collection_name)
         data = {"keys": keys, "points": points}
         response = self._make_request(
-            "DELETE", f"collections/{scoped_name}/points/payload", data
+            "DELETE",
+            f"collections/{scoped_name}/points/payload",
+            data,
+            evict_caches_on_404=scoped_name,
         )
         return response.get("result", response) if response else {}
 
@@ -783,7 +872,16 @@ class AetherfyVectorsClient:
 
         data = {"ids": ids, "with_payload": with_payload, "with_vector": with_vectors}
 
-        response = self._make_request("POST", f"collections/{scoped_name}/points", data)
+        # Dedicated retrieve URL — POST /collections/<name>/points was
+        # previously dual-purpose (upsert vs retrieve, distinguished by
+        # body shape). Backend now serves retrieve at /points/retrieve so
+        # /points can be unambiguously upsert (and stream-parsed).
+        response = self._make_request(
+            "POST",
+            f"collections/{scoped_name}/points/retrieve",
+            data,
+            evict_caches_on_404=scoped_name,
+        )
         return response.get("result", [])
 
     # Search Methods
@@ -839,7 +937,10 @@ class AetherfyVectorsClient:
             data["score_threshold"] = score_threshold
 
         response = self._make_request(
-            "POST", f"collections/{scoped_name}/points/search", data
+            "POST",
+            f"collections/{scoped_name}/points/search",
+            data,
+            evict_caches_on_404=scoped_name,
         )
 
         results = []
@@ -894,7 +995,10 @@ class AetherfyVectorsClient:
                 data["filter"] = scroll_filter
 
         response = self._make_request(
-            "POST", f"collections/{scoped_name}/points/scroll", data
+            "POST",
+            f"collections/{scoped_name}/points/scroll",
+            data,
+            evict_caches_on_404=scoped_name,
         )
 
         # Qdrant scroll response: {"result": {"points": [...], "next_page_offset": ...}, ...}
@@ -991,7 +1095,10 @@ class AetherfyVectorsClient:
             data["filter"] = count_filter
 
         response = self._make_request(
-            "POST", f"collections/{scoped_name}/points/count", data
+            "POST",
+            f"collections/{scoped_name}/points/count",
+            data,
+            evict_caches_on_404=scoped_name,
         )
         return response.get("count", 0)
 
@@ -1070,7 +1177,12 @@ class AetherfyVectorsClient:
         if description is not None:
             data["description"] = description
 
-        response = self._make_request("PUT", f"schema/{scoped_name}", data)
+        response = self._make_request(
+            "PUT",
+            f"schema/{scoped_name}",
+            data,
+            evict_caches_on_404=scoped_name,
+        )
         etag = response["etag"]
 
         # Update cache (use scoped name)
@@ -1135,7 +1247,12 @@ class AetherfyVectorsClient:
             raise ValueError("sample_size must be between 100 and 10000")
 
         data = {"sample_size": sample_size}
-        response = self._make_request("POST", f"schema/{scoped_name}/analyze", data)
+        response = self._make_request(
+            "POST",
+            f"schema/{scoped_name}/analyze",
+            data,
+            evict_caches_on_404=scoped_name,
+        )
 
         # Return with unscoped collection name
         result = AnalysisResult.from_dict(response)
