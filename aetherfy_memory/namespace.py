@@ -10,7 +10,7 @@ All collection-lifecycle operations (create, list, exists, delete) live on
 `MemoryClient` — a `Namespace` instance always points at an existing scope.
 """
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, Iterator, List, Optional, Union
 import uuid
 
 from aetherfy_vectors.client import AetherfyVectorsClient
@@ -80,6 +80,38 @@ class Namespace:
         )
         return point_id
 
+    def set_metadata(
+        self,
+        id: Union[str, int],
+        metadata: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Replace the metadata sub-key of an existing memory.
+
+        Atomically writes ``payload.metadata = metadata``. Reserved fields
+        (``text`` for Namespace, plus ``role``/``content``/``ts`` for Thread)
+        are untouched. To merge into existing metadata, retrieve + merge +
+        ``set_metadata`` explicitly:
+
+            current = ns.retrieve([id])[0]['payload'].get('metadata', {})
+            current.update({'reviewed': True})
+            ns.set_metadata(id, current)
+
+        The non-atomic compose pattern is intentional — it keeps races
+        visible at the call site rather than hidden inside an SDK helper.
+
+        Args:
+            id: Point ID of the memory to update.
+            metadata: New metadata object. Replaces any existing metadata.
+
+        Returns:
+            Server response from the underlying set_payload call.
+        """
+        return self._client.set_payload(
+            self._collection,
+            payload={"metadata": metadata},
+            points=[id],
+        )
+
     # ---------------------------------------------------------------------
     # Read
     # ---------------------------------------------------------------------
@@ -122,6 +154,39 @@ class Namespace:
     def count(self, *, filter: Optional[Dict[str, Any]] = None, exact: bool = True) -> int:
         """Count points in this namespace, optionally filtered."""
         return self._client.count(self._collection, count_filter=filter, exact=exact)
+
+    def iter(
+        self,
+        *,
+        batch_size: int = 256,
+        filter: Optional[Union[Filter, Dict[str, Any]]] = None,
+        with_payload: bool = True,
+        with_vectors: bool = False,
+    ) -> Iterator[Dict[str, Any]]:
+        """Iterate all points in this namespace.
+
+        Yields each point one at a time, paging transparently through the
+        underlying scroll_iter. Returns cleanly when the namespace is
+        exhausted. Use this for archival, export, or batch-enrichment
+        workflows that exceed what `search` and `retrieve` cover.
+
+        Args:
+            batch_size: Points per server round-trip (default 256, capped at
+                1000 by the server).
+            filter: Optional payload filter, same shape as `search`.
+            with_payload: Include point payloads (default True).
+            with_vectors: Include vectors (default False; large).
+
+        Yields:
+            Each point dict from the namespace, in unspecified order.
+        """
+        yield from self._client.scroll_iter(
+            self._collection,
+            batch_size=batch_size,
+            scroll_filter=filter,
+            with_payload=with_payload,
+            with_vectors=with_vectors,
+        )
 
     # ---------------------------------------------------------------------
     # Delete

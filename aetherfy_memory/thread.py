@@ -11,7 +11,7 @@ Every add from a Thread writes the three reserved fields on the point payload:
 
 import time
 import uuid
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, Iterator, List, Optional, Union
 
 from aetherfy_vectors.client import AetherfyVectorsClient
 
@@ -124,6 +124,36 @@ class Thread(Namespace):
         messages.sort(key=lambda m: m.ts or 0.0, reverse=reverse)
 
         return messages[:limit]
+
+    def iter_history(self, *, order: str = "asc") -> Iterator[Message]:
+        """Iterate all messages in this thread, sorted by timestamp.
+
+        Unlike `history(limit)` which caps at 5000 for the client-side sort,
+        ``iter_history()`` walks the entire thread by paging through the
+        underlying scroll iterator and sorting in memory. For threads larger
+        than 5000 messages the in-memory sort can be expensive; use
+        ``history(limit)`` if you only need the most recent slice.
+
+        Args:
+            order: 'asc' (oldest first) or 'desc' (newest first).
+
+        Yields:
+            Each Message in the thread, in the requested order.
+        """
+        if order not in ("asc", "desc"):
+            raise ValueError("order must be 'asc' or 'desc'")
+
+        # Reuse Namespace.iter for paging — same scroll_iter under the hood.
+        # Skip points without a payload or without a ts (matches history()).
+        messages = [
+            Message.from_point(p)
+            for p in self.iter(with_payload=True, with_vectors=False)
+            if p.get("payload")
+        ]
+        messages = [m for m in messages if m.ts is not None]
+        messages.sort(key=lambda m: m.ts or 0.0, reverse=(order == "desc"))
+        for m in messages:
+            yield m
 
     def __repr__(self) -> str:
         return f"Thread(id={self._name!r})"

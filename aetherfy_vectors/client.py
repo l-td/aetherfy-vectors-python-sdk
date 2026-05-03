@@ -5,7 +5,7 @@ Provides a drop-in replacement for qdrant-client with identical API
 that routes requests through the global vector database service.
 """
 
-from typing import List, Dict, Any, Optional, Union
+from typing import List, Dict, Any, Iterator, Optional, Union
 import requests
 from requests.adapters import HTTPAdapter
 
@@ -663,6 +663,87 @@ class AetherfyVectorsClient:
         self._make_request("POST", f"collections/{scoped_name}/points/delete", data)
         return True
 
+    # ------------------------------------------------------------------
+    # Payload mutation
+    #
+    # Three helpers correspond to the three Qdrant payload endpoints exposed
+    # by the backend (and the dashboard's WS3 proxies). Server-side caps:
+    # body.points.length <= 512 (PRS limit, vectordb WS1).
+    # ------------------------------------------------------------------
+
+    def set_payload(
+        self,
+        collection_name: str,
+        payload: Dict[str, Any],
+        points: List[Union[str, int]],
+    ) -> Dict[str, Any]:
+        """Set (additive merge) payload keys on a list of points.
+
+        POST /collections/{name}/points/payload — keys not on the point are
+        added; keys that already exist are overwritten with the new value;
+        keys present on the point but not in `payload` are left untouched.
+
+        Args:
+            collection_name: Target collection.
+            payload: Payload object to merge into each point's payload.
+            points: Point IDs to update. Server caps at 512 (PRS limit, WS1).
+
+        Returns:
+            Server response dict.
+        """
+        validate_collection_name(collection_name)
+        for pid in points:
+            validate_point_id(pid)
+        scoped_name = self._scope_collection(collection_name)
+        data = {"payload": payload, "points": points}
+        response = self._make_request(
+            "POST", f"collections/{scoped_name}/points/payload", data
+        )
+        return response.get("result", response) if response else {}
+
+    def overwrite_payload(
+        self,
+        collection_name: str,
+        payload: Dict[str, Any],
+        points: List[Union[str, int]],
+    ) -> Dict[str, Any]:
+        """Replace the entire payload on a list of points.
+
+        PUT /collections/{name}/points/payload — keys present on the point
+        but absent from `payload` are REMOVED. Use this when you want the
+        payload to be exactly `payload` after the call.
+        """
+        validate_collection_name(collection_name)
+        for pid in points:
+            validate_point_id(pid)
+        scoped_name = self._scope_collection(collection_name)
+        data = {"payload": payload, "points": points}
+        response = self._make_request(
+            "PUT", f"collections/{scoped_name}/points/payload", data
+        )
+        return response.get("result", response) if response else {}
+
+    def delete_payload(
+        self,
+        collection_name: str,
+        keys: List[str],
+        points: List[Union[str, int]],
+    ) -> Dict[str, Any]:
+        """Delete specific payload keys from a list of points.
+
+        DELETE /collections/{name}/points/payload — only the named keys are
+        removed; other keys on each point's payload are preserved.
+        """
+        validate_collection_name(collection_name)
+        for pid in points:
+            validate_point_id(pid)
+        scoped_name = self._scope_collection(collection_name)
+        data = {"keys": keys, "points": points}
+        response = self._make_request(
+            "DELETE", f"collections/{scoped_name}/points/payload", data
+        )
+        return response.get("result", response) if response else {}
+
     def retrieve(
         self,
         collection_name: str,
@@ -812,6 +893,66 @@ class AetherfyVectorsClient:
             "points": result.get("points", []),
             "next_page_offset": result.get("next_page_offset"),
         }
+
+    def scroll_iter(
+        self,
+        collection_name: str,
+        *,
+        batch_size: int = 256,
+        scroll_filter: Optional[Union[Filter, Dict[str, Any]]] = None,
+        with_payload: bool = True,
+        with_vectors: bool = False,
+    ) -> Iterator[Dict[str, Any]]:
+        """Auto-paginating scroll. Yields each point one at a time, fetches the
+        next page transparently, stops when next_page_offset is None.
+
+        Why this exists: scroll() is single-shot. Without this, callers reach
+        for scroll(limit=very_large) which (a) blows past the server-side
+        1000-point cap, (b) creates a 10MB+ response that hits the
+        RESPONSE_TOO_LARGE 413 from the backend, and (c) loads everything
+        into memory at once. The iterator gives them a paging helper that's
+        correct by default.
+
+        Args:
+            collection_name: Collection to iterate.
+            batch_size: Points per server round-trip. Default 256, comfortably
+                under the server's 1000 cap. Pass `batch_size` if you need a
+                different page size — the underlying scroll's `limit` is owned
+                by the iterator and not caller-controllable.
+            scroll_filter: Optional payload filter, same shape as scroll().
+            with_payload: Forwarded to each scroll() call.
+            with_vectors: Forwarded to each scroll() call.
+
+        Yields:
+            Each point dict from each page, in order.
+
+        Raises:
+            ValueError: if batch_size is not in 1..1000.
+        """
+        # The kwarg allowlist is intentional: no **kwargs, so unknown options
+        # (notably `limit` and `offset`) raise TypeError automatically. The
+        # iterator owns those; mid-stream offsets are a footgun and a manual
+        # `limit` would defeat the size invariant the cap enforces.
+        if not (1 <= batch_size <= 1000):
+            raise ValueError(
+                f"batch_size must be 1-1000 (server cap), got {batch_size}"
+            )
+
+        cursor: Optional[Union[str, int]] = None
+        while True:
+            page = self.scroll(
+                collection_name,
+                limit=batch_size,
+                offset=cursor,
+                scroll_filter=scroll_filter,
+                with_payload=with_payload,
+                with_vectors=with_vectors,
+            )
+            for point in page.get("points", []):
+                yield point
+            cursor = page.get("next_page_offset")
+            if cursor is None:
+                return
 
     def count(
         self,
