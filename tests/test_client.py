@@ -164,9 +164,64 @@ class TestCollectionManagement:
             message="Collection not found",
             status_code=404
         )
-        
+
         result = client.collection_exists("nonexistent_collection")
-        
+
+        assert result is False
+
+    def test_collection_exists_reraises_on_auth_error(
+        self, client, mock_requests, mock_error_response
+    ):
+        """A 401 from the existence probe must raise, not silently return False.
+
+        Pre-fix, collection_exists caught any AetherfyVectorsException and
+        returned False — so a logged-out / revoked-key state surfaced as
+        "collection doesn't exist", masking the real failure. The fix
+        narrows the catch to HTTP 404 only and re-raises the rest.
+        """
+        from aetherfy_vectors.exceptions import AuthenticationError
+
+        mock_requests.request.return_value = mock_error_response(
+            message="Unauthorized",
+            status_code=401,
+        )
+
+        with pytest.raises(AuthenticationError):
+            client.collection_exists("any_collection")
+
+    def test_collection_exists_reraises_on_service_unavailable(
+        self, client, mock_requests, mock_error_response
+    ):
+        """A 503 must raise so callers see the real cause, not "doesn't exist"."""
+        from aetherfy_vectors.exceptions import ServiceUnavailableError
+
+        mock_requests.request.return_value = mock_error_response(
+            message="Service Unavailable",
+            status_code=503,
+        )
+
+        with pytest.raises(ServiceUnavailableError):
+            client.collection_exists("any_collection")
+
+    def test_collection_exists_returns_false_on_non_dict_404_body(
+        self, client, mock_requests
+    ):
+        """Returning False on 404 must work even when the upstream body is
+        a bare JSON string (e.g. "Not Found") instead of a dict.
+
+        This is the path that surfaced the parse_error_response crash in
+        e2e: the backend returns a non-dict body on 404, parse_error_response
+        previously crashed with AttributeError before collection_exists
+        ever saw an exception class to inspect.
+        """
+        # Build a Response stand-in whose .json() returns a bare string.
+        response = Mock()
+        response.status_code = 404
+        response.content = b'"Not Found"'
+        response.json.return_value = "Not Found"
+        mock_requests.request.return_value = response
+
+        result = client.collection_exists("nonexistent_collection")
         assert result is False
     
     def test_get_collection_success(self, client, mock_requests, mock_successful_response):

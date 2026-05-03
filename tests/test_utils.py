@@ -296,6 +296,42 @@ class TestParseErrorResponse:
         assert isinstance(error, AetherfyVectorsException)
         assert not isinstance(error, ValidationError)
 
+    # ------------------------------------------------------------------
+    # Defensive coercion against non-dict bodies — pins the production-grade
+    # contract that parse_error_response never raises AttributeError on a
+    # malformed/unstructured upstream response (CDN static error page,
+    # bare-string error from a misconfigured route, None from an empty
+    # body, etc.). Mirrors the JS SDK's optional-chaining tolerance.
+    # ------------------------------------------------------------------
+
+    def test_parse_error_response_string_body(self):
+        """A bare string body coerces to {"message": <string>}, no crash."""
+        error = parse_error_response("Not Found", 404)
+        assert isinstance(error, AetherfyVectorsException)
+        assert "Not Found" in str(error)
+
+    def test_parse_error_response_none_body(self):
+        """A None body (empty response) yields a status-coded fallback message."""
+        error = parse_error_response(None, 502)
+        assert isinstance(error, ServiceUnavailableError)
+        assert "502" in str(error)
+
+    def test_parse_error_response_list_body(self):
+        """A list body (rare but possible) coerces to its repr as message."""
+        error = parse_error_response(["err1", "err2"], 500)
+        assert isinstance(error, AetherfyVectorsException)
+        # Should not raise; the message is the str() of the list.
+        assert "err1" in str(error)
+
+    def test_parse_error_response_string_error_field(self):
+        """{"error": "<message>"} (string-shaped, used by some backend
+        validators like proxy.js's search clamp) extracts the string as
+        the message instead of falling back to "Unknown error"."""
+        response_data = {"error": "limit must be a number between 1 and 1000"}
+        error = parse_error_response(response_data, 400)
+        assert isinstance(error, ValidationError)
+        assert "limit must be a number between 1 and 1000" in str(error)
+
 
 class TestFormatPointsForUpsert:
     """Test points formatting for upsert."""

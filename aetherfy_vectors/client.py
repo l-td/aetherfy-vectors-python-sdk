@@ -427,14 +427,24 @@ class AetherfyVectorsClient:
             **kwargs: Additional parameters for compatibility.
 
         Returns:
-            True if collection exists, False otherwise.
+            True if collection exists, False if a 404 confirms it doesn't.
+
+        Raises:
+            AetherfyVectorsException: on any non-404 failure (auth errors,
+                rate limits, service unavailability, network errors). A
+                bare ``except`` here would silently mask "you got logged
+                out" / "we're rate-limited" as "collection doesn't exist",
+                producing confusing downstream behavior. Mirrors the JS
+                SDK's collectionExists, which only swallows 404.
         """
         scoped_name = self._scope_collection(collection_name)
         try:
             self._make_request("GET", f"collections/{scoped_name}")
             return True
-        except AetherfyVectorsException:
-            return False
+        except AetherfyVectorsException as e:
+            if getattr(e, "status_code", None) == 404:
+                return False
+            raise
 
     def get_collection(self, collection_name: str, **kwargs) -> Collection:
         """Get collection information.

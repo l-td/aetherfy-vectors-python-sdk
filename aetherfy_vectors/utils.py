@@ -105,12 +105,20 @@ def build_api_url(base_url: str, endpoint: str) -> str:
 
 
 def parse_error_response(
-    response_data: Dict[str, Any], status_code: int
+    response_data: Any, status_code: int
 ) -> AetherfyVectorsException:
     """Parse error response from API and return appropriate exception.
 
     Args:
-        response_data: The error response data.
+        response_data: The error response body. Normally a dict in one of
+            the documented backend shapes (``{"error": {...}}`` or flat
+            ``{"message": "..."}``), but can be a bare string, list, None,
+            or any other JSON-decodable value when an upstream returns an
+            unstructured body (a static 502 page from a CDN, a bare
+            ``"Not Found"`` string from a misconfigured route, etc.).
+            The function never raises on shape — it coerces non-dict
+            input into a synthetic ``{"message": ...}`` so the rest of
+            the mapping logic is uniform.
         status_code: HTTP status code.
 
     Returns:
@@ -126,6 +134,16 @@ def parse_error_response(
         RequestTimeoutError,
     )
 
+    # Defensive coercion: a non-dict body would crash response_data.get(...)
+    # below. Coerce to a synthetic {"message": ...} so every downstream
+    # branch handles a uniform shape. This is the parity the JS SDK gets
+    # for free via optional chaining (responseData?.error / ?.message).
+    if not isinstance(response_data, dict):
+        if response_data is None:
+            response_data = {"message": f"HTTP {status_code}"}
+        else:
+            response_data = {"message": str(response_data)}
+
     # Handle nested error format from backend: {"error": {"code": "...", "message": "..."}}
     if "error" in response_data and isinstance(response_data["error"], dict):
         error_obj = response_data["error"]
@@ -133,6 +151,14 @@ def parse_error_response(
         error_code = error_obj.get("code")
         request_id = response_data.get("request_id")
         details = error_obj
+    elif "error" in response_data and isinstance(response_data["error"], str):
+        # Some backend routes return {"error": "<message>"} (string-shaped).
+        # Treat the string as the message rather than letting it become
+        # the details bag below.
+        message = response_data["error"]
+        error_code = response_data.get("error_code")
+        request_id = response_data.get("request_id")
+        details = {}
     else:
         # Handle flat format: {"message": "...", "error_code": "..."}
         message = response_data.get("message", "Unknown error")
