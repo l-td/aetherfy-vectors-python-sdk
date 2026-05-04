@@ -586,10 +586,17 @@ class TestPointOperations:
         assert points[0]["id"] == "point_1"
         assert points[0]["vector"] == [0.1, 0.2, 0.3]
         # URL pin — guards against an accidental revert to /points.
+        # Body pin — caller arg is with_vectors (plural) but Qdrant's
+        # wire field is with_vector (singular); the transformation lives
+        # in client.retrieve. Without it the dedicated /points/retrieve
+        # route reads with_vector === true strictly and silently drops
+        # vectors from the response.
         args, kwargs = mock_requests.request.call_args
         assert kwargs["method"] == "POST"
         assert kwargs["url"].endswith("/collections/test_collection/points/retrieve")
         assert kwargs["json"]["ids"] == ["point_1"]
+        assert kwargs["json"]["with_vector"] is True
+        assert "with_vectors" not in kwargs["json"]
     
     def test_count_points_success(self, client, mock_requests, mock_successful_response):
         """Test successful point counting."""

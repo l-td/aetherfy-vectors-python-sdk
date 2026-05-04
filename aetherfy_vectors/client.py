@@ -756,9 +756,8 @@ class AetherfyVectorsClient:
     # ------------------------------------------------------------------
     # Payload mutation
     #
-    # Three helpers correspond to the three Qdrant payload endpoints exposed
-    # by the backend (and the dashboard's WS3 proxies). Server-side caps:
-    # body.points.length <= 512 (PRS limit, vectordb WS1).
+    # Three helpers correspond to the three Qdrant payload endpoints
+    # exposed by the backend. Server-side cap: body.points.length <= 512.
     # ------------------------------------------------------------------
 
     def set_payload(
@@ -776,7 +775,7 @@ class AetherfyVectorsClient:
         Args:
             collection_name: Target collection.
             payload: Payload object to merge into each point's payload.
-            points: Point IDs to update. Server caps at 512 (PRS limit, WS1).
+            points: Point IDs to update. Server caps at 512.
 
         Returns:
             Server response dict.
@@ -827,8 +826,10 @@ class AetherfyVectorsClient:
     ) -> Dict[str, Any]:
         """Delete specific payload keys from a list of points.
 
-        DELETE /collections/{name}/points/payload — only the named keys are
-        removed; other keys on each point's payload are preserved.
+        POST /collections/{name}/points/payload/delete — only the named
+        keys are removed; other keys on each point's payload are preserved.
+        Matches Qdrant's wire contract directly so the proxy has nothing
+        to translate.
         """
         validate_collection_name(collection_name)
         for pid in points:
@@ -836,8 +837,8 @@ class AetherfyVectorsClient:
         scoped_name = self._scope_collection(collection_name)
         data = {"keys": keys, "points": points}
         response = self._make_request(
-            "DELETE",
-            f"collections/{scoped_name}/points/payload",
+            "POST",
+            f"collections/{scoped_name}/points/payload/delete",
             data,
             evict_caches_on_404=scoped_name,
         )

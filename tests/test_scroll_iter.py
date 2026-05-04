@@ -4,7 +4,7 @@ Pins the contract that:
   - scroll_iter delegates to scroll() (no duplicate HTTP path).
   - The kwarg allowlist is enforced; `limit` and `offset` are owned by the
     iterator and not caller-controllable.
-  - batch_size is range-validated (1..1000, the server cap from vectordb WS1).
+  - batch_size is range-validated (1..1000, the server's scroll cap).
   - The generator stops cleanly when next_page_offset becomes None.
 """
 

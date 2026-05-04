@@ -1,7 +1,7 @@
 """Unit tests for client.set_payload / overwrite_payload / delete_payload.
 
 Pins:
-  - HTTP method + path + body shape match the WS3 dashboard proxies.
+  - HTTP method + path + body shape match the backend's payload endpoints.
   - Validators (collection name, point IDs) fire before the request.
 """
 
@@ -52,14 +52,14 @@ def test_overwrite_payload_uses_put():
 # ---------- delete_payload --------------------------------------------------
 
 
-def test_delete_payload_uses_delete_with_keys_and_points_body():
+def test_delete_payload_posts_to_payload_delete_with_keys_and_points_body():
     client = _make_client()
     client.delete_payload("col", ["old_tag", "old_meta"], ["p1", "p2"])
 
     method, path = client._make_request.call_args.args[:2]
     body = client._make_request.call_args.args[2]
-    assert method == "DELETE"
-    assert path == "collections/col/points/payload"
+    assert method == "POST"
+    assert path == "collections/col/points/payload/delete"
     assert body == {"keys": ["old_tag", "old_meta"], "points": ["p1", "p2"]}
 
 
