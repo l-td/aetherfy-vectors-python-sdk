@@ -175,8 +175,17 @@ class TestVectorOperationsWithWorkspace:
         assert "points/delete" in call_args[0][1]
 
     def test_count_with_workspace(self, mock_client):
-        """Test count operation scopes collection name."""
-        mock_client._make_request.return_value = {"count": 42}
+        """Test count operation scopes collection name.
+
+        Mock matches Qdrant's actual response shape:
+        {"result": {"count": N}, "status": "ok"}. A flat {"count": N}
+        would have hidden the bug where the SDK was reading the wrong
+        path (fixed in client.py:count — see test_count_points_success
+        in test_client.py).
+        """
+        mock_client._make_request.return_value = {
+            "result": {"count": 42}, "status": "ok"
+        }
 
         result = mock_client.count(collection_name="documents")
 

@@ -1102,7 +1102,13 @@ class AetherfyVectorsClient:
             data,
             evict_caches_on_404=scoped_name,
         )
-        return response.get("count", 0)
+        # Qdrant's count response is `{"result": {"count": N}, "status": "ok"}`,
+        # not flat. Reading `response.get("count", ...)` silently returned 0
+        # for every successful count — the bug was invisible in unit tests
+        # that mocked `_make_request` to return whatever shape the test
+        # author guessed, and only surfaced in e2e where Qdrant's actual
+        # shape comes through. Mirrors the JS SDK's `response.data.result.count`.
+        return response.get("result", {}).get("count", 0)
 
     # Schema Management Methods
 

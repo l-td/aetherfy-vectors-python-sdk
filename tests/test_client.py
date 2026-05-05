@@ -599,16 +599,33 @@ class TestPointOperations:
         assert "with_vectors" not in kwargs["json"]
     
     def test_count_points_success(self, client, mock_requests, mock_successful_response):
-        """Test successful point counting."""
-        count_data = {"count": 42}
+        """Test successful point counting.
+
+        Mock shape mirrors Qdrant's actual response: {"result": {"count": N},
+        "status": "ok"}. A flat {"count": N} would have hidden the bug
+        where the SDK was reading the wrong path — the e2e count silently
+        returned 0 because real Qdrant nests count under "result".
+        """
+        count_data = {"result": {"count": 42}, "status": "ok"}
         mock_requests.request.return_value = mock_successful_response(count_data)
-        
+
         count = client.count("test_collection")
-        
+
         assert count == 42
         args, kwargs = mock_requests.request.call_args
         assert kwargs["method"] == "POST"
         assert "points/count" in kwargs["url"]
+
+    def test_count_returns_zero_when_result_missing(
+        self, client, mock_requests, mock_successful_response
+    ):
+        """Defensive: a malformed upstream body without `result` falls
+        through to 0 rather than raising. Pins the .get(..., {}).get(..., 0)
+        traversal — flat {"count": N} (the old buggy mock shape) must NOT
+        leak back through and start returning N."""
+        flat_legacy = {"count": 99}
+        mock_requests.request.return_value = mock_successful_response(flat_legacy)
+        assert client.count("test_collection") == 0
 
 
 class TestSearchOperations:

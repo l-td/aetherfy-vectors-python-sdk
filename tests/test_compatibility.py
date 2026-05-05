@@ -130,8 +130,11 @@ class TestQdrantCompatibility:
         assert result2 is True
     
     def test_count_parameter_compatibility(self, client, mock_requests, mock_successful_response):
-        """Test count method parameter compatibility."""
-        count_data = {"count": 42}
+        """Test count method parameter compatibility.
+
+        Mock matches Qdrant's actual response shape: {"result": {"count": N}, ...}.
+        """
+        count_data = {"result": {"count": 42}, "status": "ok"}
         mock_requests.request.return_value = mock_successful_response(count_data)
         
         # Test different count patterns
