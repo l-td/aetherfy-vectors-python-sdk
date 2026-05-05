@@ -43,6 +43,7 @@ from .utils import (
     build_api_url,
     parse_error_response,
     format_points_for_upsert,
+    quote_collection_name,
 )
 
 
@@ -263,7 +264,7 @@ class AetherfyVectorsClient:
         """Fetch collection schema from API and cache it with ETag."""
         response = self._make_request(
             "GET",
-            f"collections/{collection_name}",
+            f"collections/{quote_collection_name(collection_name)}",
             evict_caches_on_404=collection_name,
         )
 
@@ -438,7 +439,7 @@ class AetherfyVectorsClient:
         # leave stale entries when our DELETE hits a 404.
         self._make_request(
             "DELETE",
-            f"collections/{scoped_name}",
+            f"collections/{quote_collection_name(scoped_name)}",
             evict_caches_on_404=scoped_name,
         )
         # Drop both caches so a subsequent recreate-with-different-shape
@@ -506,7 +507,7 @@ class AetherfyVectorsClient:
             # uniformly across every collection-scoped call site.
             self._make_request(
                 "GET",
-                f"collections/{scoped_name}",
+                f"collections/{quote_collection_name(scoped_name)}",
                 evict_caches_on_404=scoped_name,
             )
             return True
@@ -529,7 +530,7 @@ class AetherfyVectorsClient:
         scoped_name = self._scope_collection(collection_name)
         response = self._make_request(
             "GET",
-            f"collections/{scoped_name}",
+            f"collections/{quote_collection_name(scoped_name)}",
             evict_caches_on_404=scoped_name,
         )
         collection_data = response.get("result", response)
@@ -651,7 +652,7 @@ class AetherfyVectorsClient:
             # Pass If-Match header directly to the request
             response = self._make_request(
                 "PUT",
-                f"collections/{scoped_name}/points",
+                f"collections/{quote_collection_name(scoped_name)}/points",
                 data,
                 headers=extra_headers if extra_headers else None,
                 evict_caches_on_404=scoped_name,
@@ -695,7 +696,7 @@ class AetherfyVectorsClient:
 
                     response = self._make_request(
                         "PUT",
-                        f"collections/{scoped_name}/points",
+                        f"collections/{quote_collection_name(scoped_name)}/points",
                         data,
                         headers=extra_headers_retry if extra_headers_retry else None,
                         evict_caches_on_404=scoped_name,
@@ -747,7 +748,7 @@ class AetherfyVectorsClient:
 
         self._make_request(
             "POST",
-            f"collections/{scoped_name}/points/delete",
+            f"collections/{quote_collection_name(scoped_name)}/points/delete",
             data,
             evict_caches_on_404=scoped_name,
         )
@@ -787,7 +788,7 @@ class AetherfyVectorsClient:
         data = {"payload": payload, "points": points}
         response = self._make_request(
             "POST",
-            f"collections/{scoped_name}/points/payload",
+            f"collections/{quote_collection_name(scoped_name)}/points/payload",
             data,
             evict_caches_on_404=scoped_name,
         )
@@ -812,7 +813,7 @@ class AetherfyVectorsClient:
         data = {"payload": payload, "points": points}
         response = self._make_request(
             "PUT",
-            f"collections/{scoped_name}/points/payload",
+            f"collections/{quote_collection_name(scoped_name)}/points/payload",
             data,
             evict_caches_on_404=scoped_name,
         )
@@ -838,7 +839,7 @@ class AetherfyVectorsClient:
         data = {"keys": keys, "points": points}
         response = self._make_request(
             "POST",
-            f"collections/{scoped_name}/points/payload/delete",
+            f"collections/{quote_collection_name(scoped_name)}/points/payload/delete",
             data,
             evict_caches_on_404=scoped_name,
         )
@@ -879,7 +880,7 @@ class AetherfyVectorsClient:
         # /points can be unambiguously upsert (and stream-parsed).
         response = self._make_request(
             "POST",
-            f"collections/{scoped_name}/points/retrieve",
+            f"collections/{quote_collection_name(scoped_name)}/points/retrieve",
             data,
             evict_caches_on_404=scoped_name,
         )
@@ -939,7 +940,7 @@ class AetherfyVectorsClient:
 
         response = self._make_request(
             "POST",
-            f"collections/{scoped_name}/points/search",
+            f"collections/{quote_collection_name(scoped_name)}/points/search",
             data,
             evict_caches_on_404=scoped_name,
         )
@@ -997,7 +998,7 @@ class AetherfyVectorsClient:
 
         response = self._make_request(
             "POST",
-            f"collections/{scoped_name}/points/scroll",
+            f"collections/{quote_collection_name(scoped_name)}/points/scroll",
             data,
             evict_caches_on_404=scoped_name,
         )
@@ -1097,7 +1098,7 @@ class AetherfyVectorsClient:
 
         response = self._make_request(
             "POST",
-            f"collections/{scoped_name}/points/count",
+            f"collections/{quote_collection_name(scoped_name)}/points/count",
             data,
             evict_caches_on_404=scoped_name,
         )
@@ -1122,7 +1123,9 @@ class AetherfyVectorsClient:
         scoped_name = self._scope_collection(collection_name)
 
         try:
-            response = self._make_request("GET", f"schema/{scoped_name}")
+            response = self._make_request(
+                "GET", f"schema/{quote_collection_name(scoped_name)}"
+            )
 
             schema = Schema.from_dict(response["schema"])
             schema.description = response.get("description")
@@ -1210,7 +1213,7 @@ class AetherfyVectorsClient:
 
         response = self._make_request(
             "PUT",
-            f"schema/{scoped_name}",
+            f"schema/{quote_collection_name(scoped_name)}",
             data,
             evict_caches_on_404=scoped_name,
         )
@@ -1242,7 +1245,7 @@ class AetherfyVectorsClient:
         scoped_name = self._scope_collection(collection_name)
 
         try:
-            self._make_request("DELETE", f"schema/{scoped_name}")
+            self._make_request("DELETE", f"schema/{quote_collection_name(scoped_name)}")
 
             # Clear from cache (use scoped name)
             self._payload_schema_cache.pop(scoped_name, None)
@@ -1289,7 +1292,7 @@ class AetherfyVectorsClient:
         data = {"sample_size": sample_size}
         response = self._make_request(
             "POST",
-            f"schema/{scoped_name}/analyze",
+            f"schema/{quote_collection_name(scoped_name)}/analyze",
             data,
             evict_caches_on_404=scoped_name,
         )

@@ -72,7 +72,7 @@ class Thread(Namespace):
             role=role,
             content=content,
             vector=vector,
-            id=str(id) if id is not None else uuid.uuid4().hex,
+            id=str(id) if id is not None else str(uuid.uuid4()),
             ts=ts if ts is not None else time.time(),
             metadata=metadata or {},
         )
@@ -90,7 +90,7 @@ class Thread(Namespace):
         args: ``{"role": "...", "content": "...", "vector": [...],
         "metadata": ..., "id": ..., "ts": ...}``. ``vector``, non-empty
         ``role``, and string ``content`` are required per message.
-        Missing IDs get a UUID4 hex per message; missing ``ts`` gets
+        Missing IDs get a canonical UUID4 per message; missing ``ts`` gets
         ``time.time()`` per message (each gets its own — NOT one shared
         timestamp, otherwise history ordering for messages appended in
         the same call would be undefined).
@@ -135,7 +135,7 @@ class Thread(Namespace):
                 role=role,
                 content=content,
                 vector=vector,
-                id=str(m["id"]) if m.get("id") is not None else uuid.uuid4().hex,
+                id=str(m["id"]) if m.get("id") is not None else str(uuid.uuid4()),
                 ts=m["ts"] if m.get("ts") is not None else time.time(),
                 metadata=m.get("metadata") or {},
             )

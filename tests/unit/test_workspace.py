@@ -125,7 +125,7 @@ class TestVectorOperationsWithWorkspace:
         # Verify the request was made with scoped collection in URL
         call_args = mock_client._make_request.call_args
         assert call_args[0][0] == "POST"
-        assert "test-workspace/documents" in call_args[0][1]
+        assert "test-workspace%2Fdocuments" in call_args[0][1]
         assert "points/search" in call_args[0][1]
 
     def test_upsert_with_workspace(self, mock_client):
@@ -143,7 +143,7 @@ class TestVectorOperationsWithWorkspace:
 
         # Verify the request was made with scoped collection in URL
         call_args = mock_client._make_request.call_args
-        assert "test-workspace/documents" in call_args[0][1]
+        assert "test-workspace%2Fdocuments" in call_args[0][1]
         assert "points" in call_args[0][1]
 
     def test_retrieve_with_workspace(self, mock_client):
@@ -157,7 +157,7 @@ class TestVectorOperationsWithWorkspace:
 
         # Verify the request was made with scoped collection in URL
         call_args = mock_client._make_request.call_args
-        assert "test-workspace/documents" in call_args[0][1]
+        assert "test-workspace%2Fdocuments" in call_args[0][1]
         assert "points" in call_args[0][1]
 
     def test_delete_with_workspace(self, mock_client):
@@ -171,7 +171,7 @@ class TestVectorOperationsWithWorkspace:
 
         # Verify the request was made with scoped collection in URL
         call_args = mock_client._make_request.call_args
-        assert "test-workspace/documents" in call_args[0][1]
+        assert "test-workspace%2Fdocuments" in call_args[0][1]
         assert "points/delete" in call_args[0][1]
 
     def test_count_with_workspace(self, mock_client):
@@ -182,7 +182,7 @@ class TestVectorOperationsWithWorkspace:
 
         # Verify the request was made with scoped collection in URL
         call_args = mock_client._make_request.call_args
-        assert "test-workspace/documents" in call_args[0][1]
+        assert "test-workspace%2Fdocuments" in call_args[0][1]
         assert result == 42
 
 
@@ -221,7 +221,7 @@ class TestCollectionManagementWithWorkspace:
 
         # Verify the request was made with scoped collection in URL
         call_args = mock_client._make_request.call_args
-        assert "test-workspace/documents" in call_args[0][1]
+        assert "test-workspace%2Fdocuments" in call_args[0][1]
 
     def test_collection_exists_with_workspace(self, mock_client):
         """Test collection_exists scopes collection name."""
@@ -231,7 +231,7 @@ class TestCollectionManagementWithWorkspace:
 
         # Verify the request was made with scoped collection in URL
         call_args = mock_client._make_request.call_args
-        assert "test-workspace/documents" in call_args[0][1]
+        assert "test-workspace%2Fdocuments" in call_args[0][1]
 
     def test_get_collection_with_workspace(self, mock_client):
         """Test get_collection scopes and unscopes collection name."""
@@ -244,7 +244,7 @@ class TestCollectionManagementWithWorkspace:
 
         # Request should use scoped name
         call_args = mock_client._make_request.call_args
-        assert "test-workspace/documents" in call_args[0][1]
+        assert "test-workspace%2Fdocuments" in call_args[0][1]
 
         # Response should have unscoped name
         assert result.name == 'documents'
@@ -297,7 +297,7 @@ class TestSchemaOperationsWithWorkspace:
 
         # Verify the request was made with scoped collection in URL
         call_args = mock_client._make_request.call_args
-        assert "test-workspace/documents" in call_args[0][1]
+        assert "test-workspace%2Fdocuments" in call_args[0][1]
         assert "schema" in call_args[0][1]
 
     def test_set_schema_with_workspace(self, mock_client):
@@ -315,7 +315,7 @@ class TestSchemaOperationsWithWorkspace:
 
         # Verify the request was made with scoped collection in URL
         call_args = mock_client._make_request.call_args
-        assert "test-workspace/documents" in call_args[0][1]
+        assert "test-workspace%2Fdocuments" in call_args[0][1]
         assert "schema" in call_args[0][1]
 
     def test_delete_schema_with_workspace(self, mock_client):
@@ -326,7 +326,7 @@ class TestSchemaOperationsWithWorkspace:
 
         # Verify the request was made with scoped collection in URL
         call_args = mock_client._make_request.call_args
-        assert "test-workspace/documents" in call_args[0][1]
+        assert "test-workspace%2Fdocuments" in call_args[0][1]
         assert "schema" in call_args[0][1]
 
     def test_analyze_schema_with_workspace(self, mock_client):
@@ -344,7 +344,7 @@ class TestSchemaOperationsWithWorkspace:
 
         # Verify the request was made with scoped collection in URL
         call_args = mock_client._make_request.call_args
-        assert "test-workspace/documents" in call_args[0][1]
+        assert "test-workspace%2Fdocuments" in call_args[0][1]
         assert "schema" in call_args[0][1]
         assert "analyze" in call_args[0][1]
 
@@ -361,7 +361,7 @@ class TestSchemaOperationsWithWorkspace:
 
         # Verify the request was made with scoped collection in URL
         call_args = mock_client._make_request.call_args
-        assert "test-workspace/documents" in call_args[0][1]
+        assert "test-workspace%2Fdocuments" in call_args[0][1]
         assert "schema" in call_args[0][1]
 
 

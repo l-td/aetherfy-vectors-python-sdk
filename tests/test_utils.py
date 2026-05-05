@@ -12,6 +12,7 @@ from aetherfy_vectors.utils import (
     build_api_url,
     parse_error_response,
     format_points_for_upsert,
+    quote_collection_name,
     sanitize_for_logging,
 )
 from aetherfy_vectors.exceptions import (
@@ -164,6 +165,36 @@ class TestBuildApiUrl:
         """Test API URL building with both slashes."""
         url = build_api_url("https://api.example.com/", "/collections")
         assert url == "https://api.example.com/collections"
+
+
+class TestQuoteCollectionName:
+    """Pin the URL-encoding contract for collection names.
+
+    Workspace-scoped collection names contain ``/`` (e.g.
+    ``"my-bot/customer-42"``). Without percent-encoding, the slash
+    splits the URL path segment and the request 404s upstream because
+    no route matches the unintended 4-segment path. Mirrors JS SDK's
+    ``encodeURIComponent`` usage.
+    """
+
+    def test_unscoped_name_unchanged(self):
+        # No reserved characters → no escaping needed.
+        assert quote_collection_name("customer-42") == "customer-42"
+
+    def test_scoped_name_slash_becomes_pct2f(self):
+        assert (
+            quote_collection_name("my-bot/customer-42")
+            == "my-bot%2Fcustomer-42"
+        )
+
+    def test_other_reserved_chars_escaped(self):
+        # safe='' means every reserved char gets percent-encoded.
+        assert quote_collection_name("a b") == "a%20b"
+        assert quote_collection_name("a?b") == "a%3Fb"
+        assert quote_collection_name("a#b") == "a%23b"
+
+    def test_empty_string(self):
+        assert quote_collection_name("") == ""
 
 
 class TestParseErrorResponse:

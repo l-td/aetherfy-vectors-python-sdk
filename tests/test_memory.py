@@ -321,6 +321,67 @@ class TestThreadLifecycle:
 # =============================================================================
 
 
+class TestPointIdGeneration:
+    """Pin the canonical-UUID contract for SDK-generated point IDs.
+
+    Qdrant emits the canonical 8-4-4-4-12 hyphenated form on read. The
+    SDK must emit the same so round-trip ID equality (caller tracks
+    SDK-returned IDs and compares against scroll/iter output) holds.
+    A regression that uses ``uuid.uuid4().hex`` (32 hex chars, no
+    hyphens) silently breaks every memory-iter contract.
+    """
+
+    CANONICAL_UUID_RE = (
+        r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    )
+
+    def test_namespace_add_returns_canonical_uuid(
+        self, memory, fake_vectors_client
+    ):
+        import re
+
+        fake_vectors_client.collection_exists.return_value = True
+        ns = memory.namespace("customer-42")
+        pid = ns.add(text="x", vector=[0.1])
+        assert re.match(self.CANONICAL_UUID_RE, pid), (
+            f"Expected canonical UUID, got {pid!r}"
+        )
+
+    def test_namespace_add_many_returns_canonical_uuids(
+        self, memory, fake_vectors_client
+    ):
+        import re
+
+        fake_vectors_client.collection_exists.return_value = True
+        ns = memory.namespace("customer-42")
+        ids = ns.add_many(
+            [{"text": str(i), "vector": [0.1]} for i in range(8)]
+        )
+        for pid in ids:
+            assert re.match(self.CANONICAL_UUID_RE, pid), (
+                f"Expected canonical UUID, got {pid!r}"
+            )
+
+    def test_thread_add_and_append_many_return_canonical_uuids(
+        self, memory, fake_vectors_client
+    ):
+        import re
+
+        fake_vectors_client.collection_exists.return_value = True
+        t = memory.thread("conv-99")
+        single = t.add(role="user", content="hi", vector=[0.1])
+        many = t.append_many(
+            [
+                {"role": "user", "content": str(i), "vector": [0.1]}
+                for i in range(4)
+            ]
+        )
+        for pid in [single, *many]:
+            assert re.match(self.CANONICAL_UUID_RE, pid), (
+                f"Expected canonical UUID, got {pid!r}"
+            )
+
+
 class TestNamespaceOperations:
     def test_add_requires_vector(self, memory, fake_vectors_client):
         fake_vectors_client.collection_exists.return_value = True

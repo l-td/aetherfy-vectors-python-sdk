@@ -66,7 +66,7 @@ class Namespace:
         if vector is None:
             raise EmbeddingNotSupportedError()
 
-        point_id = str(id) if id is not None else uuid.uuid4().hex
+        point_id = str(id) if id is not None else str(uuid.uuid4())
 
         payload: Dict[str, Any] = {}
         if text is not None:
@@ -85,8 +85,9 @@ class Namespace:
 
         Each item is a dict with the same shape as ``add`` keyword args:
         ``{"vector": [...], "text": ..., "metadata": ..., "id": ...}``.
-        ``vector`` is required per item; ``id`` is generated as a UUID4
-        hex string when omitted. Returns IDs in input order.
+        ``vector`` is required per item; ``id`` is generated as a
+        canonical UUID4 string when omitted (matches what the server
+        returns on read). Returns IDs in input order.
 
         The server handles streaming-chunking of the resulting upsert,
         so this method does NOT itself chunk — pass however many items
@@ -118,7 +119,7 @@ class Namespace:
                 raise EmbeddingNotSupportedError(f"add_many[{idx}]")
 
             point_id = (
-                str(item["id"]) if item.get("id") is not None else uuid.uuid4().hex
+                str(item["id"]) if item.get("id") is not None else str(uuid.uuid4())
             )
 
             payload: Dict[str, Any] = {}
