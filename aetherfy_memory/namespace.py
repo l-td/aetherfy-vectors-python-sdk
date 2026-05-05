@@ -80,6 +80,60 @@ class Namespace:
         )
         return point_id
 
+    def add_many(self, items: List[Dict[str, Any]]) -> List[str]:
+        """Add many memories in a single round trip.
+
+        Each item is a dict with the same shape as ``add`` keyword args:
+        ``{"vector": [...], "text": ..., "metadata": ..., "id": ...}``.
+        ``vector`` is required per item; ``id`` is generated as a UUID4
+        hex string when omitted. Returns IDs in input order.
+
+        The server handles streaming-chunking of the resulting upsert,
+        so this method does NOT itself chunk — pass however many items
+        you want.
+
+        Empty input returns ``[]`` without a round trip (degenerate-input
+        tolerance for dynamically-built lists).
+
+        Args:
+            items: List of memory dicts. Each must have a non-None ``vector``.
+
+        Returns:
+            List of point IDs in the same order as ``items``.
+
+        Raises:
+            TypeError: if ``items`` is not a list.
+            EmbeddingNotSupportedError: if any item lacks a ``vector``;
+                the message identifies the offending index.
+        """
+        if not isinstance(items, list):
+            raise TypeError("add_many requires a list of memory dicts")
+        if not items:
+            return []
+
+        points: List[Dict[str, Any]] = []
+        for idx, item in enumerate(items):
+            vector = item.get("vector")
+            if vector is None:
+                raise EmbeddingNotSupportedError(f"add_many[{idx}]")
+
+            point_id = (
+                str(item["id"]) if item.get("id") is not None else uuid.uuid4().hex
+            )
+
+            payload: Dict[str, Any] = {}
+            if item.get("text") is not None:
+                payload["text"] = item["text"]
+            if item.get("metadata"):
+                payload["metadata"] = item["metadata"]
+
+            points.append(
+                {"id": point_id, "vector": vector, "payload": payload}
+            )
+
+        self._client.upsert(self._collection, points)
+        return [p["id"] for p in points]
+
     def set_metadata(
         self,
         id: Union[str, int],

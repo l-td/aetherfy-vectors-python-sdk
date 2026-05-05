@@ -11,7 +11,7 @@ Every add from a Thread writes the three reserved fields on the point payload:
 
 import time
 import uuid
-from typing import Any, Dict, Iterator, List, Optional, Union
+from typing import Any, Dict, Iterator, List, NoReturn, Optional, Union
 
 from aetherfy_vectors.client import AetherfyVectorsClient
 
@@ -82,6 +82,88 @@ class Thread(Namespace):
             [{"id": msg.id, "vector": vector, "payload": msg.to_payload()}],
         )
         return msg.id
+
+    def append_many(self, messages: List[Dict[str, Any]]) -> List[str]:
+        """Append many messages in a single round trip.
+
+        Each message is a dict with the same shape as ``add`` keyword
+        args: ``{"role": "...", "content": "...", "vector": [...],
+        "metadata": ..., "id": ..., "ts": ...}``. ``vector``, non-empty
+        ``role``, and string ``content`` are required per message.
+        Missing IDs get a UUID4 hex per message; missing ``ts`` gets
+        ``time.time()`` per message (each gets its own — NOT one shared
+        timestamp, otherwise history ordering for messages appended in
+        the same call would be undefined).
+
+        Returns IDs in input order. Empty input returns ``[]`` without
+        a round trip. Server handles streaming-chunking; this method
+        does not chunk client-side.
+
+        Args:
+            messages: List of message dicts.
+
+        Returns:
+            List of point IDs in the same order as ``messages``.
+
+        Raises:
+            TypeError: if ``messages`` is not a list.
+            EmbeddingNotSupportedError / ValueError: with the offending
+                index in the message.
+        """
+        if not isinstance(messages, list):
+            raise TypeError("append_many requires a list of message dicts")
+        if not messages:
+            return []
+
+        points: List[Dict[str, Any]] = []
+        for idx, m in enumerate(messages):
+            vector = m.get("vector")
+            if vector is None:
+                raise EmbeddingNotSupportedError(f"append_many[{idx}]")
+            role = m.get("role")
+            if not isinstance(role, str) or not role:
+                raise ValueError(
+                    f"append_many[{idx}]: role must be a non-empty string"
+                )
+            content = m.get("content")
+            if not isinstance(content, str):
+                raise ValueError(
+                    f"append_many[{idx}]: content must be a string"
+                )
+
+            msg = Message(
+                role=role,
+                content=content,
+                vector=vector,
+                id=str(m["id"]) if m.get("id") is not None else uuid.uuid4().hex,
+                ts=m["ts"] if m.get("ts") is not None else time.time(),
+                metadata=m.get("metadata") or {},
+            )
+            points.append(
+                {"id": msg.id, "vector": vector, "payload": msg.to_payload()}
+            )
+
+        self._client.upsert(self._collection, points)
+        return [p["id"] for p in points]
+
+    def add_many(self, items: List[Dict[str, Any]]) -> NoReturn:
+        """Inherited add_many would write text/metadata payloads into a
+        thread-shaped collection — the Thread schema is
+        role/content/ts/metadata. Calling add_many on a Thread is
+        almost always a mistake; redirect to append_many.
+
+        Keeps the parent's parameter type so callers reach the runtime
+        guidance regardless of typing strictness; narrows the return to
+        ``NoReturn`` since this function never returns. ``NoReturn`` is
+        the bottom type — a valid override of any return type, so no
+        ``# type: ignore`` is needed.
+        """
+        raise TypeError(
+            "Thread.add_many is not supported (writes wrong payload shape). "
+            "Use Thread.append_many(messages) — each message takes "
+            "{'role': ..., 'content': ..., 'vector': ..., "
+            "'metadata': ..., 'id': ..., 'ts': ...}."
+        )
 
     # ---------------------------------------------------------------------
     # Read — ordered history

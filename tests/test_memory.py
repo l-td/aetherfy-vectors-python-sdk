@@ -399,6 +399,52 @@ class TestNamespaceOperations:
         ns.clear()
         fake_vectors_client.delete_collection.assert_called_once_with("customer-42")
 
+    def test_add_many_empty_returns_empty_list_no_round_trip(
+        self, memory, fake_vectors_client
+    ):
+        fake_vectors_client.collection_exists.return_value = True
+        ns = memory.namespace("customer-42")
+        assert ns.add_many([]) == []
+        fake_vectors_client.upsert.assert_not_called()
+
+    def test_add_many_single_upsert_returns_ids_in_order(
+        self, memory, fake_vectors_client
+    ):
+        fake_vectors_client.collection_exists.return_value = True
+        ns = memory.namespace("customer-42")
+        ids = ns.add_many(
+            [
+                {"text": "a", "vector": [0.1], "metadata": {"i": 0}},
+                {"text": "b", "vector": [0.2], "id": "fixed-1"},
+                {"text": "c", "vector": [0.3]},
+            ]
+        )
+        assert len(ids) == 3
+        assert ids[1] == "fixed-1"
+        fake_vectors_client.upsert.assert_called_once()
+        coll, points = fake_vectors_client.upsert.call_args.args
+        assert coll == "customer-42"
+        assert [p["payload"]["text"] for p in points] == ["a", "b", "c"]
+        assert points[0]["payload"]["metadata"] == {"i": 0}
+
+    def test_add_many_pinpoints_bad_index(self, memory, fake_vectors_client):
+        fake_vectors_client.collection_exists.return_value = True
+        ns = memory.namespace("customer-42")
+        with pytest.raises(EmbeddingNotSupportedError, match=r"add_many\[1\]"):
+            ns.add_many(
+                [
+                    {"text": "good", "vector": [0.1]},
+                    {"text": "bad"},
+                ]
+            )
+        fake_vectors_client.upsert.assert_not_called()
+
+    def test_add_many_rejects_non_list(self, memory, fake_vectors_client):
+        fake_vectors_client.collection_exists.return_value = True
+        ns = memory.namespace("customer-42")
+        with pytest.raises(TypeError):
+            ns.add_many("not-a-list")  # type: ignore[arg-type]
+
 
 # =============================================================================
 # Thread operations
@@ -441,6 +487,72 @@ class TestThreadOperations:
         payload = fake_vectors_client.upsert.call_args.args[1][0]["payload"]
         assert payload["ts"] is not None
         assert isinstance(payload["ts"], float)
+
+    def test_append_many_empty_returns_empty_list_no_round_trip(
+        self, memory, fake_vectors_client
+    ):
+        t = self._open_thread(memory, fake_vectors_client)
+        assert t.append_many([]) == []
+        fake_vectors_client.upsert.assert_not_called()
+
+    def test_append_many_single_upsert_with_role_content_ts_payloads(
+        self, memory, fake_vectors_client
+    ):
+        t = self._open_thread(memory, fake_vectors_client)
+        ids = t.append_many(
+            [
+                {"role": "user", "content": "hi", "vector": [0.1], "ts": 1000.0},
+                {
+                    "role": "assistant",
+                    "content": "hello",
+                    "vector": [0.2],
+                    "ts": 1001.0,
+                    "id": "fixed",
+                },
+            ]
+        )
+        assert ids[1] == "fixed"
+        fake_vectors_client.upsert.assert_called_once()
+        coll, points = fake_vectors_client.upsert.call_args.args
+        assert coll == "__thread__conv-99"
+        assert len(points) == 2
+        assert points[0]["payload"]["role"] == "user"
+        assert points[0]["payload"]["content"] == "hi"
+        assert points[0]["payload"]["ts"] == 1000.0
+        assert points[1]["payload"]["role"] == "assistant"
+
+    def test_append_many_generates_per_message_ts_when_omitted(
+        self, memory, fake_vectors_client
+    ):
+        t = self._open_thread(memory, fake_vectors_client)
+        t.append_many(
+            [
+                {"role": "user", "content": "a", "vector": [0.1]},
+                {"role": "user", "content": "b", "vector": [0.1]},
+            ]
+        )
+        points = fake_vectors_client.upsert.call_args.args[1]
+        assert isinstance(points[0]["payload"]["ts"], float)
+        assert isinstance(points[1]["payload"]["ts"], float)
+
+    def test_append_many_pinpoints_bad_index(self, memory, fake_vectors_client):
+        t = self._open_thread(memory, fake_vectors_client)
+        with pytest.raises(ValueError, match=r"append_many\[1\]"):
+            t.append_many(
+                [
+                    {"role": "user", "content": "good", "vector": [0.1]},
+                    {"role": "", "content": "bad", "vector": [0.1]},
+                ]
+            )
+        fake_vectors_client.upsert.assert_not_called()
+
+    def test_thread_add_many_redirects_to_append_many(
+        self, memory, fake_vectors_client
+    ):
+        t = self._open_thread(memory, fake_vectors_client)
+        with pytest.raises(TypeError, match="append_many"):
+            t.add_many([])
+        fake_vectors_client.upsert.assert_not_called()
 
     def test_thread_history_returns_messages_in_order(
         self, memory, fake_vectors_client

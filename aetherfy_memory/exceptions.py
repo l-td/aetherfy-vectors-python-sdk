@@ -5,6 +5,8 @@ MemoryClient's own error types. Generic vector-db errors continue to bubble
 up from the underlying AetherfyVectorsClient via aetherfy_vectors.exceptions.
 """
 
+from typing import Optional
+
 from aetherfy_vectors.exceptions import AetherfyVectorsException
 
 
@@ -58,12 +60,13 @@ class EmbeddingNotSupportedError(AetherfyMemoryException):
     Until then, callers must compute embeddings client-side and pass `vector=`.
     """
 
-    def __init__(self):
-        super().__init__(
+    def __init__(self, context: Optional[str] = None):
+        base = (
             "vector is required. Server-side embedding (add(text=...)) is "
             "planned for a future release; for now, compute the embedding "
             "client-side and pass vector=..."
         )
+        super().__init__(f"{context}: {base}" if context else base)
 
 
 class InvalidNameError(AetherfyMemoryException):
