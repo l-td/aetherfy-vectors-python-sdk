@@ -33,8 +33,9 @@ class TestClientInitialization:
         assert client.auth_manager.api_key == api_key
         assert "Authorization" in client.auth_headers
     
-    def test_client_init_default_endpoint(self, api_key):
+    def test_client_init_default_endpoint(self, api_key, monkeypatch):
         """Test client initialization with default endpoint."""
+        monkeypatch.delenv("AETHERFY_VECTORS_URL", raising=False)
         client = AetherfyVectorsClient(api_key=api_key)
         assert client.endpoint == "https://vectors.aetherfy.com"
         assert client.timeout == 30.0
@@ -49,6 +50,26 @@ class TestClientInitialization:
         monkeypatch.setenv("AETHERFY_API_KEY", api_key)
         client = AetherfyVectorsClient()
         assert client.auth_manager.api_key == api_key
+
+    def test_client_init_with_vectors_url_env_var(self, api_key, monkeypatch):
+        """AETHERFY_VECTORS_URL env var is used when no endpoint kwarg is given.
+
+        Set by the control-plane on Fly machines so deployed agents reach the
+        regional backend privately over the WireGuard tunnel.
+        """
+        monkeypatch.setenv("AETHERFY_VECTORS_URL", "http://10.0.10.243:3000")
+        client = AetherfyVectorsClient(api_key=api_key)
+        assert client.endpoint == "http://10.0.10.243:3000"
+
+    def test_client_init_endpoint_kwarg_overrides_vectors_url_env_var(
+        self, api_key, monkeypatch
+    ):
+        """Explicit endpoint kwarg wins over AETHERFY_VECTORS_URL."""
+        monkeypatch.setenv("AETHERFY_VECTORS_URL", "http://10.0.10.243:3000")
+        client = AetherfyVectorsClient(
+            api_key=api_key, endpoint="https://override.example.com"
+        )
+        assert client.endpoint == "https://override.example.com"
     
     def test_client_repr(self, client):
         """Test client string representation."""

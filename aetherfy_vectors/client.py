@@ -5,6 +5,7 @@ Provides a drop-in replacement for qdrant-client with identical API
 that routes requests through the global vector database service.
 """
 
+import os
 from typing import List, Dict, Any, Iterator, Optional, Union
 import requests
 from requests.adapters import HTTPAdapter
@@ -62,7 +63,7 @@ class AetherfyVectorsClient:
     def __init__(
         self,
         api_key: Optional[str] = None,
-        endpoint: str = DEFAULT_ENDPOINT,
+        endpoint: Optional[str] = None,
         timeout: float = DEFAULT_TIMEOUT,
         workspace: Optional[str] = None,
         **kwargs,
@@ -71,7 +72,12 @@ class AetherfyVectorsClient:
 
         Args:
             api_key: Aetherfy API key. If None, will try environment variables.
-            endpoint: API endpoint URL (default: https://vectors.aetherfy.com).
+            endpoint: API endpoint URL. Resolution order:
+                1. Explicit `endpoint` argument.
+                2. AETHERFY_VECTORS_URL environment variable (set by control-plane
+                   on Fly machines so agents reach the regional backend privately
+                   over the WireGuard tunnel).
+                3. Default https://vectors.aetherfy.com.
             timeout: Request timeout in seconds (default: 30.0).
             workspace: Workspace name for multi-agent coordination.
                 - Set to 'auto' to auto-detect from AETHERFY_WORKSPACE environment variable
@@ -82,13 +88,14 @@ class AetherfyVectorsClient:
         Raises:
             AuthenticationError: If API key is invalid or missing.
         """
-        self.endpoint = endpoint.rstrip("/")
+        resolved_endpoint = (
+            endpoint or os.getenv("AETHERFY_VECTORS_URL") or self.DEFAULT_ENDPOINT
+        )
+        self.endpoint = resolved_endpoint.rstrip("/")
         self.timeout = timeout
 
         # Initialize workspace (auto-detect or explicit)
         if workspace == "auto":
-            import os
-
             self.workspace = os.getenv("AETHERFY_WORKSPACE")
         else:
             self.workspace = workspace
