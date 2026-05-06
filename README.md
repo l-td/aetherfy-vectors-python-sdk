@@ -156,6 +156,169 @@ with AetherfyVectorsClient(api_key="your_key") as client:
     # Automatic cleanup
 ```
 
+## 🔁 Iterating Large Collections
+
+For bulk reads, use `scroll_iter()` rather than `scroll(limit=…)`. The
+iterator pages transparently and stays within the server's per-request
+caps (1000 points/call, 10 MB/response):
+
+```python
+for point in client.scroll_iter("my_collection", batch_size=256):
+    process(point)
+
+# With a filter and selective payload/vector return
+for point in client.scroll_iter(
+    "my_collection",
+    batch_size=512,
+    scroll_filter={"must": [{"key": "status", "match": {"value": "active"}}]},
+    with_payload=True,
+    with_vectors=False,
+):
+    process(point)
+```
+
+`batch_size` is the page size for one HTTP round trip (max 1000 server-side).
+The iterator handles cursor management, page exhaustion, and pagination
+errors — no offset bookkeeping in user code.
+
+## ✏️ Editing Payload on Existing Points
+
+Three operations on the payload of points that already exist — no need to
+re-upsert vectors:
+
+```python
+# MERGE: add or update keys, leave others alone
+client.set_payload(
+    "my_collection",
+    {"reviewed": True, "reviewer": "alice"},
+    [point_id],
+)
+
+# OVERWRITE: replace the entire payload object
+client.overwrite_payload(
+    "my_collection",
+    {"category": "X"},   # all other keys are dropped
+    [point_id],
+)
+
+# DELETE: remove specific keys, leave others alone
+client.delete_payload(
+    "my_collection",
+    ["draft_field", "stale_score"],
+    [point_id],
+)
+```
+
+Each call accepts up to **512 points** in one round trip; for larger
+mutations, batch on the caller side. The semantics map exactly to
+qdrant's `set_payload` / `overwrite_payload` / `delete_payload` so
+existing patterns transfer.
+
+## 🧠 Memory SDK — Iter, Bulk-load, set_metadata
+
+The Memory layer (`aetherfy_memory`) layers `Namespace` and `Thread`
+abstractions on top of `AetherfyVectorsClient`. Three additions worth
+knowing once you go past `add()` / `search()`:
+
+### Iterating a namespace or a thread
+
+```python
+from aetherfy_memory import MemoryClient
+memory = MemoryClient(api_key="afy_live_…", workspace="my-bot")
+
+ns = memory.namespace("customer-42")
+for point in ns.iter(batch_size=256):
+    process(point)
+
+# Threads have iter_history() — yields messages in ts order across the
+# whole conversation. Distinct from history(limit=N), which caps at 5000
+# in memory for the most-recent slice.
+thread = memory.thread("conv-99")
+for msg in thread.iter_history(order="asc"):
+    print(msg.role, msg.content)
+```
+
+Use `history(limit=N)` for "show me the last N messages" (bounded, fast).
+Use `iter_history()` for "walk every message in this thread" (paged,
+memory-bounded by the iterator).
+
+### Bulk-loading memories
+
+`add_many()` and `append_many()` batch into a single `client.upsert` so
+N items become 1 round trip. IDs are returned in input order; missing
+IDs are auto-generated as canonical UUIDs (the same format `iter()` and
+`retrieve()` yield back, so equality comparisons just work).
+
+```python
+items = [
+    {"text": "first",  "vector": embed("first"),  "metadata": {"src": "a"}},
+    {"text": "second", "vector": embed("second"), "metadata": {"src": "b"}},
+]
+ids = ns.add_many(items)            # single round trip; preserves input order
+
+# Threads use append_many — role/content/ts payloads, ts auto-set per
+# message when omitted (each message gets its own ts, not one shared).
+msgs = [
+    {"role": "user",      "content": "hi",    "vector": embed("hi")},
+    {"role": "assistant", "content": "hello", "vector": embed("hello")},
+]
+ids = thread.append_many(msgs)
+```
+
+`Thread.add_many()` is overridden to raise with guidance toward
+`append_many()` — `add_many` would write `text`/`metadata` payloads into
+a `role`/`content`/`ts` schema, which is almost always a mistake. Reach
+for `append_many()` on threads.
+
+### set_metadata — atomic replace, explicit-compose merge
+
+`set_metadata()` atomically writes `payload.metadata = …` on an existing
+memory. Reserved fields (`text` for Namespace; `role`/`content`/`ts` for
+Thread) are untouched.
+
+```python
+ns.set_metadata(point_id, {"reviewed": True, "score": 0.92})
+```
+
+There is intentionally **no** `merge_metadata()` helper. To merge into
+existing metadata, retrieve, mutate locally, and write back — the
+explicit-compose pattern keeps races visible at the call site rather
+than hidden inside an SDK helper:
+
+```python
+current = ns.retrieve([point_id])[0]["payload"].get("metadata", {})
+current.update({"reviewed": True})
+ns.set_metadata(point_id, current)
+```
+
+If two callers run this concurrently, one update wins and the other
+sees its read be stale — by design, you see that race in your own code
+rather than have the SDK hide it.
+
+## 📐 Limits
+
+Two axes constrain a single call: per-request size (PRS) and requests
+per minute (RPM). Both axes return a 4xx with a structured `error.code`
+when they fire — no surprise 5xx, no silent truncation.
+
+| Class | Endpoint | Cap |
+|-------|----------|-----|
+| READS | `scroll` · `search` · `retrieve` | ≤ 1000 points/call · ≤ 10 MB/response |
+| WRITES | `upsert` | ≤ 10 K vectors/call · streaming |
+|        | payload edits · batch delete | ≤ 512 points/call |
+
+> **Upserts stream** — there is no body-size cap on the public upsert
+> URL. The 10 K vectors/call is a defensive request-level ceiling, not
+> a body limit; one call can upload millions of bytes via byte-target
+> chunking on the receiving end. For bulk reads, use `scroll_iter()` —
+> it pages transparently and stays within both quotas.
+
+`requests_per_minute` is a sliding-window minutely cap derived from your
+subscription tier. When it fires, the SDK raises
+`RateLimitExceededError` with a structured `retry_after` (seconds);
+PRS violations raise `ValidationError` (400) or surface as 413
+`RESPONSE_TOO_LARGE` for oversized response bodies.
+
 ## 🤝 Multi-Agent Workspaces
 
 Workspaces let multiple agents share vector collections without name collisions. All collections created through a workspace-scoped client are automatically namespaced — agents in the same workspace see each other's collections; agents in different workspaces are fully isolated.
