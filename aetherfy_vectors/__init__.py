@@ -18,6 +18,7 @@ from .exceptions import (
     SchemaValidationError,
     SchemaNotFoundError,
     CollectionInUseError,
+    CollectionInOtherRegionError,
     QuotaExceededError,
 )
 from .models import (
@@ -43,6 +44,7 @@ __all__ = [
     "SchemaValidationError",
     "SchemaNotFoundError",
     "CollectionInUseError",
+    "CollectionInOtherRegionError",
     "QuotaExceededError",
     "SearchResult",
     "Point",

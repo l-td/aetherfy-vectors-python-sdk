@@ -59,11 +59,13 @@ class AetherfyVectorsClient:
 
     DEFAULT_ENDPOINT = "https://vectors.aetherfy.com"
     DEFAULT_TIMEOUT = 30.0
+    VALID_FLY_REGIONS = ("iad", "fra", "sin")
 
     def __init__(
         self,
         api_key: Optional[str] = None,
         endpoint: Optional[str] = None,
+        region: Optional[str] = None,
         timeout: float = DEFAULT_TIMEOUT,
         workspace: Optional[str] = None,
         **kwargs,
@@ -77,7 +79,15 @@ class AetherfyVectorsClient:
                 2. AETHERFY_VECTORS_URL environment variable (set by control-plane
                    on Fly machines so agents reach the regional backend privately
                    over the WireGuard tunnel).
-                3. Default https://vectors.aetherfy.com.
+                3. `region` argument (or AETHERFY_VECTORS_REGION env var). Resolved
+                   via /api/v1/regions discovery against the default global URL.
+                4. Default https://vectors.aetherfy.com.
+            region: Fly region code ('iad', 'fra', or 'sin'). LOCAL DEV /
+                DEBUGGING ONLY — production agents have AETHERFY_VECTORS_URL
+                set by the control-plane and that takes precedence; if both
+                are set the env var wins and a warning is logged. Useful for
+                pinning to a specific region from a developer's laptop to
+                debug regional partitioning.
             timeout: Request timeout in seconds (default: 30.0).
             workspace: Workspace name for multi-agent coordination.
                 - Set to 'auto' to auto-detect from AETHERFY_WORKSPACE environment variable
@@ -87,12 +97,57 @@ class AetherfyVectorsClient:
 
         Raises:
             AuthenticationError: If API key is invalid or missing.
+            ValueError: If `region` is not one of iad/fra/sin.
+            AetherfyVectorsException: If region discovery fails.
         """
-        resolved_endpoint = (
-            endpoint or os.getenv("AETHERFY_VECTORS_URL") or self.DEFAULT_ENDPOINT
-        )
-        self.endpoint = resolved_endpoint.rstrip("/")
+        # Validate region eagerly so a typo fails at construction, not on
+        # the first network round trip.
+        env_region = os.getenv("AETHERFY_VECTORS_REGION")
+        chosen_region = region if region is not None else env_region
+        if chosen_region is not None and chosen_region not in self.VALID_FLY_REGIONS:
+            raise ValueError(
+                f"region must be one of {self.VALID_FLY_REGIONS}, got {chosen_region!r}"
+            )
+        self.region: Optional[str] = chosen_region
+
+        # Cached /api/v1/regions response, populated lazily on first
+        # discovery call. Per-instance (NOT module-global) — multiple
+        # client instances may target different default endpoints (test
+        # suite vs prod) and must not share resolved state.
+        self._regions_discovery_cache: Optional[Dict[str, str]] = None
+
         self.timeout = timeout
+
+        # Auth must be initialized BEFORE endpoint resolution because
+        # region discovery hits /api/v1/regions with the API key.
+        self.auth_manager = APIKeyManager(api_key)
+
+        # Endpoint resolution. Explicit `endpoint=` and AETHERFY_VECTORS_URL
+        # both bypass discovery entirely. region= triggers discovery only
+        # when neither of the above is set; this is the production-agent
+        # protection rule (the control-plane injects AETHERFY_VECTORS_URL
+        # on every Fly machine and we don't want region= to override that
+        # silently when an agent is doing local-dev style construction).
+        env_url = os.getenv("AETHERFY_VECTORS_URL")
+        if endpoint is not None:
+            resolved_endpoint = endpoint
+        elif env_url is not None:
+            if self.region is not None:
+                import logging
+
+                logging.getLogger(__name__).warning(
+                    "Both AETHERFY_VECTORS_URL and region=%s are set; using "
+                    "AETHERFY_VECTORS_URL — region= is a local-dev parameter, "
+                    "env var wins in production agents",
+                    self.region,
+                )
+            resolved_endpoint = env_url
+        elif self.region is not None:
+            resolved_endpoint = self._resolve_region_endpoint(self.region)
+        else:
+            resolved_endpoint = self.DEFAULT_ENDPOINT
+
+        self.endpoint = resolved_endpoint.rstrip("/")
 
         # Initialize workspace (auto-detect or explicit)
         if workspace == "auto":
@@ -100,8 +155,8 @@ class AetherfyVectorsClient:
         else:
             self.workspace = workspace
 
-        # Initialize authentication
-        self.auth_manager = APIKeyManager(api_key)
+        # auth_manager is initialized above (before endpoint resolution).
+        # Build the standard header bundle now that the endpoint is known.
         self.auth_headers = {
             **self.auth_manager.get_auth_headers(),
             "Content-Type": "application/json",
@@ -126,6 +181,59 @@ class AetherfyVectorsClient:
         self.analytics = AnalyticsClient(
             self.endpoint, self.auth_headers, timeout, session=self.session
         )
+
+    def _resolve_region_endpoint(self, region: str) -> str:
+        """Resolve a Fly region code to its public URL via /api/v1/regions.
+
+        Hits the default global endpoint with the configured API key,
+        caches the discovery response on this instance, and returns
+        the URL for `region`. Raises if discovery fails or the region
+        is not in the response.
+
+        Per-instance caching: the result is stored on
+        `self._regions_discovery_cache` so subsequent operations on
+        the same client don't repeat the request. Cache lives for the
+        process lifetime — there's no TTL because the public URL set
+        is part of the platform's deployment topology and changes only
+        on operational rollouts (which require redeploying clients
+        anyway).
+        """
+        if self._regions_discovery_cache is None:
+            import json as _json
+
+            url = self.DEFAULT_ENDPOINT.rstrip("/") + "/api/v1/regions"
+            headers = {
+                **self.auth_manager.get_auth_headers(),
+                "Content-Type": "application/json",
+                "User-Agent": "aetherfy-vectors-python/1.0.0",
+            }
+            try:
+                resp = requests.get(url, headers=headers, timeout=self.timeout)
+            except requests.RequestException as exc:
+                raise AetherfyVectorsException(
+                    f"Could not resolve region {region!r} via discovery: {exc}. "
+                    "Check that the default endpoint is reachable, or pass "
+                    "endpoint= directly."
+                )
+            if resp.status_code != 200:
+                raise AetherfyVectorsException(
+                    f"Region discovery returned {resp.status_code} from {url}. "
+                    "Check that your API key is valid for the discovery endpoint."
+                )
+            try:
+                self._regions_discovery_cache = _json.loads(resp.content or b"{}")
+            except ValueError as exc:
+                raise AetherfyVectorsException(
+                    f"Region discovery returned non-JSON body: {exc}"
+                )
+
+        cache = self._regions_discovery_cache or {}
+        if region not in cache:
+            raise AetherfyVectorsException(
+                f"Region {region!r} not configured at the discovery endpoint "
+                f"(available: {sorted(cache.keys())})."
+            )
+        return cache[region]
 
     def _create_session(self) -> requests.Session:
         """Create a requests Session with connection pooling and retry logic.

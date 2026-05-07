@@ -143,6 +143,36 @@ class CollectionInUseError(AetherfyVectorsException):
         self.agents = agents
 
 
+class CollectionInOtherRegionError(AetherfyVectorsException):
+    """A collection name created in one region already belongs to another.
+
+    Raised on create_collection when vectordb's WS9 reject policy fires:
+    `regions_to_cleanup` for the existing row does not contain the
+    requesting region. Carries the typed fields so callers can offer
+    a different name or pin to the existing region without parsing
+    the error message string.
+    """
+
+    def __init__(
+        self,
+        collection_name: str,
+        existing_regions: list,
+        requesting_region: str,
+        message: Optional[str] = None,
+        **kwargs,
+    ):
+        if message is None:
+            message = (
+                f"Collection '{collection_name}' already exists in region "
+                f"{', '.join(existing_regions)}. Collection names are unique "
+                f"per account; pick a different name or use the existing one."
+            )
+        super().__init__(message, **kwargs)
+        self.collection_name = collection_name
+        self.existing_regions = list(existing_regions)
+        self.requesting_region = requesting_region
+
+
 class QuotaExceededError(AetherfyVectorsException):
     """Tier quota exceeded (e.g. collection count limit)."""
 
