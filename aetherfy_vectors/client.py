@@ -201,7 +201,7 @@ class AetherfyVectorsClient:
         if self._regions_discovery_cache is None:
             import json as _json
 
-            url = self.DEFAULT_ENDPOINT.rstrip("/") + "/api/v1/regions"
+            url = build_api_url(self.DEFAULT_ENDPOINT, "regions")
             headers = {
                 **self.auth_manager.get_auth_headers(),
                 "Content-Type": "application/json",

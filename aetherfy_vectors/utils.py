@@ -9,7 +9,7 @@ import json
 import random
 import time
 from typing import Any, Dict, List, Optional, Union, Callable
-from urllib.parse import quote, urljoin, urlparse
+from urllib.parse import quote, urlparse
 
 from .exceptions import ValidationError, AetherfyVectorsException
 
@@ -84,24 +84,25 @@ def validate_point_id(point_id: Union[str, int]) -> None:
 
 
 def build_api_url(base_url: str, endpoint: str) -> str:
-    """Build a complete API URL from base URL and endpoint.
+    """Build a complete API URL from a bare host and a versioned path.
+
+    `base_url` is a bare host (e.g. ``https://vectors-use1.aetherfy.com``)
+    — the SDK owns the ``/api/v1`` prefix so the discovery payload, the
+    ``AETHERFY_VECTORS_URL`` env var, and any explicit ``endpoint=``
+    argument can all stay clean. Mirror of
+    ``AetherfyVectorsClient.apiUrl`` in the JS SDK; both must produce
+    ``<host>/api/v1/<path>``.
 
     Args:
-        base_url: The base API URL.
-        endpoint: The API endpoint path.
+        base_url: Bare host URL with optional trailing slash.
+        endpoint: API path, with or without a leading slash.
 
     Returns:
-        Complete URL.
+        ``<base_url>/api/v1/<endpoint>``.
     """
-    # Ensure base_url ends with /
-    if not base_url.endswith("/"):
-        base_url += "/"
-
-    # Remove leading / from endpoint if present
-    if endpoint.startswith("/"):
-        endpoint = endpoint[1:]
-
-    return urljoin(base_url, endpoint)
+    base = base_url.rstrip("/")
+    path = endpoint.lstrip("/")
+    return f"{base}/api/v1/{path}"
 
 
 def quote_collection_name(name: str) -> str:

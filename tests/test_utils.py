@@ -144,27 +144,50 @@ class TestValidatePointId:
 
 
 class TestBuildApiUrl:
-    """Test API URL building."""
+    """Test API URL building.
+
+    Pins the contract: SDK callers store a bare host on
+    ``self.endpoint``; ``build_api_url`` injects the ``/api/v1`` prefix.
+    Anyone changing this contract MUST update both SDKs in lockstep —
+    JS ``AetherfyVectorsClient.apiUrl`` and ``AnalyticsClient.apiUrl``
+    apply the same convention.
+    """
 
     def test_build_api_url_basic(self):
-        """Test basic API URL building."""
+        """Bare host + path → host/api/v1/path."""
         url = build_api_url("https://api.example.com", "collections")
-        assert url == "https://api.example.com/collections"
+        assert url == "https://api.example.com/api/v1/collections"
 
     def test_build_api_url_with_trailing_slash(self):
-        """Test API URL building with trailing slash in base."""
+        """Trailing slash on host is normalized — no double slash."""
         url = build_api_url("https://api.example.com/", "collections")
-        assert url == "https://api.example.com/collections"
+        assert url == "https://api.example.com/api/v1/collections"
 
     def test_build_api_url_with_leading_slash(self):
-        """Test API URL building with leading slash in endpoint."""
+        """Leading slash on path is accepted — same result."""
         url = build_api_url("https://api.example.com", "/collections")
-        assert url == "https://api.example.com/collections"
+        assert url == "https://api.example.com/api/v1/collections"
 
     def test_build_api_url_with_both_slashes(self):
-        """Test API URL building with both slashes."""
+        """Both slashes — still no double slash."""
         url = build_api_url("https://api.example.com/", "/collections")
-        assert url == "https://api.example.com/collections"
+        assert url == "https://api.example.com/api/v1/collections"
+
+    def test_build_api_url_nested_path(self):
+        """Nested paths preserve their internal slashes."""
+        url = build_api_url(
+            "https://vectors-use1.aetherfy.com",
+            "collections/foo/points/search",
+        )
+        assert (
+            url
+            == "https://vectors-use1.aetherfy.com/api/v1/collections/foo/points/search"
+        )
+
+    def test_build_api_url_regions_discovery(self):
+        """Discovery URL also flows through this helper."""
+        url = build_api_url("https://vectors.aetherfy.com", "regions")
+        assert url == "https://vectors.aetherfy.com/api/v1/regions"
 
 
 class TestQuoteCollectionName:
