@@ -23,6 +23,12 @@ from .namespace import Namespace
 class Thread(Namespace):
     """A conversation. Obtain via `memory.thread(id)`."""
 
+    # Thread payload top-level reserved fields. Overrides Namespace's
+    # `{text}` set — Thread's payload is `{role, content, ts, metadata}`,
+    # so role/content/ts are the names that shouldn't appear in user
+    # metadata partials.
+    _RESERVED_KEYS: frozenset = frozenset({"role", "content", "ts"})
+
     def __init__(self, thread_id: str, collection_name: str, client: AetherfyVectorsClient):
         super().__init__(thread_id, collection_name, client)
 

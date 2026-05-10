@@ -84,21 +84,14 @@ def validate_point_id(point_id: Union[str, int]) -> None:
 
 
 def build_api_url(base_url: str, endpoint: str) -> str:
-    """Build a complete API URL from a bare host and a versioned path.
-
-    `base_url` is a bare host (e.g. ``https://vectors-use1.aetherfy.com``)
-    — the SDK owns the ``/api/v1`` prefix so the discovery payload, the
-    ``AETHERFY_VECTORS_URL`` env var, and any explicit ``endpoint=``
-    argument can all stay clean. Mirror of
-    ``AetherfyVectorsClient.apiUrl`` in the JS SDK; both must produce
-    ``<host>/api/v1/<path>``.
+    """Build a fully-qualified API URL from a base host and an endpoint path.
 
     Args:
-        base_url: Bare host URL with optional trailing slash.
-        endpoint: API path, with or without a leading slash.
+        base_url: Base URL with optional trailing slash.
+        endpoint: Endpoint path, with or without a leading slash.
 
     Returns:
-        ``<base_url>/api/v1/<endpoint>``.
+        The joined URL.
     """
     base = base_url.rstrip("/")
     path = endpoint.lstrip("/")
@@ -111,13 +104,9 @@ def quote_collection_name(name: str) -> str:
     Workspace-scoped collection names contain ``/`` (the separator
     between workspace and collection, e.g. ``"my-bot/customer-42"``).
     Embedded literally in a URL path the slash splits the segment and
-    the request reaches the wrong route — vectordb returns 404 and the
-    upsert silently fails. ``quote(name, safe='')`` percent-encodes
-    every reserved character (including ``/``) so the segment lands
-    intact at the server.
-
-    Mirrors the JS SDK's ``encodeURIComponent(scopedName)`` usage at
-    every URL site that interpolates a collection name.
+    the request reaches the wrong route. ``quote(name, safe='')``
+    percent-encodes every reserved character (including ``/``) so the
+    segment lands intact at the server.
     """
     return quote(name, safe="")
 

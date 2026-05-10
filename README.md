@@ -272,18 +272,18 @@ for `append_many()` on threads.
 
 ### set_metadata — atomic replace, explicit-compose merge
 
-`set_metadata()` atomically writes `payload.metadata = …` on an existing
-memory. Reserved fields (`text` for Namespace; `role`/`content`/`ts` for
-Thread) are untouched.
+`set_metadata()` replaces the entire metadata sub-key.
+`set_metadata({"tag": "x"})` nukes every other key. Use
+`merge_metadata()` if you want additive updates that preserve existing
+keys. Reserved fields (`text` for Namespace; `role`/`content`/`ts` for
+Thread) are untouched either way.
 
 ```python
 ns.set_metadata(point_id, {"reviewed": True, "score": 0.92})
 ```
 
-There is intentionally **no** `merge_metadata()` helper. To merge into
-existing metadata, retrieve, mutate locally, and write back — the
-explicit-compose pattern keeps races visible at the call site rather
-than hidden inside an SDK helper:
+To merge into existing metadata via the explicit-compose pattern (race
+visible at the call site, no atomicity guarantee):
 
 ```python
 current = ns.retrieve([point_id])[0]["payload"].get("metadata", {})
@@ -294,6 +294,33 @@ ns.set_metadata(point_id, current)
 If two callers run this concurrently, one update wins and the other
 sees its read be stale — by design, you see that race in your own code
 rather than have the SDK hide it.
+
+### merge_metadata — atomic per-point partial merge
+
+`merge_metadata({"tag": "x"})` adds/updates the listed keys and leaves
+every other key untouched. Concurrent patches to different keys all
+land atomically; concurrent writes to the same key resolve via
+last-writer-wins per the storage operation order. Raises
+`PointNotFoundError` if the point doesn't exist. Reserved keys (`text`
+on Namespace; `role`, `content`, `ts` on Thread) cannot appear in the
+partial — raises a local `ValueError` before the request is sent.
+
+```python
+ns.merge_metadata(point_id, {"reviewed": True})
+ns.merge_metadata(point_id, {"score": 0.92})
+# final metadata: original keys + reviewed + score
+```
+
+### delete_metadata_keys — atomic key removal
+
+`delete_metadata_keys(point_id, ["tag", "score"])` removes the listed
+keys from metadata; keys not in the list are left untouched. Raises
+`PointNotFoundError` if the point doesn't exist. Reserved keys cannot
+appear in the keys list (same set as `merge_metadata`).
+
+```python
+ns.delete_metadata_keys(point_id, ["draft", "stale_score"])
+```
 
 ## 📐 Limits
 

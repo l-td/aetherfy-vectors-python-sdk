@@ -146,11 +146,10 @@ class CollectionInUseError(AetherfyVectorsException):
 class CollectionInOtherRegionError(AetherfyVectorsException):
     """A collection name created in one region already belongs to another.
 
-    Raised on create_collection when vectordb's WS9 reject policy fires:
-    `regions_to_cleanup` for the existing row does not contain the
-    requesting region. Carries the typed fields so callers can offer
-    a different name or pin to the existing region without parsing
-    the error message string.
+    Raised on create_collection when the same name is already owned by a
+    different region. Carries typed fields so callers can offer a
+    different name or pin to the existing region without parsing the
+    error message string.
     """
 
     def __init__(

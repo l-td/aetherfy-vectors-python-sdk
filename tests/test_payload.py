@@ -10,7 +10,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from aetherfy_vectors.client import AetherfyVectorsClient
-from aetherfy_vectors.exceptions import ValidationError
+from aetherfy_vectors.exceptions import (
+    AetherfyVectorsException,
+    PointNotFoundError,
+    ValidationError,
+)
 
 
 def _make_client():
@@ -91,3 +95,95 @@ def test_delete_payload_validates_each_point_id():
     with patch("aetherfy_vectors.client.validate_point_id") as mock_v:
         client.delete_payload("col", ["k"], ["p1", "p2", "p3"])
         assert mock_v.call_count == 3
+
+
+# ---------- set_payload key= passthrough -----------------------------------
+
+
+def test_set_payload_with_key_includes_key_in_body():
+    client = _make_client()
+    client.set_payload("col", {"a": 1}, ["p1"], key="metadata")
+    body = client._make_request.call_args.args[2]
+    assert body == {
+        "payload": {"a": 1},
+        "points": ["p1"],
+        "key": "metadata",
+    }
+
+
+def test_set_payload_without_key_omits_key_field():
+    client = _make_client()
+    client.set_payload("col", {"a": 1}, ["p1"])
+    body = client._make_request.call_args.args[2]
+    assert "key" not in body
+
+
+# ---------- merge_metadata --------------------------------------------------
+
+
+def test_merge_metadata_calls_set_payload_with_metadata_key():
+    client = _make_client()
+    client.merge_metadata("col", "p1", {"tag": "x"})
+
+    method, path = client._make_request.call_args.args[:2]
+    body = client._make_request.call_args.args[2]
+    assert method == "POST"
+    assert path == "collections/col/points/payload"
+    assert body == {"payload": {"tag": "x"}, "points": ["p1"], "key": "metadata"}
+
+
+def test_merge_metadata_rejects_non_dict():
+    client = _make_client()
+    with pytest.raises(TypeError):
+        client.merge_metadata("col", "p1", "nope")  # type: ignore[arg-type]
+
+
+def test_merge_metadata_translates_404_to_point_not_found():
+    client = _make_client()
+    client._make_request.side_effect = AetherfyVectorsException(
+        "Not found", status_code=404
+    )
+    with pytest.raises(PointNotFoundError) as excinfo:
+        client.merge_metadata("col", "missing", {"a": 1})
+    assert excinfo.value.point_id == "missing"
+    assert excinfo.value.collection_name == "col"
+
+
+# ---------- delete_metadata_keys -------------------------------------------
+
+
+def test_delete_metadata_keys_dotted_path_and_body():
+    client = _make_client()
+    client.delete_metadata_keys("col", "p1", ["k1", "k2"])
+
+    method, path = client._make_request.call_args.args[:2]
+    body = client._make_request.call_args.args[2]
+    assert method == "POST"
+    assert path == "collections/col/points/payload/delete"
+    assert body == {
+        "keys": ["metadata.k1", "metadata.k2"],
+        "points": ["p1"],
+    }
+
+
+def test_delete_metadata_keys_rejects_non_list():
+    client = _make_client()
+    with pytest.raises(TypeError):
+        client.delete_metadata_keys("col", "p1", "k1")  # type: ignore[arg-type]
+
+
+def test_delete_metadata_keys_rejects_non_string_items():
+    client = _make_client()
+    with pytest.raises(TypeError):
+        client.delete_metadata_keys("col", "p1", ["k1", 2])  # type: ignore[list-item]
+
+
+def test_delete_metadata_keys_translates_404_to_point_not_found():
+    client = _make_client()
+    client._make_request.side_effect = AetherfyVectorsException(
+        "Not found", status_code=404
+    )
+    with pytest.raises(PointNotFoundError) as excinfo:
+        client.delete_metadata_keys("col", "missing", ["k1"])
+    assert excinfo.value.point_id == "missing"
+    assert excinfo.value.collection_name == "col"

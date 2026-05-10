@@ -25,6 +25,8 @@ from .models import (
 )
 from .exceptions import (
     AetherfyVectorsException,
+    CollectionNotFoundError,
+    PointNotFoundError,
     RequestTimeoutError,
     ValidationError,
     NetworkError,
@@ -75,29 +77,25 @@ class AetherfyVectorsClient:
         Args:
             api_key: Aetherfy API key. If None, will try environment variables.
             endpoint: API endpoint URL. Resolution order:
-                1. Explicit `endpoint` argument.
-                2. AETHERFY_VECTORS_URL environment variable (set by control-plane
-                   on Fly machines so agents reach the regional backend privately
-                   over the WireGuard tunnel).
-                3. `region` argument (or AETHERFY_VECTORS_REGION env var). Resolved
-                   via /api/v1/regions discovery against the default global URL.
-                4. Default https://vectors.aetherfy.com.
-            region: Fly region code ('iad', 'fra', or 'sin'). LOCAL DEV /
-                DEBUGGING ONLY — production agents have AETHERFY_VECTORS_URL
-                set by the control-plane and that takes precedence; if both
-                are set the env var wins and a warning is logged. Useful for
-                pinning to a specific region from a developer's laptop to
-                debug regional partitioning.
+                1. Explicit ``endpoint`` argument.
+                2. ``AETHERFY_VECTORS_URL`` environment variable.
+                3. ``region`` argument (or ``AETHERFY_VECTORS_REGION``
+                   env var). Resolved via ``/api/v1/regions`` discovery
+                   against the default global URL.
+                4. Default ``https://vectors.aetherfy.com``.
+            region: Region code ('iad', 'fra', or 'sin'). For local
+                development and debugging. If ``AETHERFY_VECTORS_URL``
+                is also set, the env var wins and a warning is logged.
             timeout: Request timeout in seconds (default: 30.0).
             workspace: Workspace name for multi-agent coordination.
-                - Set to 'auto' to auto-detect from AETHERFY_WORKSPACE environment variable
+                - Set to 'auto' to auto-detect from ``AETHERFY_WORKSPACE`` environment variable
                 - Set to a string to use a specific workspace
                 - Leave None for no workspace (collections are not namespaced)
             **kwargs: Additional parameters for compatibility.
 
         Raises:
             AuthenticationError: If API key is invalid or missing.
-            ValueError: If `region` is not one of iad/fra/sin.
+            ValueError: If ``region`` is not one of iad/fra/sin.
             AetherfyVectorsException: If region discovery fails.
         """
         # Validate region eagerly so a typo fails at construction, not on
@@ -123,11 +121,10 @@ class AetherfyVectorsClient:
         self.auth_manager = APIKeyManager(api_key)
 
         # Endpoint resolution. Explicit `endpoint=` and AETHERFY_VECTORS_URL
-        # both bypass discovery entirely. region= triggers discovery only
-        # when neither of the above is set; this is the production-agent
-        # protection rule (the control-plane injects AETHERFY_VECTORS_URL
-        # on every Fly machine and we don't want region= to override that
-        # silently when an agent is doing local-dev style construction).
+        # both bypass discovery entirely; region= triggers discovery only
+        # when neither of the above is set, so a deployment-time env var
+        # always wins over a region= argument the caller may have left in
+        # local-dev code.
         env_url = os.getenv("AETHERFY_VECTORS_URL")
         if endpoint is not None:
             resolved_endpoint = endpoint
@@ -183,20 +180,15 @@ class AetherfyVectorsClient:
         )
 
     def _resolve_region_endpoint(self, region: str) -> str:
-        """Resolve a Fly region code to its public URL via /api/v1/regions.
+        """Resolve a region code to its public URL via /api/v1/regions.
 
         Hits the default global endpoint with the configured API key,
         caches the discovery response on this instance, and returns
-        the URL for `region`. Raises if discovery fails or the region
-        is not in the response.
+        the URL for ``region``. Raises if discovery fails or the
+        region is not in the response.
 
-        Per-instance caching: the result is stored on
-        `self._regions_discovery_cache` so subsequent operations on
-        the same client don't repeat the request. Cache lives for the
-        process lifetime — there's no TTL because the public URL set
-        is part of the platform's deployment topology and changes only
-        on operational rollouts (which require redeploying clients
-        anyway).
+        The cache is per-instance and lives for the process lifetime —
+        there is no TTL.
         """
         if self._regions_discovery_cache is None:
             import json as _json
@@ -423,7 +415,7 @@ class AetherfyVectorsClient:
         if isinstance(distance, DistanceMetric):
             return distance
 
-        # Normalize string to capitalized format matching Qdrant API
+        # Normalize string to the capitalized format the API expects
         distance_map = {
             "cosine": DistanceMetric.COSINE,
             "euclidean": DistanceMetric.EUCLIDEAN,
@@ -515,15 +507,14 @@ class AetherfyVectorsClient:
         self._make_request("POST", "collections", data)
 
         # Prepopulate the schema cache from the request we just authored.
-        # The backend's GET /collections/<name> hits Qdrant, which is
-        # eventually consistent w.r.t. its own writes — a read immediately
-        # after a successful create can briefly return 4xx. Seeding the
-        # cache here makes the next upsert/exists call hit local state
-        # instead of racing the read-after-write window. We have ground
-        # truth (size + distance) directly from the caller, so no extra
-        # network round trip is needed. etag stays None: upsert treats
-        # falsy etag as "no If-Match header," which is correct until a
-        # real GET assigns a schema_version.
+        # GET /collections/<name> can be eventually consistent w.r.t. its
+        # own writes — a read immediately after a successful create can
+        # briefly return 4xx. Seeding the cache here makes the next
+        # upsert/exists call hit local state instead of racing the
+        # read-after-write window. We have ground truth (size + distance)
+        # from the caller, so no extra round trip is needed. etag stays
+        # None: upsert treats falsy etag as "no If-Match header," which
+        # is correct until a real GET assigns a schema_version.
         distance_value = (
             config.distance.value
             if isinstance(config.distance, DistanceMetric)
@@ -608,11 +599,11 @@ class AetherfyVectorsClient:
         scoped_name = self._scope_collection(collection_name)
         # Fast path: if this client just created (or recently used) the
         # collection, the schema cache holds proof of existence. Skip the
-        # network round trip and the read-after-write race against
-        # Qdrant's eventual consistency. delete_collection() clears the
-        # cache, so a stale True after a remote delete is bounded to
-        # cross-client deletes only — and any subsequent operation will
-        # surface the real 404 from the backend.
+        # network round trip and the read-after-write window of the
+        # upstream store. delete_collection() clears the cache, so a
+        # stale True after a remote delete is bounded to cross-client
+        # deletes only — and any subsequent operation will surface the
+        # real 404.
         if self._get_cached_schema(scoped_name) is not None:
             return True
         try:
@@ -872,8 +863,8 @@ class AetherfyVectorsClient:
     # ------------------------------------------------------------------
     # Payload mutation
     #
-    # Three helpers correspond to the three Qdrant payload endpoints
-    # exposed by the backend. Server-side cap: body.points.length <= 512.
+    # Three helpers for the three payload-mutation endpoints. Server-side
+    # cap: body.points.length <= 512.
     # ------------------------------------------------------------------
 
     def set_payload(
@@ -881,6 +872,7 @@ class AetherfyVectorsClient:
         collection_name: str,
         payload: Dict[str, Any],
         points: List[Union[str, int]],
+        key: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Set (additive merge) payload keys on a list of points.
 
@@ -892,6 +884,12 @@ class AetherfyVectorsClient:
             collection_name: Target collection.
             payload: Payload object to merge into each point's payload.
             points: Point IDs to update. Server caps at 512.
+            key: Optional nested-path target. When set, the merge happens
+                inside ``payload[key]`` instead of at the top level — every
+                key in ``payload`` is merged into the existing nested object,
+                preserving sibling keys not mentioned in the partial. Used
+                by ``merge_metadata`` to get atomic per-point partial-merge
+                semantics under ``payload.metadata``.
 
         Returns:
             Server response dict.
@@ -900,7 +898,9 @@ class AetherfyVectorsClient:
         for pid in points:
             validate_point_id(pid)
         scoped_name = self._scope_collection(collection_name)
-        data = {"payload": payload, "points": points}
+        data: Dict[str, Any] = {"payload": payload, "points": points}
+        if key is not None:
+            data["key"] = key
         response = self._make_request(
             "POST",
             f"collections/{quote_collection_name(scoped_name)}/points/payload",
@@ -944,8 +944,6 @@ class AetherfyVectorsClient:
 
         POST /collections/{name}/points/payload/delete — only the named
         keys are removed; other keys on each point's payload are preserved.
-        Matches Qdrant's wire contract directly so the proxy has nothing
-        to translate.
         """
         validate_collection_name(collection_name)
         for pid in points:
@@ -959,6 +957,65 @@ class AetherfyVectorsClient:
             evict_caches_on_404=scoped_name,
         )
         return response.get("result", response) if response else {}
+
+    def merge_metadata(
+        self,
+        collection_name: str,
+        point_id: Union[str, int],
+        partial: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Additive merge into existing ``payload.metadata``.
+
+        ``merge_metadata({tag: 'x'})`` adds/updates the listed keys and
+        leaves every other key untouched. Use ``set_payload`` with the
+        full metadata object if you want to fully replace the metadata
+        sub-key. Concurrent patches to different keys all land
+        atomically; concurrent writes to the same key resolve via
+        last-writer-wins per the storage operation order. Raises
+        ``PointNotFoundError`` if the point doesn't exist.
+        """
+        if not isinstance(partial, dict):
+            raise TypeError("partial must be a dict")
+        try:
+            return self.set_payload(
+                collection_name,
+                payload=partial,
+                points=[point_id],
+                key="metadata",
+            )
+        except AetherfyVectorsException as e:
+            if e.status_code == 404 and not isinstance(
+                e, (PointNotFoundError, CollectionNotFoundError)
+            ):
+                raise PointNotFoundError(str(point_id), collection_name) from e
+            raise
+
+    def delete_metadata_keys(
+        self,
+        collection_name: str,
+        point_id: Union[str, int],
+        keys: List[str],
+    ) -> Dict[str, Any]:
+        """Removes the listed keys from ``payload.metadata``.
+
+        Keys not in the list are left untouched. Raises
+        ``PointNotFoundError`` if the point doesn't exist.
+        """
+        if not isinstance(keys, list) or not all(isinstance(k, str) for k in keys):
+            raise TypeError("keys must be a list of strings")
+        dotted = [f"metadata.{k}" for k in keys]
+        try:
+            return self.delete_payload(
+                collection_name,
+                keys=dotted,
+                points=[point_id],
+            )
+        except AetherfyVectorsException as e:
+            if e.status_code == 404 and not isinstance(
+                e, (PointNotFoundError, CollectionNotFoundError)
+            ):
+                raise PointNotFoundError(str(point_id), collection_name) from e
+            raise
 
     def retrieve(
         self,
@@ -1118,7 +1175,7 @@ class AetherfyVectorsClient:
             evict_caches_on_404=scoped_name,
         )
 
-        # Qdrant scroll response: {"result": {"points": [...], "next_page_offset": ...}, ...}
+        # Scroll response shape: {"result": {"points": [...], "next_page_offset": ...}, ...}
         result = response.get("result") or {}
         return {
             "points": result.get("points", []),
@@ -1217,12 +1274,8 @@ class AetherfyVectorsClient:
             data,
             evict_caches_on_404=scoped_name,
         )
-        # Qdrant's count response is `{"result": {"count": N}, "status": "ok"}`,
-        # not flat. Reading `response.get("count", ...)` silently returned 0
-        # for every successful count — the bug was invisible in unit tests
-        # that mocked `_make_request` to return whatever shape the test
-        # author guessed, and only surfaced in e2e where Qdrant's actual
-        # shape comes through. Mirrors the JS SDK's `response.data.result.count`.
+        # The wire response is `{"result": {"count": N}, "status": "ok"}`,
+        # not flat — the count lives under `result`. Mirrors the JS SDK.
         return response.get("result", {}).get("count", 0)
 
     # Schema Management Methods

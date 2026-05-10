@@ -14,6 +14,11 @@ from typing import Any, Dict, Iterator, List, Optional, Union
 import uuid
 
 from aetherfy_vectors.client import AetherfyVectorsClient
+from aetherfy_vectors.exceptions import (
+    AetherfyVectorsException,
+    CollectionNotFoundError,
+    PointNotFoundError,
+)
 from aetherfy_vectors.models import Filter, SearchResult
 from aetherfy_vectors.schema import AnalysisResult, Schema
 
@@ -135,12 +140,22 @@ class Namespace:
         self._client.upsert(self._collection, points)
         return [p["id"] for p in points]
 
+    # Reserved payload-top-level keys for this Namespace shape. Subclasses
+    # (Thread) override with their own reserved set. Used as the local guard
+    # for merge_metadata / delete_metadata_keys to refuse partials whose keys
+    # would mirror a reserved top-level field name.
+    _RESERVED_KEYS: frozenset = frozenset({"text"})
+
     def set_metadata(
         self,
         id: Union[str, int],
         metadata: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """Replace the metadata sub-key of an existing memory.
+        """Replace the entire metadata sub-key of an existing memory.
+
+        ``set_metadata({tag: 'x'})`` nukes every other key. Use
+        ``merge_metadata`` if you want additive updates that preserve
+        existing keys.
 
         Atomically writes ``payload.metadata = metadata``. Reserved fields
         (``text`` for Namespace, plus ``role``/``content``/``ts`` for Thread)
@@ -166,6 +181,80 @@ class Namespace:
             payload={"metadata": metadata},
             points=[id],
         )
+
+    def merge_metadata(
+        self,
+        id: Union[str, int],
+        partial: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Additive merge into existing metadata.
+
+        ``merge_metadata({tag: 'x'})`` adds/updates the listed keys and
+        leaves every other key untouched. Use ``set_metadata`` if you
+        want to fully replace the metadata sub-key. Concurrent patches
+        to different keys all land atomically; concurrent writes to the
+        same key resolve via last-writer-wins per the storage operation
+        order. Raises ``PointNotFoundError`` if the point doesn't exist.
+
+        Reserved keys (``text`` on Namespace; ``role``, ``content``,
+        ``ts`` on Thread) cannot appear in the partial — raises a
+        local ``ValueError`` before the request is sent.
+        """
+        if not isinstance(partial, dict):
+            raise TypeError("partial must be a dict")
+        bad = [k for k in partial if k in self._RESERVED_KEYS]
+        if bad:
+            raise ValueError(
+                f"Reserved keys cannot appear in metadata partial: {sorted(bad)}"
+            )
+        try:
+            return self._client.set_payload(
+                self._collection,
+                payload=partial,
+                points=[id],
+                key="metadata",
+            )
+        except AetherfyVectorsException as e:
+            if e.status_code == 404 and not isinstance(
+                e, (PointNotFoundError, CollectionNotFoundError)
+            ):
+                raise PointNotFoundError(str(id), self._collection) from e
+            raise
+
+    def delete_metadata_keys(
+        self,
+        id: Union[str, int],
+        keys: List[str],
+    ) -> Dict[str, Any]:
+        """Removes the listed keys from metadata.
+
+        Keys not in the list are left untouched. Raises
+        ``PointNotFoundError`` if the point doesn't exist.
+
+        Reserved keys (``text`` on Namespace; ``role``, ``content``,
+        ``ts`` on Thread) cannot appear in the keys list — raises a
+        local ``ValueError`` before the request is sent.
+        """
+        if not isinstance(keys, list) or not all(isinstance(k, str) for k in keys):
+            raise TypeError("keys must be a list of strings")
+        bad = [k for k in keys if k in self._RESERVED_KEYS]
+        if bad:
+            raise ValueError(
+                f"Reserved keys cannot appear in delete keys list: {sorted(bad)}"
+            )
+        dotted = [f"metadata.{k}" for k in keys]
+        try:
+            return self._client.delete_payload(
+                self._collection,
+                keys=dotted,
+                points=[id],
+            )
+        except AetherfyVectorsException as e:
+            if e.status_code == 404 and not isinstance(
+                e, (PointNotFoundError, CollectionNotFoundError)
+            ):
+                raise PointNotFoundError(str(id), self._collection) from e
+            raise
 
     # ---------------------------------------------------------------------
     # Read
