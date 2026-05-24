@@ -199,7 +199,7 @@ class TestAnalyticsErrorHandling:
         mock_response.status_code = 404
         mock_response.json.return_value = {
             "message": "Collection not found",
-            "error_code": "collection_not_found",
+            "error_code": "COLLECTION_NOT_FOUND",
             "request_id": "req_456"
         }
         mock_response.content = True

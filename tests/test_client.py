@@ -711,9 +711,9 @@ class TestErrorHandling:
         mock_requests.request.return_value = mock_error_response(
             message="Collection not found",
             status_code=404,
-            error_code="collection_not_found"
+            error_code="COLLECTION_NOT_FOUND"
         )
-        
+
         with pytest.raises(CollectionNotFoundError):
             client.get_collection("nonexistent")
     

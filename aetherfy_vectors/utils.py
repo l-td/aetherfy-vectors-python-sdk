@@ -173,10 +173,17 @@ def parse_error_response(
         error_code = response_data.get("error_code")
         details = response_data.get("details", {})
 
-    # Map status codes to exceptions
+    # Map status codes to exceptions. Every typed exception gets the
+    # backend's stable `error_code` so SDK-level code (e.g.
+    # client._extract_error_code) can read it back without poking at
+    # the body-shape-specific details bag.
     if status_code == 401:
         return AuthenticationError(
-            message, request_id=request_id, status_code=status_code, details=details
+            message,
+            request_id=request_id,
+            status_code=status_code,
+            details=details,
+            error_code=error_code,
         )
     elif status_code == 429:
         if error_code == "STORAGE_LIMIT_EXCEEDED":
@@ -192,6 +199,7 @@ def parse_error_response(
                 request_id=request_id,
                 status_code=status_code,
                 details=details,
+                error_code=error_code,
             )
         retry_after = details.get("retry_after") if isinstance(details, dict) else None
         return RateLimitExceededError(
@@ -200,21 +208,27 @@ def parse_error_response(
             status_code=status_code,
             details=details,
             retry_after=retry_after,
+            error_code=error_code,
         )
     elif status_code in [502, 503, 504]:
         return ServiceUnavailableError(
-            message, request_id=request_id, status_code=status_code, details=details
+            message,
+            request_id=request_id,
+            status_code=status_code,
+            details=details,
+            error_code=error_code,
         )
     elif status_code == 404:
-        if error_code == "collection_not_found":
+        if error_code == "COLLECTION_NOT_FOUND":
             collection_name = details.get("collection_name", "unknown")
             return CollectionNotFoundError(
                 collection_name,
                 request_id=request_id,
                 status_code=status_code,
                 details=details,
+                error_code=error_code,
             )
-        elif error_code == "point_not_found":
+        elif error_code == "POINT_NOT_FOUND":
             point_id = details.get("point_id", "unknown")
             collection_name = details.get("collection_name", "unknown")
             return PointNotFoundError(
@@ -223,6 +237,7 @@ def parse_error_response(
                 request_id=request_id,
                 status_code=status_code,
                 details=details,
+                error_code=error_code,
             )
     elif status_code == 400:
         if error_code == "COLLECTION_LIMIT_EXCEEDED":
@@ -238,9 +253,14 @@ def parse_error_response(
                 request_id=request_id,
                 status_code=status_code,
                 details=details,
+                error_code=error_code,
             )
         return ValidationError(
-            message, request_id=request_id, status_code=status_code, details=details
+            message,
+            request_id=request_id,
+            status_code=status_code,
+            details=details,
+            error_code=error_code,
         )
     elif status_code == 409:
         from .exceptions import CollectionInUseError, CollectionInOtherRegionError
@@ -258,6 +278,7 @@ def parse_error_response(
                 request_id=request_id,
                 status_code=status_code,
                 details=details,
+                error_code=error_code,
             )
         if error_code == "COLLECTION_EXISTS_IN_OTHER_REGION":
             d = details if isinstance(details, dict) else {}
@@ -274,11 +295,19 @@ def parse_error_response(
     elif status_code == 412:
         # Schema version mismatch - return ValidationError to trigger cache clear
         return ValidationError(
-            message, request_id=request_id, status_code=status_code, details=details
+            message,
+            request_id=request_id,
+            status_code=status_code,
+            details=details,
+            error_code=error_code,
         )
     elif status_code == 408:
         return RequestTimeoutError(
-            message, request_id=request_id, status_code=status_code, details=details
+            message,
+            request_id=request_id,
+            status_code=status_code,
+            details=details,
+            error_code=error_code,
         )
 
     # Default to base exception. Pass error_code so SDK-level code can

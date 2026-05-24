@@ -215,11 +215,12 @@ class TestParseErrorResponse:
         response_data = {
             "message": "Unauthorized",
             "request_id": "req_123",
-            "error_code": "auth_error",
+            "error_code": "AUTH_INVALID_API_KEY",
         }
         error = parse_error_response(response_data, 401)
         assert isinstance(error, AuthenticationError)
         assert "Unauthorized" in str(error)
+        assert error.error_code == "AUTH_INVALID_API_KEY"
 
     def test_parse_error_response_429(self):
         """Test parsing 429 rate limit error."""
@@ -259,7 +260,7 @@ class TestParseErrorResponse:
         response_data = {
             "message": "Collection not found",
             "request_id": "req_123",
-            "error_code": "collection_not_found",
+            "error_code": "COLLECTION_NOT_FOUND",
             "details": {"collection_name": "test_collection"},
         }
         error = parse_error_response(response_data, 404)
@@ -271,7 +272,7 @@ class TestParseErrorResponse:
         response_data = {
             "message": "Point not found",
             "request_id": "req_123",
-            "error_code": "point_not_found",
+            "error_code": "POINT_NOT_FOUND",
             "details": {"point_id": "point_123", "collection_name": "test_collection"},
         }
         error = parse_error_response(response_data, 404)
