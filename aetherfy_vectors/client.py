@@ -61,7 +61,7 @@ class AetherfyVectorsClient:
 
     DEFAULT_ENDPOINT = "https://vectors.aetherfy.com"
     DEFAULT_TIMEOUT = 30.0
-    VALID_FLY_REGIONS = ("iad", "fra", "sin")
+    VALID_REGIONS = ("us-east-1", "eu-central-1", "ap-southeast-1")
 
     def __init__(
         self,
@@ -83,9 +83,10 @@ class AetherfyVectorsClient:
                    env var). Resolved via ``/api/v1/regions`` discovery
                    against the default global URL.
                 4. Default ``https://vectors.aetherfy.com``.
-            region: Region code ('iad', 'fra', or 'sin'). For local
-                development and debugging. If ``AETHERFY_VECTORS_URL``
-                is also set, the env var wins and a warning is logged.
+            region: Region code ('us-east-1', 'eu-central-1', or
+                'ap-southeast-1'). For local development and debugging.
+                If ``AETHERFY_VECTORS_URL`` is also set, the env var
+                wins and a warning is logged.
             timeout: Request timeout in seconds (default: 30.0).
             workspace: Workspace name for multi-agent coordination.
                 - Set to 'auto' to auto-detect from ``AETHERFY_WORKSPACE`` environment variable
@@ -95,16 +96,16 @@ class AetherfyVectorsClient:
 
         Raises:
             AuthenticationError: If API key is invalid or missing.
-            ValueError: If ``region`` is not one of iad/fra/sin.
+            ValueError: If ``region`` is not one of us-east-1/eu-central-1/ap-southeast-1.
             AetherfyVectorsException: If region discovery fails.
         """
         # Validate region eagerly so a typo fails at construction, not on
         # the first network round trip.
         env_region = os.getenv("AETHERFY_VECTORS_REGION")
         chosen_region = region if region is not None else env_region
-        if chosen_region is not None and chosen_region not in self.VALID_FLY_REGIONS:
+        if chosen_region is not None and chosen_region not in self.VALID_REGIONS:
             raise ValueError(
-                f"region must be one of {self.VALID_FLY_REGIONS}, got {chosen_region!r}"
+                f"region must be one of {self.VALID_REGIONS}, got {chosen_region!r}"
             )
         self.region: Optional[str] = chosen_region
 

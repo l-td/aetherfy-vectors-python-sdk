@@ -492,12 +492,12 @@ Relevant environment variables:
 Production agents have `AETHERFY_VECTORS_URL` injected by the control-plane —
 that's the URL they reach the regional backend through, and it takes
 precedence over `region=`. For local development (no env var injected),
-you can pin a client to a specific Fly region:
+you can pin a client to a specific region:
 
 ```python
 client = AetherfyVectorsClient(
     api_key="afy_test_...",
-    region="fra",  # 'iad' | 'fra' | 'sin'
+    region="eu-central-1",  # 'us-east-1' | 'eu-central-1' | 'ap-southeast-1'
 )
 ```
 

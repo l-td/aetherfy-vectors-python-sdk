@@ -3,7 +3,8 @@ Tests for the WS9 region= constructor parameter and /api/v1/regions
 discovery client on AetherfyVectorsClient.
 
 Pins the contract:
-  - region= validates against the Fly set (iad/fra/sin) at construction.
+  - region= validates against the AWS set
+    (us-east-1/eu-central-1/ap-southeast-1) at construction.
   - region= triggers a single GET /api/v1/regions, cached per instance.
   - AETHERFY_VECTORS_URL takes precedence over region= (logs a warning).
   - Discovery failure raises AetherfyVectorsException with a clear message.
@@ -29,18 +30,18 @@ class TestRegionParamValidation:
     def test_invalid_region_raises_at_construction(self, api_key, monkeypatch):
         monkeypatch.delenv("AETHERFY_VECTORS_URL", raising=False)
         with pytest.raises(ValueError, match="region must be one of"):
-            AetherfyVectorsClient(api_key=api_key, region="us-east-1")
+            AetherfyVectorsClient(api_key=api_key, region="us-west-2")
 
     def test_valid_region_via_env_var(self, api_key, monkeypatch):
         monkeypatch.delenv("AETHERFY_VECTORS_URL", raising=False)
-        monkeypatch.setenv("AETHERFY_VECTORS_REGION", "fra")
+        monkeypatch.setenv("AETHERFY_VECTORS_REGION", "eu-central-1")
         with patch("aetherfy_vectors.client.requests.get") as mock_get:
             mock_get.return_value = _mock_regions_response({
-                "iad": "https://vectors-iad.aetherfy.run",
-                "fra": "https://vectors-fra.aetherfy.run",
+                "us-east-1": "https://vectors-iad.aetherfy.run",
+                "eu-central-1": "https://vectors-fra.aetherfy.run",
             })
             client = AetherfyVectorsClient(api_key=api_key)
-            assert client.region == "fra"
+            assert client.region == "eu-central-1"
             assert client.endpoint == "https://vectors-fra.aetherfy.run"
 
 
@@ -49,11 +50,11 @@ class TestRegionDiscovery:
         monkeypatch.delenv("AETHERFY_VECTORS_URL", raising=False)
         with patch("aetherfy_vectors.client.requests.get") as mock_get:
             mock_get.return_value = _mock_regions_response({
-                "iad": "https://vectors-iad.aetherfy.run",
-                "fra": "https://vectors-fra.aetherfy.run",
-                "sin": "https://vectors-sin.aetherfy.run",
+                "us-east-1": "https://vectors-iad.aetherfy.run",
+                "eu-central-1": "https://vectors-fra.aetherfy.run",
+                "ap-southeast-1": "https://vectors-sin.aetherfy.run",
             })
-            client = AetherfyVectorsClient(api_key=api_key, region="fra")
+            client = AetherfyVectorsClient(api_key=api_key, region="eu-central-1")
             assert client.endpoint == "https://vectors-fra.aetherfy.run"
             assert mock_get.call_count == 1
             # Verify it hit the default global URL's /api/v1/regions.
@@ -67,11 +68,11 @@ class TestRegionDiscovery:
         monkeypatch.delenv("AETHERFY_VECTORS_URL", raising=False)
         with patch("aetherfy_vectors.client.requests.get") as mock_get:
             mock_get.return_value = _mock_regions_response({
-                "iad": "https://vectors-iad.aetherfy.run",
-                "fra": "https://vectors-fra.aetherfy.run",
+                "us-east-1": "https://vectors-iad.aetherfy.run",
+                "eu-central-1": "https://vectors-fra.aetherfy.run",
             })
-            c1 = AetherfyVectorsClient(api_key=api_key, region="iad")
-            c2 = AetherfyVectorsClient(api_key=api_key, region="fra")
+            c1 = AetherfyVectorsClient(api_key=api_key, region="us-east-1")
+            c2 = AetherfyVectorsClient(api_key=api_key, region="eu-central-1")
             # Each instance fetched independently — no module-global cache.
             assert mock_get.call_count == 2
             assert c1.endpoint != c2.endpoint
@@ -81,16 +82,16 @@ class TestRegionDiscovery:
         with patch("aetherfy_vectors.client.requests.get") as mock_get:
             mock_get.return_value = _mock_regions_response({}, status=500)
             with pytest.raises(AetherfyVectorsException, match="discovery returned 500"):
-                AetherfyVectorsClient(api_key=api_key, region="fra")
+                AetherfyVectorsClient(api_key=api_key, region="eu-central-1")
 
     def test_discovery_missing_region_raises(self, api_key, monkeypatch):
         monkeypatch.delenv("AETHERFY_VECTORS_URL", raising=False)
         with patch("aetherfy_vectors.client.requests.get") as mock_get:
             mock_get.return_value = _mock_regions_response({
-                "iad": "https://vectors-iad.aetherfy.run",
+                "us-east-1": "https://vectors-iad.aetherfy.run",
             })
             with pytest.raises(AetherfyVectorsException, match="not configured at the discovery endpoint"):
-                AetherfyVectorsClient(api_key=api_key, region="fra")
+                AetherfyVectorsClient(api_key=api_key, region="eu-central-1")
 
 
 class TestEnvVarPrecedence:
@@ -102,7 +103,7 @@ class TestEnvVarPrecedence:
         monkeypatch.setenv("AETHERFY_VECTORS_URL", "http://10.0.10.243:3000")
         import logging
         caplog.set_level(logging.WARNING, logger="aetherfy_vectors.client")
-        client = AetherfyVectorsClient(api_key=api_key, region="fra")
+        client = AetherfyVectorsClient(api_key=api_key, region="eu-central-1")
         assert client.endpoint == "http://10.0.10.243:3000"
         assert any(
             "AETHERFY_VECTORS_URL" in rec.getMessage() and "region=" in rec.getMessage()
@@ -115,7 +116,7 @@ class TestEnvVarPrecedence:
             client = AetherfyVectorsClient(
                 api_key=api_key,
                 endpoint="http://localhost:3000",
-                region="fra",
+                region="eu-central-1",
             )
             # Explicit endpoint wins; no discovery call.
             assert client.endpoint == "http://localhost:3000"
@@ -134,17 +135,17 @@ class TestCollectionInOtherRegionError:
         body = {
             "error": {
                 "code": "COLLECTION_EXISTS_IN_OTHER_REGION",
-                "message": "Collection 'foo' already exists in region fra. ...",
+                "message": "Collection 'foo' already exists in region eu-central-1. ...",
                 "collection_name": "foo",
-                "existing_regions": ["fra"],
-                "requesting_region": "iad",
+                "existing_regions": ["eu-central-1"],
+                "requesting_region": "us-east-1",
             }
         }
         err = parse_error_response(body, 409)
         assert isinstance(err, CollectionInOtherRegionError)
         assert err.collection_name == "foo"
-        assert err.existing_regions == ["fra"]
-        assert err.requesting_region == "iad"
+        assert err.existing_regions == ["eu-central-1"]
+        assert err.requesting_region == "us-east-1"
         assert err.status_code == 409
         # The base exception preserves error_code so generic handlers
         # can still string-match if they want.

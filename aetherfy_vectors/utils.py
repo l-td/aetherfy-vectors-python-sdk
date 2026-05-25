@@ -151,7 +151,11 @@ def parse_error_response(
         else:
             response_data = {"message": str(response_data)}
 
-    # Handle nested error format from backend: {"error": {"code": "...", "message": "..."}}
+    # Canonical vectordb error envelope: {"error": {"code": "...", "message": "...", **extras}}.
+    # The Python SDK only talks to vectordb (Node/Express); it does not
+    # parse FastAPI's `detail` key. Per docs/REVIEW_FAQ.md section 56,
+    # each consumer reads only from the surface(s) it talks to so its
+    # parser stays simple and asserts the contract.
     if "error" in response_data and isinstance(response_data["error"], dict):
         error_obj = response_data["error"]
         message = error_obj.get("message", "Unknown error")

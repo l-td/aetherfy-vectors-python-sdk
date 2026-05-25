@@ -706,9 +706,9 @@ class TestThreadOperations:
 
 class TestAnalyticsParity:
     def test_global_performance_analytics(self, memory, fake_vectors_client):
-        memory.get_performance_analytics(time_range="7d", region="iad")
+        memory.get_performance_analytics(time_range="7d", region="us-east-1")
         fake_vectors_client.get_performance_analytics.assert_called_once_with(
-            time_range="7d", region="iad"
+            time_range="7d", region="us-east-1"
         )
 
     def test_namespace_analytics_requires_existence(
