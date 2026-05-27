@@ -198,6 +198,49 @@ class SchemaNotFoundError(AetherfyVectorsException):
         self.collection_name = collection_name
 
 
+class PartialUpsertError(AetherfyVectorsException):
+    """A multi-chunk upsert succeeded for some chunks and failed for others.
+
+    Carries which point IDs were saved and which weren't so callers can
+    retry the failed ones surgically without double-upserting the saved
+    ones (Qdrant upsert is idempotent by point ID, so a retry of an
+    already-saved point is also safe — this just avoids the wasted
+    round-trip).
+
+    Raised only when the SDK had to split the upsert into multiple HTTP
+    requests due to byte-size limits and at least one of those requests
+    failed after the SDK's retry budget was exhausted. Single-request
+    upserts that fail raise the more specific exception directly
+    (ValidationError, NetworkError, ServiceUnavailableError, etc.) —
+    same behaviour as before chunking.
+
+    Attributes:
+        saved: Count of points successfully upserted (across all
+            successful chunks).
+        total: Total points the caller passed to upsert().
+        failed: List of dicts, one per failed chunk:
+            {"point_ids": [...], "error": AetherfyVectorsException}.
+    """
+
+    def __init__(
+        self,
+        saved: int,
+        total: int,
+        failed: list,
+        **kwargs,
+    ):
+        failed_count = sum(len(f["point_ids"]) for f in failed)
+        message = (
+            f"Partial upsert: {saved} of {total} points saved; "
+            f"{failed_count} failed across {len(failed)} chunk(s). "
+            f"See .failed for per-chunk point IDs and errors."
+        )
+        super().__init__(message, **kwargs)
+        self.saved = saved
+        self.total = total
+        self.failed = failed
+
+
 def is_retryable_error(error: Exception) -> bool:
     """Check if an error should be retried.
 

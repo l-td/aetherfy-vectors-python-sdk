@@ -32,7 +32,9 @@ from .exceptions import (
     NetworkError,
     SchemaValidationError,
     SchemaNotFoundError,
+    PartialUpsertError,
 )
+from .chunking import chunk_points_by_bytes, MAX_REQUEST_BYTES
 from .schema import (
     Schema,
     FieldDefinition,
@@ -653,16 +655,43 @@ class AetherfyVectorsClient:
     ) -> bool:
         """Insert or update points in a collection.
 
+        Auto-chunks large batches into multiple HTTP requests to stay
+        under the per-request byte cap (~80 MB, sized for Cloudflare's
+        100 MB edge limit). Most batches fit in one chunk; the chunker
+        is transparent for small/medium upserts.
+
+        Failure behaviour:
+            - Transient errors (network blips, 5xx, 429) are auto-retried
+              per chunk inside _make_request's retry budget.
+            - Permanent errors on a chunk after retries: if there's only
+              one chunk, the specific error (ValidationError,
+              ServiceUnavailableError, etc.) is raised directly — same
+              as pre-chunking behaviour.
+            - Permanent errors when there are multiple chunks AND at
+              least one chunk succeeded: raises PartialUpsertError
+              carrying the saved count and the failed chunks' point IDs
+              + errors. Callers can retry just those IDs (Qdrant upsert
+              is idempotent by point ID so a retry of an already-saved
+              point is also safe).
+            - Permanent errors when ALL chunks fail (multi-chunk): also
+              raises PartialUpsertError with saved=0 and all chunks'
+              IDs in failed.
+
         Args:
             collection_name: Name of the target collection.
             points: List of Point objects or dictionaries.
             **kwargs: Additional parameters for compatibility.
 
         Returns:
-            True if upsert was successful.
+            True if all points were saved.
 
         Raises:
             SchemaValidationError: If payloads fail schema validation.
+            PartialUpsertError: When multi-chunk upsert has any failed
+                chunks.
+            ValidationError: Single-chunk validation / 400 errors.
+            ValueError: Single-chunk 400 (re-raised for backward
+                compatibility).
         """
         validate_collection_name(collection_name)
 
@@ -743,11 +772,90 @@ class AetherfyVectorsClient:
         # Validate and format points
         formatted_points = format_points_for_upsert(formatted_points)
 
+        # Chunk by byte size. Most upserts produce a single chunk; the
+        # multi-chunk path only fires for batches large enough to risk
+        # a 413 at Cloudflare's edge (~80+ MB JSON wire size).
+        chunks = list(chunk_points_by_bytes(formatted_points, MAX_REQUEST_BYTES))
+
+        if len(chunks) == 1:
+            # Single-chunk fast path: preserves pre-chunking behaviour
+            # exactly — specific exceptions (ValidationError,
+            # NetworkError, etc.) propagate directly without
+            # PartialUpsertError wrapping.
+            return self._upload_points_chunk(
+                scoped_name,
+                collection_name,
+                chunks[0],
+                schema,
+                payload_schema_data,
+            )
+
+        # Multi-chunk path: per-chunk error tracking. Each chunk runs
+        # through the same upload+retry+412 handling as the single-chunk
+        # path; only the outer failure aggregation differs.
+        saved = 0
+        failed: List[Dict[str, Any]] = []
+
+        for chunk in chunks:
+            try:
+                self._upload_points_chunk(
+                    scoped_name,
+                    collection_name,
+                    chunk,
+                    schema,
+                    payload_schema_data,
+                )
+                saved += len(chunk)
+            except AetherfyVectorsException as e:
+                # Covers ValidationError, NetworkError, ServiceUnavailableError,
+                # RequestTimeoutError, SchemaValidationError, etc. — all
+                # SDK-domain errors.
+                failed.append({"point_ids": [p["id"] for p in chunk], "error": e})
+            except ValueError as e:
+                # _upload_points_chunk raises ValueError on a 400 (kept
+                # for backward compatibility with the pre-chunking
+                # contract — see _upload_points_chunk's 400 branch).
+                # Wrap as ValidationError so failed-list entries are
+                # uniform AetherfyVectorsException instances.
+                failed.append(
+                    {
+                        "point_ids": [p["id"] for p in chunk],
+                        "error": ValidationError(str(e)),
+                    }
+                )
+            # Programming errors (TypeError, AttributeError, etc.)
+            # intentionally propagate. They indicate SDK bugs and should
+            # not be silently buried in a PartialUpsertError's failed list.
+
+        if failed:
+            raise PartialUpsertError(saved, len(formatted_points), failed)
+        return True
+
+    def _upload_points_chunk(
+        self,
+        scoped_name: str,
+        original_collection_name: str,
+        chunk: List[Dict[str, Any]],
+        schema: Dict[str, Any],
+        payload_schema_data: Optional[Dict[str, Any]],
+    ) -> bool:
+        """Per-chunk upload.
+
+        Mirrors the pre-chunking single-PUT logic exactly: If-Match
+        headers from schema ETags, retry on 412 with fresh schema, per-
+        status handling (400, 412), 404 cache self-heal via
+        _make_request's evict_caches_on_404. Returns True on 200; raises
+        on failure.
+
+        Extracted so the multi-chunk loop can call it per-chunk and
+        aggregate failures into PartialUpsertError without duplicating
+        the ~80 lines of error-handling logic.
+        """
         # Make request with If-Match headers (for both schemas)
-        data = {"points": formatted_points}
+        data = {"points": chunk}
 
         # Add If-Match headers if we have ETags
-        extra_headers = {}
+        extra_headers: Dict[str, str] = {}
         if schema.get("etag"):
             extra_headers["If-Match"] = schema["etag"]
 
@@ -757,7 +865,7 @@ class AetherfyVectorsClient:
 
         try:
             # Pass If-Match header directly to the request
-            response = self._make_request(
+            self._make_request(
                 "PUT",
                 f"collections/{quote_collection_name(scoped_name)}/points",
                 data,
@@ -770,18 +878,20 @@ class AetherfyVectorsClient:
             # Handle 412 Precondition Failed (schema changed)
             if e.status_code == 412:
                 self.clear_schema_cache(scoped_name)
-                self._payload_schema_cache.pop(collection_name, None)
+                self._payload_schema_cache.pop(original_collection_name, None)
 
                 # Fetch updated schema and re-validate
                 updated_schema = None
                 try:
-                    self.get_schema(collection_name)
-                    updated_schema = self._payload_schema_cache.get(collection_name)
+                    self.get_schema(original_collection_name)
+                    updated_schema = self._payload_schema_cache.get(
+                        original_collection_name
+                    )
                     if updated_schema and updated_schema["schema"]:
                         enforcement_mode = updated_schema.get("enforcement_mode", "off")
                         if enforcement_mode != "off":
                             validation_errors = validate_vectors(
-                                formatted_points, updated_schema["schema"]
+                                chunk, updated_schema["schema"]
                             )
                             if validation_errors and enforcement_mode == "strict":
                                 errors_dict = [e.to_dict() for e in validation_errors]
@@ -791,28 +901,30 @@ class AetherfyVectorsClient:
                     raise
                 except:
                     # Ignore other errors during schema refresh
-                    updated_schema = self._payload_schema_cache.get(collection_name)
+                    updated_schema = self._payload_schema_cache.get(
+                        original_collection_name
+                    )
 
                 # Retry the upsert with updated schema
                 try:
-                    extra_headers_retry = {}
+                    extra_headers_retry: Dict[str, str] = {}
                     if schema.get("etag"):
                         extra_headers_retry["If-Match"] = schema["etag"]
                     if updated_schema and updated_schema.get("etag"):
                         extra_headers_retry["If-Match"] = updated_schema["etag"]
 
-                    response = self._make_request(
+                    self._make_request(
                         "PUT",
                         f"collections/{quote_collection_name(scoped_name)}/points",
                         data,
-                        headers=extra_headers_retry if extra_headers_retry else None,
+                        headers=(extra_headers_retry if extra_headers_retry else None),
                         evict_caches_on_404=scoped_name,
                     )
                     return True
                 except:
                     # If retry also fails, raise the original 412 error
                     raise ValidationError(
-                        f"Schema changed for collection '{collection_name}'. Please retry your request.",
+                        f"Schema changed for collection '{original_collection_name}'. Please retry your request.",
                         status_code=412,
                     )
 
@@ -820,7 +932,7 @@ class AetherfyVectorsClient:
             # Re-raise as ValueError for backward compatibility
             raise ValueError(str(e))
 
-        except AetherfyVectorsException as e:
+        except AetherfyVectorsException:
             # Re-raise other errors
             raise
 
