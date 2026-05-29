@@ -70,33 +70,10 @@ class TestCollectionScoping:
         scoped = client._scope_collection("documents")
         assert scoped == "documents"
 
-    def test_unscope_collection_with_workspace(self):
-        """Test unscoping collection name with workspace."""
-        client = AetherfyVectorsClient(
-            api_key="afy_test_1234567890123456",
-            workspace="my-workspace"
-        )
-
-        unscoped = client._unscope_collection("my-workspace/documents")
-        assert unscoped == "documents"
-
-    def test_unscope_collection_without_workspace(self):
-        """Test unscoping collection name without workspace."""
-        client = AetherfyVectorsClient(api_key="afy_test_1234567890123456")
-
-        unscoped = client._unscope_collection("documents")
-        assert unscoped == "documents"
-
-    def test_unscope_collection_wrong_workspace(self):
-        """Test unscoping collection with different workspace prefix."""
-        client = AetherfyVectorsClient(
-            api_key="afy_test_1234567890123456",
-            workspace="my-workspace"
-        )
-
-        # Should return as-is if doesn't match workspace
-        unscoped = client._unscope_collection("other-workspace/documents")
-        assert unscoped == "other-workspace/documents"
+    # _unscope_collection was removed post-A/B (vectordb returns bare
+    # names; no client-side unscoping needed). The slash-form scoped
+    # name is now only used as a local schemaCache key — no read path
+    # needs the inverse. Tests for the deleted method removed.
 
 
 class TestVectorOperationsWithWorkspace:
@@ -125,7 +102,8 @@ class TestVectorOperationsWithWorkspace:
         # Verify the request was made with scoped collection in URL
         call_args = mock_client._make_request.call_args
         assert call_args[0][0] == "POST"
-        assert "test-workspace%2Fdocuments" in call_args[0][1]
+        # Post-A/B: nested URL form, not URL-encoded slash.
+        assert "workspaces/test-workspace/collections/documents" in call_args[0][1]
         assert "points/search" in call_args[0][1]
 
     def test_upsert_with_workspace(self, mock_client):
@@ -143,7 +121,8 @@ class TestVectorOperationsWithWorkspace:
 
         # Verify the request was made with scoped collection in URL
         call_args = mock_client._make_request.call_args
-        assert "test-workspace%2Fdocuments" in call_args[0][1]
+        # Post-A/B: nested URL form, not URL-encoded slash.
+        assert "workspaces/test-workspace/collections/documents" in call_args[0][1]
         assert "points" in call_args[0][1]
 
     def test_retrieve_with_workspace(self, mock_client):
@@ -157,7 +136,8 @@ class TestVectorOperationsWithWorkspace:
 
         # Verify the request was made with scoped collection in URL
         call_args = mock_client._make_request.call_args
-        assert "test-workspace%2Fdocuments" in call_args[0][1]
+        # Post-A/B: nested URL form, not URL-encoded slash.
+        assert "workspaces/test-workspace/collections/documents" in call_args[0][1]
         assert "points" in call_args[0][1]
 
     def test_delete_with_workspace(self, mock_client):
@@ -171,7 +151,8 @@ class TestVectorOperationsWithWorkspace:
 
         # Verify the request was made with scoped collection in URL
         call_args = mock_client._make_request.call_args
-        assert "test-workspace%2Fdocuments" in call_args[0][1]
+        # Post-A/B: nested URL form, not URL-encoded slash.
+        assert "workspaces/test-workspace/collections/documents" in call_args[0][1]
         assert "points/delete" in call_args[0][1]
 
     def test_count_with_workspace(self, mock_client):
@@ -191,7 +172,8 @@ class TestVectorOperationsWithWorkspace:
 
         # Verify the request was made with scoped collection in URL
         call_args = mock_client._make_request.call_args
-        assert "test-workspace%2Fdocuments" in call_args[0][1]
+        # Post-A/B: nested URL form, not URL-encoded slash.
+        assert "workspaces/test-workspace/collections/documents" in call_args[0][1]
         assert result == 42
 
 
@@ -209,7 +191,9 @@ class TestCollectionManagementWithWorkspace:
         yield client
 
     def test_create_collection_with_workspace(self, mock_client):
-        """Test create_collection scopes collection name."""
+        """Post-A/B: workspace lives in URL path, body name is bare.
+        vectordb rejects body name containing "/" with 400
+        INVALID_COLLECTION_NAME."""
         mock_client._make_request.return_value = {"status": "ok"}
 
         mock_client.create_collection(
@@ -217,10 +201,15 @@ class TestCollectionManagementWithWorkspace:
             vectors_config=VectorConfig(size=384, distance=DistanceMetric.COSINE)
         )
 
-        # Verify the request data contains scoped collection name
+        # URL must be the nested list/create endpoint.
         call_args = mock_client._make_request.call_args
+        assert call_args[0][0] == "POST"
+        assert call_args[0][1] == "workspaces/test-workspace/collections"
+
+        # Body name must be BARE.
         request_data = call_args[0][2]
-        assert request_data['name'] == 'test-workspace/documents'
+        assert request_data['name'] == 'documents'
+        assert '/' not in request_data['name']
 
     def test_delete_collection_with_workspace(self, mock_client):
         """Test delete_collection scopes collection name."""
@@ -230,7 +219,8 @@ class TestCollectionManagementWithWorkspace:
 
         # Verify the request was made with scoped collection in URL
         call_args = mock_client._make_request.call_args
-        assert "test-workspace%2Fdocuments" in call_args[0][1]
+        # Post-A/B: nested URL form, not URL-encoded slash.
+        assert "workspaces/test-workspace/collections/documents" in call_args[0][1]
 
     def test_collection_exists_with_workspace(self, mock_client):
         """Test collection_exists scopes collection name."""
@@ -240,44 +230,54 @@ class TestCollectionManagementWithWorkspace:
 
         # Verify the request was made with scoped collection in URL
         call_args = mock_client._make_request.call_args
-        assert "test-workspace%2Fdocuments" in call_args[0][1]
+        # Post-A/B: nested URL form, not URL-encoded slash.
+        assert "workspaces/test-workspace/collections/documents" in call_args[0][1]
 
     def test_get_collection_with_workspace(self, mock_client):
-        """Test get_collection scopes and unscopes collection name."""
+        """Post-A/B: vectordb returns the bare collection name (PG
+        stores name without workspace prefix; workspace_id is the join
+        key). The SDK no longer needs to unscope client-side."""
         mock_client._make_request.return_value = {
-            "name": "test-workspace/documents",
+            "name": "documents",
             "config": {"params": {"vectors": {"size": 384, "distance": "Cosine"}}}
         }
 
         result = mock_client.get_collection(collection_name="documents")
 
-        # Request should use scoped name
+        # Request should use nested URL form.
         call_args = mock_client._make_request.call_args
-        assert "test-workspace%2Fdocuments" in call_args[0][1]
+        assert "workspaces/test-workspace/collections/documents" in call_args[0][1]
 
-        # Response should have unscoped name
+        # Response name is bare as returned by vectordb.
         assert result.name == 'documents'
 
     def test_get_collections_with_workspace(self, mock_client):
-        """Test get_collections filters and unscopes workspace collections."""
+        """Post-A/B: GET /workspaces/{ws}/collections returns ONLY this
+        workspace's collections (server-side filter by workspace_id),
+        with bare names (PG schema). The SDK no longer filters or
+        unscopes client-side — pinning that contract here.
+
+        The OLD mock returned mixed-workspace names and verified
+        client-side prefix-matching; that's gone."""
         mock_client._make_request.return_value = {
             "collections": [
-                {"name": "test-workspace/documents", "config": {"params": {"vectors": {"size": 384, "distance": "Cosine"}}}},
-                {"name": "test-workspace/images", "config": {"params": {"vectors": {"size": 512, "distance": "Cosine"}}}},
-                {"name": "other-workspace/data", "config": {"params": {"vectors": {"size": 256, "distance": "Cosine"}}}},
-                {"name": "no-workspace", "config": {"params": {"vectors": {"size": 128, "distance": "Cosine"}}}}
+                {"name": "documents", "config": {"params": {"vectors": {"size": 384, "distance": "Cosine"}}}},
+                {"name": "images", "config": {"params": {"vectors": {"size": 512, "distance": "Cosine"}}}},
             ]
         }
 
         result = mock_client.get_collections()
 
-        # Should only return collections from this workspace, unscoped
+        # Request hits the nested list endpoint.
+        call_args = mock_client._make_request.call_args
+        assert call_args[0][0] == "GET"
+        assert call_args[0][1] == "workspaces/test-workspace/collections"
+
+        # No client-side filtering; names returned verbatim.
         assert len(result) == 2
         names = [c.name for c in result]
         assert 'documents' in names
         assert 'images' in names
-        assert 'data' not in names
-        assert 'no-workspace' not in names
 
 
 class TestSchemaOperationsWithWorkspace:
@@ -293,8 +293,15 @@ class TestSchemaOperationsWithWorkspace:
         client._make_request = Mock()
         yield client
 
+    # Schema URLs stay in slash-form (vectordb's /api/v1/schema/:collection
+    # router is unchanged in PR 1 of the A/B refactor — only /collections
+    # got the nested route family). The SDK keeps using
+    # f"schema/{quote_collection_name(scoped_name)}" which URL-encodes
+    # the slash. Pinning that contract here so a future migration of
+    # schema endpoints to nested form is a visible test failure.
+
     def test_get_schema_with_workspace(self, mock_client):
-        """Test get_schema scopes collection name."""
+        """get_schema URL keeps slash-form (schema endpoints not nested)."""
         mock_client._make_request.return_value = {
             "schema": {"fields": {}},
             "etag": "schema-v1",
@@ -304,13 +311,11 @@ class TestSchemaOperationsWithWorkspace:
 
         mock_client.get_schema(collection_name="documents")
 
-        # Verify the request was made with scoped collection in URL
         call_args = mock_client._make_request.call_args
-        assert "test-workspace%2Fdocuments" in call_args[0][1]
-        assert "schema" in call_args[0][1]
+        assert "schema/test-workspace%2Fdocuments" in call_args[0][1]
 
     def test_set_schema_with_workspace(self, mock_client):
-        """Test set_schema scopes collection name."""
+        """set_schema URL keeps slash-form."""
         from aetherfy_vectors.schema import Schema, FieldDefinition
 
         mock_client._make_request.return_value = {"etag": "schema-v2"}
@@ -322,24 +327,20 @@ class TestSchemaOperationsWithWorkspace:
             schema=schema
         )
 
-        # Verify the request was made with scoped collection in URL
         call_args = mock_client._make_request.call_args
-        assert "test-workspace%2Fdocuments" in call_args[0][1]
-        assert "schema" in call_args[0][1]
+        assert "schema/test-workspace%2Fdocuments" in call_args[0][1]
 
     def test_delete_schema_with_workspace(self, mock_client):
-        """Test delete_schema scopes collection name."""
+        """delete_schema URL keeps slash-form."""
         mock_client._make_request.return_value = {"status": "ok"}
 
         mock_client.delete_schema(collection_name="documents")
 
-        # Verify the request was made with scoped collection in URL
         call_args = mock_client._make_request.call_args
-        assert "test-workspace%2Fdocuments" in call_args[0][1]
-        assert "schema" in call_args[0][1]
+        assert "schema/test-workspace%2Fdocuments" in call_args[0][1]
 
     def test_analyze_schema_with_workspace(self, mock_client):
-        """Test analyze_schema scopes collection name."""
+        """analyze_schema URL keeps slash-form."""
         mock_client._make_request.return_value = {
             "collection": "test-workspace/documents",
             "sample_size": 1000,
@@ -351,10 +352,8 @@ class TestSchemaOperationsWithWorkspace:
 
         mock_client.analyze_schema(collection_name="documents")
 
-        # Verify the request was made with scoped collection in URL
         call_args = mock_client._make_request.call_args
-        assert "test-workspace%2Fdocuments" in call_args[0][1]
-        assert "schema" in call_args[0][1]
+        assert "schema/test-workspace%2Fdocuments" in call_args[0][1]
         assert "analyze" in call_args[0][1]
 
     def test_refresh_schema_with_workspace(self, mock_client):
@@ -368,10 +367,8 @@ class TestSchemaOperationsWithWorkspace:
 
         mock_client.refresh_schema(collection_name="documents")
 
-        # Verify the request was made with scoped collection in URL
         call_args = mock_client._make_request.call_args
-        assert "test-workspace%2Fdocuments" in call_args[0][1]
-        assert "schema" in call_args[0][1]
+        assert "schema/test-workspace%2Fdocuments" in call_args[0][1]
 
 
 class TestBackwardCompatibility:

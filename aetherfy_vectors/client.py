@@ -257,31 +257,47 @@ class AetherfyVectorsClient:
         return session
 
     def _scope_collection(self, collection_name: str) -> str:
-        """Scope a collection name with workspace prefix if workspace is set.
+        """Local cache-key for a collection name, with workspace prefix when set.
 
-        Args:
-            collection_name: The collection name to scope.
-
-        Returns:
-            Scoped collection name (workspace/collection) if workspace is set,
-            otherwise returns the original collection name.
+        NOT sent on the wire anymore — the canonical vectordb wire form
+        post-A/B is the nested URL `/workspaces/{ws}/collections/{name}`
+        with a bare name in the URL/body (see `_build_collection_path`).
+        Kept as a stable schema-cache key so same-name collections in
+        different workspaces don't collide.
         """
         if self.workspace:
             return f"{self.workspace}/{collection_name}"
         return collection_name
 
-    def _unscope_collection(self, scoped_name: str) -> str:
-        """Remove workspace prefix from a collection name.
+    def _build_collection_path(self, collection_name: str, suffix: str = "") -> str:
+        """Build the canonical vectordb URL path for a collection.
+
+        Post-A/B (PR 1 of vectordb), workspaced operations use the nested
+        form `workspaces/{ws}/collections/{name}` instead of the old
+        slash-in-name encoding. Workspaceless calls continue to use the
+        flat form.
 
         Args:
-            scoped_name: The scoped collection name.
-
-        Returns:
-            Unscoped collection name (without workspace prefix).
+            collection_name: BARE (unscoped) collection name.
+            suffix: Optional path suffix (e.g. ``"/points/search"``).
+                Must already begin with ``/`` when non-empty.
         """
-        if self.workspace and scoped_name.startswith(f"{self.workspace}/"):
-            return scoped_name[len(self.workspace) + 1 :]
-        return scoped_name
+        from urllib.parse import quote
+
+        enc_name = quote(collection_name, safe="")
+        if self.workspace:
+            enc_ws = quote(self.workspace, safe="")
+            return f"workspaces/{enc_ws}/collections/{enc_name}{suffix}"
+        return f"collections/{enc_name}{suffix}"
+
+    def _build_collections_list_path(self) -> str:
+        """Workspaced list/create endpoint or workspaceless."""
+        if self.workspace:
+            from urllib.parse import quote
+
+            enc_ws = quote(self.workspace, safe="")
+            return f"workspaces/{enc_ws}/collections"
+        return "collections"
 
     def _make_request(
         self,
@@ -371,11 +387,19 @@ class AetherfyVectorsClient:
         return self._schema_cache.get(collection_name)
 
     def _fetch_and_cache_schema(self, collection_name: str) -> Dict[str, Any]:
-        """Fetch collection schema from API and cache it with ETag."""
+        """Fetch collection schema from API and cache it with ETag.
+
+        Caller passes the BARE collection name (no workspace slash).
+        The wire URL uses the nested form via _build_collection_path
+        when workspaced; the local _schema_cache key uses the slash-
+        form scoped_name for collision-free lookups across workspaces
+        with same-name collections.
+        """
+        scoped_name = self._scope_collection(collection_name)
         response = self._make_request(
             "GET",
-            f"collections/{quote_collection_name(collection_name)}",
-            evict_caches_on_404=collection_name,
+            self._build_collection_path(collection_name),
+            evict_caches_on_404=scoped_name,
         )
 
         # Extract schema info
@@ -390,8 +414,9 @@ class AetherfyVectorsClient:
             "full_config": result,
         }
 
-        # Cache it
-        self._schema_cache[collection_name] = schema
+        # Cache it under the scoped (slash-form) key — consistent with
+        # _get_cached_schema lookups by scoped_name elsewhere.
+        self._schema_cache[scoped_name] = schema
         return schema
 
     def clear_schema_cache(self, collection_name: Optional[str] = None) -> None:
@@ -501,13 +526,17 @@ class AetherfyVectorsClient:
 
         scoped_name = self._scope_collection(collection_name)
 
+        # Post-A/B: workspace lives in URL path, body name is bare.
+        # POST /workspaces/{ws}/collections {name: bare, ...} for workspaced;
+        # POST /collections {name: bare, ...} for workspaceless. vectordb
+        # rejects any "/" in the body name.
         data = {
-            "name": scoped_name,
+            "name": collection_name,
             "vectors": config.to_dict(),
             "description": description,
         }
 
-        self._make_request("POST", "collections", data)
+        self._make_request("POST", self._build_collections_list_path(), data)
 
         # Prepopulate the schema cache from the request we just authored.
         # GET /collections/<name> can be eventually consistent w.r.t. its
@@ -548,7 +577,7 @@ class AetherfyVectorsClient:
         # leave stale entries when our DELETE hits a 404.
         self._make_request(
             "DELETE",
-            f"collections/{quote_collection_name(scoped_name)}",
+            self._build_collection_path(collection_name),
             evict_caches_on_404=scoped_name,
         )
         # Drop both caches so a subsequent recreate-with-different-shape
@@ -566,19 +595,12 @@ class AetherfyVectorsClient:
         Returns:
             List of Collection objects.
         """
-        response = self._make_request("GET", "collections")
+        # Post-A/B: GET /workspaces/{ws}/collections returns ONLY this
+        # workspace's collections with bare names; GET /collections returns
+        # workspaceless collections (also bare). No client-side filtering
+        # or name-unscoping needed.
+        response = self._make_request("GET", self._build_collections_list_path())
         collections = response.get("collections", [])
-
-        # If workspace is set, filter and unscope collection names
-        if self.workspace:
-            workspace_prefix = f"{self.workspace}/"
-            filtered_collections = []
-            for col in collections:
-                if col.get("name", "").startswith(workspace_prefix):
-                    col["name"] = self._unscope_collection(col["name"])
-                    filtered_collections.append(col)
-            return [Collection.from_dict(col) for col in filtered_collections]
-
         return [Collection.from_dict(col) for col in collections]
 
     def collection_exists(self, collection_name: str, **kwargs) -> bool:
@@ -616,7 +638,7 @@ class AetherfyVectorsClient:
             # uniformly across every collection-scoped call site.
             self._make_request(
                 "GET",
-                f"collections/{quote_collection_name(scoped_name)}",
+                self._build_collection_path(collection_name),
                 evict_caches_on_404=scoped_name,
             )
             return True
@@ -639,13 +661,13 @@ class AetherfyVectorsClient:
         scoped_name = self._scope_collection(collection_name)
         response = self._make_request(
             "GET",
-            f"collections/{quote_collection_name(scoped_name)}",
+            self._build_collection_path(collection_name),
             evict_caches_on_404=scoped_name,
         )
+        # Post-A/B: vectordb returns the bare collection name (PG stores
+        # `name` without workspace prefix; workspace is the workspace_id
+        # join key). No client-side unscope needed.
         collection_data = response.get("result", response)
-        # Unscope the collection name in the result
-        if self.workspace and collection_data.get("name"):
-            collection_data["name"] = self._unscope_collection(collection_data["name"])
         return Collection.from_dict(collection_data)
 
     # Point Management Methods
@@ -697,10 +719,12 @@ class AetherfyVectorsClient:
 
         scoped_name = self._scope_collection(collection_name)
 
-        # Get vector config schema (from cache or fetch)
+        # Get vector config schema (from cache or fetch). _fetch_and_cache_schema
+        # computes its own scoped_name for the cache key from the bare
+        # collection_name, and builds the wire URL via _build_collection_path.
         schema = self._get_cached_schema(scoped_name)
         if not schema:
-            schema = self._fetch_and_cache_schema(scoped_name)
+            schema = self._fetch_and_cache_schema(collection_name)
 
         # Validate vector dimensions
         expected_dim = schema.get("size")
@@ -867,7 +891,7 @@ class AetherfyVectorsClient:
             # Pass If-Match header directly to the request
             self._make_request(
                 "PUT",
-                f"collections/{quote_collection_name(scoped_name)}/points",
+                self._build_collection_path(original_collection_name, "/points"),
                 data,
                 headers=extra_headers if extra_headers else None,
                 evict_caches_on_404=scoped_name,
@@ -915,7 +939,9 @@ class AetherfyVectorsClient:
 
                     self._make_request(
                         "PUT",
-                        f"collections/{quote_collection_name(scoped_name)}/points",
+                        self._build_collection_path(
+                            original_collection_name, "/points"
+                        ),
                         data,
                         headers=(extra_headers_retry if extra_headers_retry else None),
                         evict_caches_on_404=scoped_name,
@@ -967,7 +993,7 @@ class AetherfyVectorsClient:
 
         self._make_request(
             "POST",
-            f"collections/{quote_collection_name(scoped_name)}/points/delete",
+            self._build_collection_path(collection_name, "/points/delete"),
             data,
             evict_caches_on_404=scoped_name,
         )
@@ -1016,7 +1042,7 @@ class AetherfyVectorsClient:
             data["key"] = key
         response = self._make_request(
             "POST",
-            f"collections/{quote_collection_name(scoped_name)}/points/payload",
+            self._build_collection_path(collection_name, "/points/payload"),
             data,
             evict_caches_on_404=scoped_name,
         )
@@ -1041,7 +1067,7 @@ class AetherfyVectorsClient:
         data = {"payload": payload, "points": points}
         response = self._make_request(
             "PUT",
-            f"collections/{quote_collection_name(scoped_name)}/points/payload",
+            self._build_collection_path(collection_name, "/points/payload"),
             data,
             evict_caches_on_404=scoped_name,
         )
@@ -1065,7 +1091,7 @@ class AetherfyVectorsClient:
         data = {"keys": keys, "points": points}
         response = self._make_request(
             "POST",
-            f"collections/{quote_collection_name(scoped_name)}/points/payload/delete",
+            self._build_collection_path(collection_name, "/points/payload/delete"),
             data,
             evict_caches_on_404=scoped_name,
         )
@@ -1165,7 +1191,7 @@ class AetherfyVectorsClient:
         # /points can be unambiguously upsert (and stream-parsed).
         response = self._make_request(
             "POST",
-            f"collections/{quote_collection_name(scoped_name)}/points/retrieve",
+            self._build_collection_path(collection_name, "/points/retrieve"),
             data,
             evict_caches_on_404=scoped_name,
         )
@@ -1225,7 +1251,7 @@ class AetherfyVectorsClient:
 
         response = self._make_request(
             "POST",
-            f"collections/{quote_collection_name(scoped_name)}/points/search",
+            self._build_collection_path(collection_name, "/points/search"),
             data,
             evict_caches_on_404=scoped_name,
         )
@@ -1283,7 +1309,7 @@ class AetherfyVectorsClient:
 
         response = self._make_request(
             "POST",
-            f"collections/{quote_collection_name(scoped_name)}/points/scroll",
+            self._build_collection_path(collection_name, "/points/scroll"),
             data,
             evict_caches_on_404=scoped_name,
         )
@@ -1383,7 +1409,7 @@ class AetherfyVectorsClient:
 
         response = self._make_request(
             "POST",
-            f"collections/{quote_collection_name(scoped_name)}/points/count",
+            self._build_collection_path(collection_name, "/points/count"),
             data,
             evict_caches_on_404=scoped_name,
         )
