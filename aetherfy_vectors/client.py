@@ -5,6 +5,8 @@ Provides a drop-in replacement for qdrant-client with identical API
 that routes requests through the global vector database service.
 """
 
+import json
+import math
 import os
 from typing import List, Dict, Any, Iterator, Optional, Union
 import requests
@@ -34,7 +36,7 @@ from .exceptions import (
     SchemaNotFoundError,
     PartialUpsertError,
 )
-from .chunking import chunk_points_by_bytes, MAX_REQUEST_BYTES
+from .chunking import chunk_points_by_bytes, MAX_REQUEST_BYTES, point_wire_bytes
 from .schema import (
     Schema,
     FieldDefinition,
@@ -64,6 +66,23 @@ class AetherfyVectorsClient:
     DEFAULT_ENDPOINT = "https://vectors.aetherfy.com"
     DEFAULT_TIMEOUT = 30.0
     VALID_REGIONS = ("us-east-1", "eu-central-1", "ap-southeast-1")
+
+    # Body-aware timeout scaling. The default 30 s is fine for small
+    # requests, but a single upsert chunk can be 80 MB (MAX_REQUEST_BYTES
+    # in chunking.py) and that doesn't fit in 30 s on residential / WAN
+    # uplinks at 25 Mbps and below. Without scaling, requests aborts mid-
+    # upload, retry_with_backoff fires its 3 attempts, each timing out —
+    # the chunk lands in PartialUpsertError.failed even though the origin
+    # would have accepted it given enough time. Linear scaling above a
+    # small floor: cheap requests stay snappy, large uploads get the
+    # runway they need.
+    #
+    # Tuned for ~25 Mbps as the floor — at that bandwidth 1 MB takes
+    # ~320 ms, so +1 s/MB gives ~3× margin for TLS + server processing.
+    # Mirrors aetherfy-vectors-js-sdk/src/http/client.ts so the two SDKs
+    # carry the same timeout policy.
+    TIMEOUT_THRESHOLD_BYTES = 5 * 1024 * 1024
+    TIMEOUT_PER_MB_OVER_THRESHOLD_S = 1.0
 
     def __init__(
         self,
@@ -230,6 +249,53 @@ class AetherfyVectorsClient:
             )
         return cache[region]
 
+    def _estimate_body_bytes(self, data: Any) -> int:
+        """Fast estimate of JSON-serialized body size in bytes.
+
+        Used by _compute_body_aware_timeout to scale per-request timeouts
+        against the upload payload. Two paths:
+
+          - Upsert fast path: data is ``{"points": [...]}``. Sum
+            point_wire_bytes per point — O(1) per point, deterministic
+            upper bound, no full serialization. Matches what
+            chunk_points_by_bytes uses for sizing.
+          - Other paths: fall back to json.dumps length. These bodies are
+            typically small (search filters, scroll cursors) so the
+            extra serialization is cheap.
+
+        Returns 0 on unserializable input; caller treats that as
+        "use base timeout".
+        """
+        if data is None:
+            return 0
+        if isinstance(data, (bytes, bytearray)):
+            return len(data)
+        if isinstance(data, str):
+            return len(data.encode("utf-8"))
+        if isinstance(data, dict):
+            points = data.get("points")
+            if isinstance(points, list):
+                return sum(point_wire_bytes(p) for p in points)
+        try:
+            return len(json.dumps(data, separators=(",", ":")))
+        except (TypeError, ValueError):
+            return 0
+
+    def _compute_body_aware_timeout(self, data: Any) -> float:
+        """Compute the per-request timeout given the body's payload size.
+
+        Bodies up to TIMEOUT_THRESHOLD_BYTES use ``self.timeout``
+        unchanged; beyond that, add TIMEOUT_PER_MB_OVER_THRESHOLD_S for
+        each megabyte over the threshold. See the TIMEOUT_* class
+        constants for the rationale (and the JS SDK mirror in
+        aetherfy-vectors-js-sdk/src/http/client.ts).
+        """
+        body_bytes = self._estimate_body_bytes(data)
+        if body_bytes <= self.TIMEOUT_THRESHOLD_BYTES:
+            return self.timeout
+        mb_over = math.ceil((body_bytes - self.TIMEOUT_THRESHOLD_BYTES) / (1024 * 1024))
+        return self.timeout + mb_over * self.TIMEOUT_PER_MB_OVER_THRESHOLD_S
+
     def _create_session(self) -> requests.Session:
         """Create a requests Session with connection pooling and retry logic.
 
@@ -334,6 +400,16 @@ class AetherfyVectorsClient:
         """
         from .utils import retry_with_backoff
 
+        # Body-aware timeout for write methods: large upserts on slow
+        # uplinks need more runway than the 30 s default. Read methods
+        # always use the base timeout (their bodies are tiny). See
+        # _compute_body_aware_timeout / TIMEOUT_* class constants.
+        request_timeout = (
+            self._compute_body_aware_timeout(data)
+            if method in ("POST", "PUT") and data is not None
+            else self.timeout
+        )
+
         def make_single_request():
             url = build_api_url(self.endpoint, endpoint)
 
@@ -345,7 +421,7 @@ class AetherfyVectorsClient:
                     json=data if data is not None else None,
                     params=params,
                     headers=headers,  # Pass additional headers if provided
-                    timeout=self.timeout,
+                    timeout=request_timeout,
                 )
 
                 if response.status_code in [200, 201]:
@@ -363,7 +439,7 @@ class AetherfyVectorsClient:
 
             except requests.Timeout:
                 raise RequestTimeoutError(
-                    f"Request to {endpoint} timed out after {self.timeout} seconds"
+                    f"Request to {endpoint} timed out after {request_timeout} seconds"
                 )
             except requests.ConnectionError as e:
                 # Network connection errors should be retryable
