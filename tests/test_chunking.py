@@ -134,11 +134,13 @@ class TestChunkPointsByBytes:
             # the splitter broke.
             assert chunk_bytes < 50000 * 2
 
-    def test_max_request_bytes_is_80mb(self):
-        # Cloudflare default body cap is 100 MB on Free/Pro/Business.
-        # 80 MB gives 20 MB headroom for HTTP framing + JSON array
-        # overhead.
-        assert MAX_REQUEST_BYTES == 80 * 1024 * 1024
+    def test_max_request_bytes_is_24mb(self):
+        # Binding constraint is backend processing time, not the edge body
+        # cap: the server re-chunks each request into ~12 MB Qdrant
+        # sub-batches committed serially with wait=true inside a 90 s
+        # timeout, so 24 MB (~2 sub-batches) stays well under budget.
+        # See chunking.py for the full rationale.
+        assert MAX_REQUEST_BYTES == 24 * 1024 * 1024
 
 
 class TestPartialUpsertError:

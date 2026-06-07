@@ -68,7 +68,7 @@ class AetherfyVectorsClient:
     VALID_REGIONS = ("us-east-1", "eu-central-1", "ap-southeast-1")
 
     # Body-aware timeout scaling. The default 30 s is fine for small
-    # requests, but a single upsert chunk can be 80 MB (MAX_REQUEST_BYTES
+    # requests, but a single upsert chunk can be 24 MB (MAX_REQUEST_BYTES
     # in chunking.py) and that doesn't fit in 30 s on residential / WAN
     # uplinks at 25 Mbps and below. Without scaling, requests aborts mid-
     # upload, retry_with_backoff fires its 3 attempts, each timing out —
@@ -754,9 +754,9 @@ class AetherfyVectorsClient:
         """Insert or update points in a collection.
 
         Auto-chunks large batches into multiple HTTP requests to stay
-        under the per-request byte cap (~80 MB, sized for Cloudflare's
-        100 MB edge limit). Most batches fit in one chunk; the chunker
-        is transparent for small/medium upserts.
+        under the per-request byte cap (~24 MB, sized for the backend's
+        90 s processing budget under wait=true). Most batches fit in one
+        chunk; the chunker is transparent for small/medium upserts.
 
         Failure behaviour:
             - Transient errors (network blips, 5xx, 429) are auto-retried
@@ -874,7 +874,7 @@ class AetherfyVectorsClient:
 
         # Chunk by byte size. Most upserts produce a single chunk; the
         # multi-chunk path only fires for batches large enough to risk
-        # a 413 at Cloudflare's edge (~80+ MB JSON wire size).
+        # the backend's per-request processing budget (>~24 MB wire size).
         chunks = list(chunk_points_by_bytes(formatted_points, MAX_REQUEST_BYTES))
 
         if len(chunks) == 1:

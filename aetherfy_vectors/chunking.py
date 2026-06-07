@@ -19,21 +19,31 @@ Mirror of:
   - aetherfy-vectors-js-sdk/src/utils/chunking.ts (JS SDK, same target
     and primitives)
 
-with a threshold tuned to Cloudflare's edge limit instead of Qdrant's
-32 MB body cap.
+with a threshold tuned to the backend's per-request processing budget
+(see the MAX_REQUEST_BYTES note below) rather than Qdrant's 32 MB body cap.
 """
 
 import json
 from typing import Any, Iterator, List
 
 
-# Per-HTTP-request byte target. 80 MB leaves 20 MB headroom under
-# Cloudflare's default 100 MB cap for HTTP framing, headers, and the
-# `{"points": [...]}` array overhead. Conservative — empirical tests
-# show ~95 MB also passes, but the margin protects against framing
-# surprises (compressed transfer-encoding inflation, large headers,
-# etc.).
-MAX_REQUEST_BYTES = 80 * 1024 * 1024
+# Per-HTTP-request byte target. The binding constraint is NOT Cloudflare's
+# 100 MB body cap — it's the BACKEND'S PROCESSING TIME. The server re-chunks
+# each request into ~12 MB Qdrant sub-batches and writes them with
+# wait=true (Qdrant segment commit ~1-5 s each, serial) inside a 90 s
+# request timeout. An 80 MB request stacks ~7 commits and can exceed 90 s,
+# which the proxy/origin returns as a 5xx — the chunk then lands in
+# PartialUpsertError.failed. (wait=true is load-bearing: cross-region
+# replication retrieves points by ID and relies on committed <=> retrievable,
+# so it can't be relaxed.)
+#
+# 24 MB ~= 2 server sub-batches ~= well under the 90 s budget with wide
+# margin, and far under the 100 MB body cap. Larger upserts simply become
+# more (reliable) requests. Tunable down to ~12 MB (1 sub-batch/request)
+# for maximum margin if commits run slow under load.
+#
+# Mirror of aetherfy-vectors-js-sdk/src/utils/chunking.ts — keep in lockstep.
+MAX_REQUEST_BYTES = 24 * 1024 * 1024
 
 _FLOAT_JSON_BYTES = 18
 _POINT_FRAMING_BYTES = 100

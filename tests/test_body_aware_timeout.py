@@ -3,8 +3,8 @@ Tests for body-aware timeout scaling.
 
 Verifies that the per-request timeout grows with payload size for write
 methods (POST/PUT) so a single upsert chunk can complete on residential
-WAN uplinks. Without this, the default 30 s aborted ~80 MB chunks on
-~25 Mbps links — the SDK then retried 3 times, all timed out, and the
+WAN uplinks. Without this, the default 30 s aborted ~24 MB chunks on
+slow links — the SDK then retried 3 times, all timed out, and the
 chunk landed in PartialUpsertError.failed even though the origin would
 have accepted it given enough time.
 
