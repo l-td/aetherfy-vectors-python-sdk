@@ -35,17 +35,17 @@ class TestQdrantCompatibility:
         # Format 1: VectorConfig object
         config1 = VectorConfig(size=128, distance=DistanceMetric.COSINE)
         result1 = client.create_collection("test1", config1)
-        assert result1 is True
-        
+        assert result1.name == "test1"
+
         # Format 2: Dictionary format
         config2 = {"size": 256, "distance": "Euclidean"}
         result2 = client.create_collection("test2", config2)
-        assert result2 is True
-        
+        assert result2.name == "test2"
+
         # Format 3: With separate distance parameter (qdrant-client style)
         config3 = {"size": 512}
         result3 = client.create_collection("test3", config3, distance=DistanceMetric.DOT)
-        assert result3 is True
+        assert result3.name == "test3"
     
     def test_search_parameter_compatibility(self, client, mock_requests, mock_successful_response, sample_search_results):
         """Test search method parameter compatibility."""
@@ -309,11 +309,13 @@ class TestAPIResponseCompatibility:
         """Test that operations return boolean values as expected."""
         mock_requests.request.return_value = mock_successful_response({})
 
-        # These operations should return True on success (qdrant-client compatibility).
-        # Vector dim matches the size declared in create_collection — the schema
-        # cache is now seeded from that config, so the upsert validator enforces it.
+        # create_collection now returns the created Collection (not a bool);
+        # the remaining write ops still return True on success (qdrant-client
+        # compatibility). Vector dim matches the size declared in
+        # create_collection — the schema cache is now seeded from that config,
+        # so the upsert validator enforces it.
         config = VectorConfig(size=128, distance=DistanceMetric.COSINE)
-        assert client.create_collection("test", config) is True
+        assert client.create_collection("test", config).name == "test"
 
         points = [{"id": "1", "vector": [0.1] * 128}]
         assert client.upsert("test", points) is True

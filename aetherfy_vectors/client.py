@@ -88,7 +88,7 @@ class AetherfyVectorsClient:
         self,
         api_key: Optional[str] = None,
         endpoint: Optional[str] = None,
-        region: Optional[str] = None,
+        api_region: Optional[str] = None,
         timeout: float = DEFAULT_TIMEOUT,
         workspace: Optional[str] = None,
         **kwargs,
@@ -100,14 +100,21 @@ class AetherfyVectorsClient:
             endpoint: API endpoint URL. Resolution order:
                 1. Explicit ``endpoint`` argument.
                 2. ``AETHERFY_VECTORS_URL`` environment variable.
-                3. ``region`` argument (or ``AETHERFY_VECTORS_REGION``
+                3. ``api_region`` argument (or ``AETHERFY_VECTORS_API_REGION``
                    env var). Resolved via ``/api/v1/regions`` discovery
                    against the default global URL.
                 4. Default ``https://vectors.aetherfy.com``.
-            region: Region code ('us-east-1', 'eu-central-1', or
-                'ap-southeast-1'). For local development and debugging.
-                If ``AETHERFY_VECTORS_URL`` is also set, the env var
-                wins and a warning is logged.
+            api_region: Which regional API endpoint to CONNECT to
+                ('us-east-1', 'eu-central-1', or 'ap-southeast-1') — a
+                transport/routing override, NOT where collections live. In
+                the integrated product this is effectively ignored: the
+                control plane injects ``AETHERFY_VECTORS_URL`` on every agent
+                machine and an explicit URL always wins (a warning is logged
+                if both are set). It is load-bearing only for standalone
+                vectordb usage, local development, and debugging, where it
+                selects the regional endpoint. Distinct from a collection's
+                placement ``regions`` (``create_collection(regions=...)``) —
+                see REVIEW_FAQ §66.
             timeout: Request timeout in seconds (default: 30.0).
             workspace: Workspace name for multi-agent coordination.
                 - Set to 'auto' to auto-detect from ``AETHERFY_WORKSPACE`` environment variable
@@ -117,18 +124,18 @@ class AetherfyVectorsClient:
 
         Raises:
             AuthenticationError: If API key is invalid or missing.
-            ValueError: If ``region`` is not one of us-east-1/eu-central-1/ap-southeast-1.
+            ValueError: If ``api_region`` is not one of us-east-1/eu-central-1/ap-southeast-1.
             AetherfyVectorsException: If region discovery fails.
         """
-        # Validate region eagerly so a typo fails at construction, not on
-        # the first network round trip.
-        env_region = os.getenv("AETHERFY_VECTORS_REGION")
-        chosen_region = region if region is not None else env_region
+        # Validate the API-region override eagerly so a typo fails at
+        # construction, not on the first network round trip.
+        env_region = os.getenv("AETHERFY_VECTORS_API_REGION")
+        chosen_region = api_region if api_region is not None else env_region
         if chosen_region is not None and chosen_region not in self.VALID_REGIONS:
             raise ValueError(
-                f"region must be one of {self.VALID_REGIONS}, got {chosen_region!r}"
+                f"api_region must be one of {self.VALID_REGIONS}, got {chosen_region!r}"
             )
-        self.region: Optional[str] = chosen_region
+        self.api_region: Optional[str] = chosen_region
 
         # Cached /api/v1/regions response, populated lazily on first
         # discovery call. Per-instance (NOT module-global) — multiple
@@ -143,26 +150,26 @@ class AetherfyVectorsClient:
         self.auth_manager = APIKeyManager(api_key)
 
         # Endpoint resolution. Explicit `endpoint=` and AETHERFY_VECTORS_URL
-        # both bypass discovery entirely; region= triggers discovery only
+        # both bypass discovery entirely; api_region= triggers discovery only
         # when neither of the above is set, so a deployment-time env var
-        # always wins over a region= argument the caller may have left in
+        # always wins over an api_region= argument the caller may have left in
         # local-dev code.
         env_url = os.getenv("AETHERFY_VECTORS_URL")
         if endpoint is not None:
             resolved_endpoint = endpoint
         elif env_url is not None:
-            if self.region is not None:
+            if self.api_region is not None:
                 import logging
 
                 logging.getLogger(__name__).warning(
-                    "Both AETHERFY_VECTORS_URL and region=%s are set; using "
-                    "AETHERFY_VECTORS_URL — region= is a local-dev parameter, "
-                    "env var wins in production agents",
-                    self.region,
+                    "Both AETHERFY_VECTORS_URL and api_region=%s are set; using "
+                    "AETHERFY_VECTORS_URL — api_region= is a standalone/local-dev "
+                    "override, the injected URL wins in integrated agents",
+                    self.api_region,
                 )
             resolved_endpoint = env_url
-        elif self.region is not None:
-            resolved_endpoint = self._resolve_region_endpoint(self.region)
+        elif self.api_region is not None:
+            resolved_endpoint = self._resolve_region_endpoint(self.api_region)
         else:
             resolved_endpoint = self.DEFAULT_ENDPOINT
 
@@ -549,8 +556,9 @@ class AetherfyVectorsClient:
         vectors_config: Union[VectorConfig, Dict[str, Any]],
         distance: Optional[DistanceMetric] = None,
         description: Optional[str] = None,
+        regions: Optional[List[str]] = None,
         **kwargs,
-    ) -> bool:
+    ) -> "Collection":
         """Create a new collection.
 
         Args:
@@ -558,10 +566,18 @@ class AetherfyVectorsClient:
             vectors_config: Vector configuration or dict with size/distance.
             distance: Distance metric (deprecated, use vectors_config).
             description: Optional collection description (max 500 characters).
-            **kwargs: Additional parameters for compatibility.
+            regions: Optional explicit placement regions for this collection
+                (§66 per-collection scoping). Omit to default to your full
+                scope — the server resolves it and the returned Collection
+                echoes the explicit list. Pass a subset of your scope to pin
+                the collection to those regions. The list must be a subset of
+                your account/workspace scope; an empty list is rejected by the
+                server (422). Subset/empty validation is server-side. Distinct
+                from the client constructor's ``api_region`` (which endpoint to
+                connect to) — see REVIEW_FAQ §66.
 
         Returns:
-            True if collection was created successfully.
+            The created Collection, including its resolved ``regions`` list.
 
         Raises:
             ValidationError: If parameters are invalid.
@@ -606,13 +622,20 @@ class AetherfyVectorsClient:
         # POST /workspaces/{ws}/collections {name: bare, ...} for workspaced;
         # POST /collections {name: bare, ...} for workspaceless. vectordb
         # rejects any "/" in the body name.
-        data = {
+        data: Dict[str, Any] = {
             "name": collection_name,
             "vectors": config.to_dict(),
             "description": description,
         }
+        # §66: only send `regions` when the caller provided it. Omission
+        # triggers server-side resolve-on-omit (defaults to the full scope);
+        # an explicit empty list IS forwarded so the server returns its
+        # 422 COLLECTION_REGIONS_EMPTY, rather than the SDK silently treating
+        # [] as "all regions". Subset enforcement is the server's job.
+        if regions is not None:
+            data["regions"] = regions
 
-        self._make_request("POST", self._build_collections_list_path(), data)
+        response = self._make_request("POST", self._build_collections_list_path(), data)
 
         # Prepopulate the schema cache from the request we just authored.
         # GET /collections/<name> can be eventually consistent w.r.t. its
@@ -634,7 +657,19 @@ class AetherfyVectorsClient:
             "etag": None,
             "full_config": {"config": {"params": {"vectors": config.to_dict()}}},
         }
-        return True
+        # §66 Option SDK-B: echo the resolved placement to the caller. The
+        # create response carries the explicit `regions` the row was stored
+        # with — the full scope on omit, the caller's subset otherwise (and
+        # the existing row's stored list on an idempotent re-create).
+        resolved_regions = (
+            response.get("regions") if isinstance(response, dict) else None
+        )
+        return Collection(
+            name=collection_name,
+            config=config,
+            description=description,
+            regions=resolved_regions,
+        )
 
     def delete_collection(self, collection_name: str, **kwargs) -> bool:
         """Delete a collection.

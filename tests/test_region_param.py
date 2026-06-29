@@ -1,12 +1,12 @@
 """
-Tests for the WS9 region= constructor parameter and /api/v1/regions
+Tests for the WS9 api_region= constructor parameter and /api/v1/regions
 discovery client on AetherfyVectorsClient.
 
 Pins the contract:
-  - region= validates against the AWS set
+  - api_region= validates against the AWS set
     (us-east-1/eu-central-1/ap-southeast-1) at construction.
-  - region= triggers a single GET /api/v1/regions, cached per instance.
-  - AETHERFY_VECTORS_URL takes precedence over region= (logs a warning).
+  - api_region= triggers a single GET /api/v1/regions, cached per instance.
+  - AETHERFY_VECTORS_URL takes precedence over api_region= (logs a warning).
   - Discovery failure raises AetherfyVectorsException with a clear message.
 """
 
@@ -29,19 +29,19 @@ def _mock_regions_response(payload, status=200):
 class TestRegionParamValidation:
     def test_invalid_region_raises_at_construction(self, api_key, monkeypatch):
         monkeypatch.delenv("AETHERFY_VECTORS_URL", raising=False)
-        with pytest.raises(ValueError, match="region must be one of"):
-            AetherfyVectorsClient(api_key=api_key, region="us-west-2")
+        with pytest.raises(ValueError, match="api_region must be one of"):
+            AetherfyVectorsClient(api_key=api_key, api_region="us-west-2")
 
     def test_valid_region_via_env_var(self, api_key, monkeypatch):
         monkeypatch.delenv("AETHERFY_VECTORS_URL", raising=False)
-        monkeypatch.setenv("AETHERFY_VECTORS_REGION", "eu-central-1")
+        monkeypatch.setenv("AETHERFY_VECTORS_API_REGION", "eu-central-1")
         with patch("aetherfy_vectors.client.requests.get") as mock_get:
             mock_get.return_value = _mock_regions_response({
                 "us-east-1": "https://vectors-iad.aetherfy.run",
                 "eu-central-1": "https://vectors-fra.aetherfy.run",
             })
             client = AetherfyVectorsClient(api_key=api_key)
-            assert client.region == "eu-central-1"
+            assert client.api_region == "eu-central-1"
             assert client.endpoint == "https://vectors-fra.aetherfy.run"
 
 
@@ -54,7 +54,7 @@ class TestRegionDiscovery:
                 "eu-central-1": "https://vectors-fra.aetherfy.run",
                 "ap-southeast-1": "https://vectors-sin.aetherfy.run",
             })
-            client = AetherfyVectorsClient(api_key=api_key, region="eu-central-1")
+            client = AetherfyVectorsClient(api_key=api_key, api_region="eu-central-1")
             assert client.endpoint == "https://vectors-fra.aetherfy.run"
             assert mock_get.call_count == 1
             # Verify it hit the default global URL's /api/v1/regions.
@@ -71,8 +71,8 @@ class TestRegionDiscovery:
                 "us-east-1": "https://vectors-iad.aetherfy.run",
                 "eu-central-1": "https://vectors-fra.aetherfy.run",
             })
-            c1 = AetherfyVectorsClient(api_key=api_key, region="us-east-1")
-            c2 = AetherfyVectorsClient(api_key=api_key, region="eu-central-1")
+            c1 = AetherfyVectorsClient(api_key=api_key, api_region="us-east-1")
+            c2 = AetherfyVectorsClient(api_key=api_key, api_region="eu-central-1")
             # Each instance fetched independently — no module-global cache.
             assert mock_get.call_count == 2
             assert c1.endpoint != c2.endpoint
@@ -82,7 +82,7 @@ class TestRegionDiscovery:
         with patch("aetherfy_vectors.client.requests.get") as mock_get:
             mock_get.return_value = _mock_regions_response({}, status=500)
             with pytest.raises(AetherfyVectorsException, match="discovery returned 500"):
-                AetherfyVectorsClient(api_key=api_key, region="eu-central-1")
+                AetherfyVectorsClient(api_key=api_key, api_region="eu-central-1")
 
     def test_discovery_missing_region_raises(self, api_key, monkeypatch):
         monkeypatch.delenv("AETHERFY_VECTORS_URL", raising=False)
@@ -91,22 +91,22 @@ class TestRegionDiscovery:
                 "us-east-1": "https://vectors-iad.aetherfy.run",
             })
             with pytest.raises(AetherfyVectorsException, match="not configured at the discovery endpoint"):
-                AetherfyVectorsClient(api_key=api_key, region="eu-central-1")
+                AetherfyVectorsClient(api_key=api_key, api_region="eu-central-1")
 
 
 class TestEnvVarPrecedence:
     def test_env_var_wins_over_region_param(self, api_key, monkeypatch, caplog):
         # AETHERFY_VECTORS_URL is the production-agent injection from the
-        # control-plane. region= is a local-dev knob. Env var must win
+        # control-plane. api_region= is a local-dev knob. Env var must win
         # and a warning must be logged so a developer accidentally
         # hitting this in prod sees it.
         monkeypatch.setenv("AETHERFY_VECTORS_URL", "http://10.0.10.243:3000")
         import logging
         caplog.set_level(logging.WARNING, logger="aetherfy_vectors.client")
-        client = AetherfyVectorsClient(api_key=api_key, region="eu-central-1")
+        client = AetherfyVectorsClient(api_key=api_key, api_region="eu-central-1")
         assert client.endpoint == "http://10.0.10.243:3000"
         assert any(
-            "AETHERFY_VECTORS_URL" in rec.getMessage() and "region=" in rec.getMessage()
+            "AETHERFY_VECTORS_URL" in rec.getMessage() and "api_region=" in rec.getMessage()
             for rec in caplog.records
         )
 
@@ -116,7 +116,7 @@ class TestEnvVarPrecedence:
             client = AetherfyVectorsClient(
                 api_key=api_key,
                 endpoint="http://localhost:3000",
-                region="eu-central-1",
+                api_region="eu-central-1",
             )
             # Explicit endpoint wins; no discovery call.
             assert client.endpoint == "http://localhost:3000"

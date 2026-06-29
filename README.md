@@ -484,27 +484,31 @@ Relevant environment variables:
 | `AETHERFY_API_KEY` | Primary API key |
 | `AETHERFY_VECTORS_API_KEY` | Alternative API key (useful when the same process talks to multiple Aetherfy services) |
 | `AETHERFY_WORKSPACE` | Used when the client is constructed with `workspace="auto"` (set automatically on deployed agents) |
-| `AETHERFY_VECTORS_URL` | Pin the client to a specific endpoint URL. Set automatically by the control-plane on deployed agents. Wins over `region=` if both are set. |
-| `AETHERFY_VECTORS_REGION` | Equivalent to `region=` constructor arg. Local-dev / debugging only. |
+| `AETHERFY_VECTORS_URL` | Pin the client to a specific endpoint URL. Set automatically by the control-plane on deployed agents. Wins over `api_region=` if both are set. |
+| `AETHERFY_VECTORS_API_REGION` | Equivalent to `api_region=` constructor arg. Local-dev / debugging only. |
 
 ### Local development across regions
 
 Production agents have `AETHERFY_VECTORS_URL` injected by the control-plane —
 that's the URL they reach the regional backend through, and it takes
-precedence over `region=`. For local development (no env var injected),
-you can pin a client to a specific region:
+precedence over `api_region=`. For local development (no env var injected),
+you can pin a client to a specific regional endpoint:
 
 ```python
 client = AetherfyVectorsClient(
     api_key="afy_test_...",
-    region="eu-central-1",  # 'us-east-1' | 'eu-central-1' | 'ap-southeast-1'
+    api_region="eu-central-1",  # 'us-east-1' | 'eu-central-1' | 'ap-southeast-1'
 )
 ```
 
-The first call resolves `region` against `GET /api/v1/regions` on the
+The first call resolves `api_region` against `GET /api/v1/regions` on the
 default global endpoint and caches the result on the client instance.
-If both `AETHERFY_VECTORS_URL` and `region=` are set, the env var wins
+If both `AETHERFY_VECTORS_URL` and `api_region=` are set, the env var wins
 and a warning is logged — that's the production-agent protection rule.
+
+`api_region` selects *which regional endpoint to connect to* — it is a
+transport/routing override, not where a collection's data lives. To control
+collection placement, pass `regions=` to `create_collection` (see below).
 
 ### Python Version Support
 
@@ -517,8 +521,12 @@ and a warning is logged — that's the production-agent protection rule.
 ### Collection Management
 
 ```python
-# Create collection
-client.create_collection(name, vectors_config, distance=None)
+# Create collection — returns the created Collection (with its resolved
+# `regions` echoed back by the server). Pass `regions=[...]` to pin the
+# collection to a subset of your scope; omit it to default to your full
+# scope. (Distinct from the constructor's `api_region`, which only picks
+# the endpoint to connect to.)
+collection = client.create_collection(name, vectors_config, distance=None, regions=None)
 
 # List collections
 collections = client.get_collections()

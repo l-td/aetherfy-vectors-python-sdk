@@ -10,7 +10,9 @@ from unittest.mock import Mock, patch
 import requests
 
 from aetherfy_vectors import AetherfyVectorsClient
-from aetherfy_vectors.models import VectorConfig, DistanceMetric, Point, SearchResult
+from aetherfy_vectors.models import (
+    VectorConfig, DistanceMetric, Point, SearchResult, Collection
+)
 from aetherfy_vectors.exceptions import (
     AuthenticationError, ValidationError, CollectionNotFoundError,
     RequestTimeoutError, CollectionInUseError
@@ -90,8 +92,8 @@ class TestCollectionManagement:
         
         config = VectorConfig(size=128, distance=DistanceMetric.COSINE)
         result = client.create_collection("test_collection", config)
-        
-        assert result is True
+
+        assert result.name == "test_collection"
         mock_requests.request.assert_called_once()
         args, kwargs = mock_requests.request.call_args
         assert kwargs["method"] == "POST"
@@ -106,7 +108,7 @@ class TestCollectionManagement:
         config = {"size": 256, "distance": "Euclidean"}
         result = client.create_collection("test_collection", config)
 
-        assert result is True
+        assert result.name == "test_collection"
         args, kwargs = mock_requests.request.call_args
         assert kwargs["json"]["vectors"]["size"] == 256
         assert kwargs["json"]["vectors"]["distance"] == "Euclidean"
@@ -119,7 +121,7 @@ class TestCollectionManagement:
         description = "Test collection for product embeddings"
         result = client.create_collection("test_collection", config, description=description)
 
-        assert result is True
+        assert result.name == "test_collection"
         args, kwargs = mock_requests.request.call_args
         assert kwargs["json"]["name"] == "test_collection"
         assert kwargs["json"]["description"] == description
@@ -131,10 +133,65 @@ class TestCollectionManagement:
         config = VectorConfig(size=128, distance=DistanceMetric.COSINE)
         result = client.create_collection("test_collection", config)
 
-        assert result is True
+        assert result.name == "test_collection"
         args, kwargs = mock_requests.request.call_args
         assert kwargs["json"]["description"] is None
-    
+
+    def test_create_collection_regions_omitted_no_body_key(
+        self, client, mock_requests, mock_successful_response
+    ):
+        """§66 SDK-B: omitting `regions` sends NO `regions` key in the body.
+
+        Omission triggers server-side resolve-on-omit (defaults to the full
+        scope). The created Collection echoes whatever the server returned in
+        its response body — here the full default scope.
+        """
+        mock_requests.request.return_value = mock_successful_response(
+            {"regions": ["us-east-1", "eu-central-1", "ap-southeast-1"]}
+        )
+
+        config = VectorConfig(size=128, distance=DistanceMetric.COSINE)
+        result = client.create_collection("test_collection", config)
+
+        args, kwargs = mock_requests.request.call_args
+        assert "regions" not in kwargs["json"]
+        # Server-echoed placement surfaces on the returned Collection.
+        assert isinstance(result, Collection)
+        assert result.regions == ["us-east-1", "eu-central-1", "ap-southeast-1"]
+
+    def test_create_collection_regions_explicit_subset(
+        self, client, mock_requests, mock_successful_response
+    ):
+        """An explicit subset is forwarded verbatim and echoed back."""
+        mock_requests.request.return_value = mock_successful_response(
+            {"regions": ["us-east-1"]}
+        )
+
+        config = VectorConfig(size=128, distance=DistanceMetric.COSINE)
+        result = client.create_collection(
+            "test_collection", config, regions=["us-east-1"]
+        )
+
+        args, kwargs = mock_requests.request.call_args
+        assert kwargs["json"]["regions"] == ["us-east-1"]
+        assert result.regions == ["us-east-1"]
+
+    def test_create_collection_regions_explicit_empty_list(
+        self, client, mock_requests, mock_successful_response
+    ):
+        """An explicit empty list IS forwarded — the SDK does not omit it.
+
+        The server is what rejects an empty list (422 COLLECTION_REGIONS_EMPTY);
+        the SDK must not silently swallow `[]` or treat it as "all regions".
+        """
+        mock_requests.request.return_value = mock_successful_response({})
+
+        config = VectorConfig(size=128, distance=DistanceMetric.COSINE)
+        client.create_collection("test_collection", config, regions=[])
+
+        args, kwargs = mock_requests.request.call_args
+        assert kwargs["json"]["regions"] == []
+
     def test_delete_collection_success(self, client, mock_requests, mock_successful_response):
         """Test successful collection deletion."""
         mock_requests.request.return_value = mock_successful_response({})

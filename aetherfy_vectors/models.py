@@ -76,6 +76,10 @@ class Collection:
     description: Optional[str] = None
     points_count: Optional[int] = None
     status: Optional[str] = None
+    # §66 per-collection placement regions. Populated on create (the resolved
+    # list the server echoes) and on get_collection. None when the server
+    # didn't report it (older backend / non-regional response).
+    regions: Optional[List[str]] = None
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Collection":
@@ -94,6 +98,7 @@ class Collection:
             description=data.get("description"),
             points_count=data.get("points_count"),
             status=data.get("status"),
+            regions=data.get("regions"),
         )
 
 
