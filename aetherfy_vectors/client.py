@@ -113,8 +113,9 @@ class AetherfyVectorsClient:
                 if both are set). It is load-bearing only for standalone
                 vectordb usage, local development, and debugging, where it
                 selects the regional endpoint. Distinct from a collection's
-                placement ``regions`` (``create_collection(regions=...)``) —
-                see REVIEW_FAQ §66.
+                placement ``regions`` (``create_collection(regions=...)``).
+                See REVIEW_FAQ §67 (api_region routing rationale) and §66
+                (per-collection placement).
             timeout: Request timeout in seconds (default: 30.0).
             workspace: Workspace name for multi-agent coordination.
                 - Set to 'auto' to auto-detect from ``AETHERFY_WORKSPACE`` environment variable
@@ -574,7 +575,7 @@ class AetherfyVectorsClient:
                 your account/workspace scope; an empty list is rejected by the
                 server (422). Subset/empty validation is server-side. Distinct
                 from the client constructor's ``api_region`` (which endpoint to
-                connect to) — see REVIEW_FAQ §66.
+                connect to — §67) — see REVIEW_FAQ §66.
 
         Returns:
             The created Collection, including its resolved ``regions`` list.
