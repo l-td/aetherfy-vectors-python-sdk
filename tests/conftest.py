@@ -30,18 +30,15 @@ def client(api_key, test_endpoint, mock_requests):
 
     Note: mock_requests is a dependency to ensure requests are mocked before client init.
     """
-    return AetherfyVectorsClient(
-        api_key=api_key,
-        endpoint=test_endpoint,
-        timeout=10.0
-    )
+    return AetherfyVectorsClient(api_key=api_key, endpoint=test_endpoint, timeout=10.0)
 
 
 @pytest.fixture
 def mock_requests():
     """Mock requests module for testing."""
     import requests
-    with patch('aetherfy_vectors.client.requests') as mock:
+
+    with patch("aetherfy_vectors.client.requests") as mock:
         # Ensure exception classes are properly set up
         mock.Timeout = requests.Timeout
         mock.RequestException = requests.RequestException
@@ -54,9 +51,9 @@ def mock_requests():
         def session_request_wrapper(*args, **kwargs):
             # Merge session headers with request headers
             merged_headers = mock_session.headers.copy()
-            if 'headers' in kwargs and kwargs['headers']:
-                merged_headers.update(kwargs['headers'])
-            kwargs['headers'] = merged_headers
+            if "headers" in kwargs and kwargs["headers"]:
+                merged_headers.update(kwargs["headers"])
+            kwargs["headers"] = merged_headers
             return mock.request(*args, **kwargs)
 
         mock_session.request = session_request_wrapper
@@ -85,24 +82,28 @@ def sample_collection():
         name="test_collection",
         config=VectorConfig(size=128, distance=DistanceMetric.COSINE),
         points_count=100,
-        status="green"
+        status="green",
     )
 
 
 @pytest.fixture
 def sample_points():
-    """Sample points data fixture."""
+    """Sample points data fixture.
+
+    Point ids are unsigned integers — the wire-valid form. Arbitrary
+    strings like "point_1" are rejected client-side by validate_point_id.
+    """
     return [
         {
-            "id": "point_1",
+            "id": 1,
             "vector": [0.1, 0.2, 0.3, 0.4],
-            "payload": {"category": "test", "value": 42}
+            "payload": {"category": "test", "value": 42},
         },
         {
-            "id": "point_2", 
+            "id": 2,
             "vector": [0.5, 0.6, 0.7, 0.8],
-            "payload": {"category": "example", "value": 84}
-        }
+            "payload": {"category": "example", "value": 84},
+        },
     ]
 
 
@@ -114,37 +115,40 @@ def sample_search_results():
             "id": "point_1",
             "score": 0.95,
             "payload": {"category": "test", "value": 42},
-            "vector": [0.1, 0.2, 0.3, 0.4]
+            "vector": [0.1, 0.2, 0.3, 0.4],
         },
         {
             "id": "point_2",
             "score": 0.87,
             "payload": {"category": "example", "value": 84},
-            "vector": [0.5, 0.6, 0.7, 0.8]
-        }
+            "vector": [0.5, 0.6, 0.7, 0.8],
+        },
     ]
 
 
 @pytest.fixture
 def mock_successful_response():
     """Mock successful HTTP response."""
+
     def _create_response(data: Dict[str, Any], status_code: int = 200):
         mock_response = Mock()
         mock_response.status_code = status_code
         mock_response.json.return_value = data
         mock_response.content = True
         return mock_response
+
     return _create_response
 
 
 @pytest.fixture
 def mock_error_response():
     """Mock error HTTP response."""
+
     def _create_error_response(
         message: str = "Test error",
         status_code: int = 400,
         error_code: str = "test_error",
-        request_id: str = "req_123"
+        request_id: str = "req_123",
     ):
         mock_response = Mock()
         mock_response.status_code = status_code
@@ -152,10 +156,11 @@ def mock_error_response():
             "message": message,
             "error_code": error_code,
             "request_id": request_id,
-            "details": {}
+            "details": {},
         }
         mock_response.content = True
         return mock_response
+
     return _create_error_response
 
 
@@ -170,10 +175,10 @@ def sample_performance_analytics():
         "region_performance": {
             "us-east-1": {"latency_ms": 20.1, "requests_per_second": 60.0},
             "eu-central-1": {"latency_ms": 25.3, "requests_per_second": 45.0},
-            "ap-southeast-1": {"latency_ms": 28.7, "requests_per_second": 45.0}
+            "ap-southeast-1": {"latency_ms": 28.7, "requests_per_second": 45.0},
         },
         "total_requests": 129600,
-        "error_rate": 0.002
+        "error_rate": 0.002,
     }
 
 
@@ -187,7 +192,7 @@ def sample_collection_analytics():
         "avg_search_latency_ms": 18.5,
         "cache_hit_rate": 0.92,
         "top_regions": ["us-east-1", "eu-central-1"],
-        "storage_size_mb": 45.2
+        "storage_size_mb": 45.2,
     }
 
 
@@ -203,7 +208,7 @@ def sample_usage_stats():
         "max_requests_per_month": 100000,
         "storage_used_mb": 250.5,
         "max_storage_mb": 1000.0,
-        "plan_name": "Professional"
+        "plan_name": "Professional",
     }
 
 
@@ -211,15 +216,16 @@ def sample_usage_stats():
 def reset_environment():
     """Reset environment variables before each test."""
     import os
+
     original_env = os.environ.copy()
-    
+
     # Remove any API key environment variables
     for key in ["AETHERFY_API_KEY", "AETHERFY_VECTORS_API_KEY"]:
         if key in os.environ:
             del os.environ[key]
-    
+
     yield
-    
+
     # Restore original environment
     os.environ.clear()
     os.environ.update(original_env)
@@ -227,46 +233,57 @@ def reset_environment():
 
 class MockAnalyticsClient:
     """Mock analytics client for testing."""
-    
-    def __init__(self, base_url: str, auth_headers: Dict[str, str], timeout: float = 30.0):
+
+    def __init__(
+        self, base_url: str, auth_headers: Dict[str, str], timeout: float = 30.0
+    ):
         self.base_url = base_url
         self.auth_headers = auth_headers
         self.timeout = timeout
-    
+
     def get_performance_analytics(self, time_range: str = "24h", region: str = None):
         from aetherfy_vectors.models import PerformanceAnalytics
-        return PerformanceAnalytics.from_dict({
-            "cache_hit_rate": 0.85,
-            "avg_latency_ms": 23.5,
-            "requests_per_second": 150.0,
-            "active_regions": ["us-east-1", "eu-central-1"],
-            "region_performance": {}
-        })
-    
+
+        return PerformanceAnalytics.from_dict(
+            {
+                "cache_hit_rate": 0.85,
+                "avg_latency_ms": 23.5,
+                "requests_per_second": 150.0,
+                "active_regions": ["us-east-1", "eu-central-1"],
+                "region_performance": {},
+            }
+        )
+
     def get_collection_analytics(self, collection_name: str, time_range: str = "24h"):
         from aetherfy_vectors.models import CollectionAnalytics
-        return CollectionAnalytics.from_dict({
-            "collection_name": collection_name,
-            "total_points": 1000,
-            "search_requests": 500,
-            "avg_search_latency_ms": 18.5,
-            "cache_hit_rate": 0.92,
-            "top_regions": ["us-east-1"]
-        })
-    
+
+        return CollectionAnalytics.from_dict(
+            {
+                "collection_name": collection_name,
+                "total_points": 1000,
+                "search_requests": 500,
+                "avg_search_latency_ms": 18.5,
+                "cache_hit_rate": 0.92,
+                "top_regions": ["us-east-1"],
+            }
+        )
+
     def get_usage_stats(self):
         from aetherfy_vectors.models import UsageStats
-        return UsageStats.from_dict({
-            "current_collections": 5,
-            "max_collections": 10,
-            "current_points": 50000,
-            "max_points": 100000,
-            "requests_this_month": 25000,
-            "max_requests_per_month": 100000,
-            "storage_used_mb": 250.5,
-            "max_storage_mb": 1000.0,
-            "plan_name": "Professional"
-        })
+
+        return UsageStats.from_dict(
+            {
+                "current_collections": 5,
+                "max_collections": 10,
+                "current_points": 50000,
+                "max_points": 100000,
+                "requests_this_month": 25000,
+                "max_requests_per_month": 100000,
+                "storage_used_mb": 250.5,
+                "max_storage_mb": 1000.0,
+                "plan_name": "Professional",
+            }
+        )
 
 
 @pytest.fixture

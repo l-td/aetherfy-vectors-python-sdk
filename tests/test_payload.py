@@ -17,6 +17,15 @@ from aetherfy_vectors.exceptions import (
 )
 
 
+# Point-id fixtures — must be valid ids (unsigned integer or UUID string);
+# arbitrary strings like "p1" now throw client-side before the request fires.
+# The point-id-validator tests below patch validate_point_id, so they keep
+# using "p1"/42 to assert the raw call args.
+P1 = "550e8400-e29b-41d4-a716-446655440001"
+P2 = "550e8400-e29b-41d4-a716-446655440002"
+MISSING = "550e8400-e29b-41d4-a716-446655440099"
+
+
 def _make_client():
     client = AetherfyVectorsClient.__new__(AetherfyVectorsClient)
     client.workspace = None
@@ -29,13 +38,13 @@ def _make_client():
 
 def test_set_payload_posts_to_payload_endpoint_with_correct_body():
     client = _make_client()
-    out = client.set_payload("col", {"tag": "new"}, ["p1", "p2"])
+    out = client.set_payload("col", {"tag": "new"}, [P1, P2])
 
     method, path = client._make_request.call_args.args[:2]
     body = client._make_request.call_args.args[2]
     assert method == "POST"
     assert path == "collections/col/points/payload"
-    assert body == {"payload": {"tag": "new"}, "points": ["p1", "p2"]}
+    assert body == {"payload": {"tag": "new"}, "points": [P1, P2]}
     assert out == {"status": "ok"}
 
 
@@ -44,13 +53,13 @@ def test_set_payload_posts_to_payload_endpoint_with_correct_body():
 
 def test_overwrite_payload_uses_put():
     client = _make_client()
-    client.overwrite_payload("col", {"only": "this"}, ["p1"])
+    client.overwrite_payload("col", {"only": "this"}, [P1])
 
     method, path = client._make_request.call_args.args[:2]
     body = client._make_request.call_args.args[2]
     assert method == "PUT"
     assert path == "collections/col/points/payload"
-    assert body == {"payload": {"only": "this"}, "points": ["p1"]}
+    assert body == {"payload": {"only": "this"}, "points": [P1]}
 
 
 # ---------- delete_payload --------------------------------------------------
@@ -58,13 +67,13 @@ def test_overwrite_payload_uses_put():
 
 def test_delete_payload_posts_to_payload_delete_with_keys_and_points_body():
     client = _make_client()
-    client.delete_payload("col", ["old_tag", "old_meta"], ["p1", "p2"])
+    client.delete_payload("col", ["old_tag", "old_meta"], [P1, P2])
 
     method, path = client._make_request.call_args.args[:2]
     body = client._make_request.call_args.args[2]
     assert method == "POST"
     assert path == "collections/col/points/payload/delete"
-    assert body == {"keys": ["old_tag", "old_meta"], "points": ["p1", "p2"]}
+    assert body == {"keys": ["old_tag", "old_meta"], "points": [P1, P2]}
 
 
 # ---------- validators ------------------------------------------------------
@@ -102,18 +111,18 @@ def test_delete_payload_validates_each_point_id():
 
 def test_set_payload_with_key_includes_key_in_body():
     client = _make_client()
-    client.set_payload("col", {"a": 1}, ["p1"], key="metadata")
+    client.set_payload("col", {"a": 1}, [P1], key="metadata")
     body = client._make_request.call_args.args[2]
     assert body == {
         "payload": {"a": 1},
-        "points": ["p1"],
+        "points": [P1],
         "key": "metadata",
     }
 
 
 def test_set_payload_without_key_omits_key_field():
     client = _make_client()
-    client.set_payload("col", {"a": 1}, ["p1"])
+    client.set_payload("col", {"a": 1}, [P1])
     body = client._make_request.call_args.args[2]
     assert "key" not in body
 
@@ -123,13 +132,13 @@ def test_set_payload_without_key_omits_key_field():
 
 def test_merge_metadata_calls_set_payload_with_metadata_key():
     client = _make_client()
-    client.merge_metadata("col", "p1", {"tag": "x"})
+    client.merge_metadata("col", P1, {"tag": "x"})
 
     method, path = client._make_request.call_args.args[:2]
     body = client._make_request.call_args.args[2]
     assert method == "POST"
     assert path == "collections/col/points/payload"
-    assert body == {"payload": {"tag": "x"}, "points": ["p1"], "key": "metadata"}
+    assert body == {"payload": {"tag": "x"}, "points": [P1], "key": "metadata"}
 
 
 def test_merge_metadata_rejects_non_dict():
@@ -144,8 +153,8 @@ def test_merge_metadata_translates_404_to_point_not_found():
         "Not found", status_code=404
     )
     with pytest.raises(PointNotFoundError) as excinfo:
-        client.merge_metadata("col", "missing", {"a": 1})
-    assert excinfo.value.point_id == "missing"
+        client.merge_metadata("col", MISSING, {"a": 1})
+    assert excinfo.value.point_id == MISSING
     assert excinfo.value.collection_name == "col"
 
 
@@ -154,7 +163,7 @@ def test_merge_metadata_translates_404_to_point_not_found():
 
 def test_delete_metadata_keys_dotted_path_and_body():
     client = _make_client()
-    client.delete_metadata_keys("col", "p1", ["k1", "k2"])
+    client.delete_metadata_keys("col", P1, ["k1", "k2"])
 
     method, path = client._make_request.call_args.args[:2]
     body = client._make_request.call_args.args[2]
@@ -162,7 +171,7 @@ def test_delete_metadata_keys_dotted_path_and_body():
     assert path == "collections/col/points/payload/delete"
     assert body == {
         "keys": ["metadata.k1", "metadata.k2"],
-        "points": ["p1"],
+        "points": [P1],
     }
 
 
@@ -184,6 +193,6 @@ def test_delete_metadata_keys_translates_404_to_point_not_found():
         "Not found", status_code=404
     )
     with pytest.raises(PointNotFoundError) as excinfo:
-        client.delete_metadata_keys("col", "missing", ["k1"])
-    assert excinfo.value.point_id == "missing"
+        client.delete_metadata_keys("col", MISSING, ["k1"])
+    assert excinfo.value.point_id == MISSING
     assert excinfo.value.collection_name == "col"

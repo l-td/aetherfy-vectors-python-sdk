@@ -5,6 +5,7 @@ on:
     branches: [ main, develop ]
     paths:
       - 'aetherfy_vectors/**'
+      - 'aetherfy_memory/**'
       - 'tests/**'
       - 'setup.py'
       - 'requirements*.txt'
@@ -13,6 +14,7 @@ on:
     branches: [ main, develop ]
     paths:
       - 'aetherfy_vectors/**'
+      - 'aetherfy_memory/**'
       - 'tests/**'
       - 'setup.py'
       - 'requirements*.txt'
@@ -44,21 +46,21 @@ jobs:
     - name: Lint with flake8
       run: |
         # Stop the build if there are Python syntax errors or undefined names
-        flake8 aetherfy_vectors --count --select=E9,F63,F7,F82 --show-source --statistics
+        flake8 aetherfy_vectors aetherfy_memory --count --select=E9,F63,F7,F82 --show-source --statistics
         # Exit-zero treats all errors as warnings
-        flake8 aetherfy_vectors --count --exit-zero --max-complexity=10 --max-line-length=88 --statistics
+        flake8 aetherfy_vectors aetherfy_memory --count --exit-zero --max-complexity=10 --max-line-length=88 --statistics
 
     - name: Check code formatting with black
       run: |
-        black --check aetherfy_vectors/
+        black --check aetherfy_vectors/ aetherfy_memory/
 
     - name: Type check with mypy
       run: |
-        mypy aetherfy_vectors/
+        mypy aetherfy_vectors/ aetherfy_memory/
 
     - name: Test with pytest
       run: |
-        pytest tests/ -v --cov=aetherfy_vectors --cov-report=xml --cov-report=term-missing
+        pytest tests/ -v --cov=aetherfy_vectors --cov=aetherfy_memory --cov-report=xml --cov-report=term-missing
 
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v3

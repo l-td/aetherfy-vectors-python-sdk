@@ -57,10 +57,10 @@ client.create_collection(
     VectorConfig(size=128, distance=DistanceMetric.COSINE)
 )
 
-# Add vectors
+# Add vectors — a point id is an unsigned integer (<= 2**53 - 1) or a UUID string
 points = [
     {
-        "id": "doc_1",
+        "id": 1,
         "vector": [0.1, 0.2, ...],  # 128-dimensional vector
         "payload": {"title": "Document 1", "category": "research"}
     }

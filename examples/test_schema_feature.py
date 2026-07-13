@@ -75,17 +75,17 @@ def main():
     try:
         sample_data = [
             Point(
-                id="product_1",
+                id=1,
                 vector=[0.1, 0.2, 0.3],
                 payload={"price": 100, "name": "Product A", "category": "electronics"}
             ),
             Point(
-                id="product_2",
+                id=2,
                 vector=[0.4, 0.5, 0.6],
                 payload={"price": 200, "name": "Product B", "category": "electronics"}
             ),
             Point(
-                id="product_3",
+                id=3,
                 vector=[0.7, 0.8, 0.9],
                 payload={"price": "300", "name": "Product C"}  # Intentional type mismatch for price
             ),
@@ -151,7 +151,7 @@ def main():
     print_section("Step 5: Test Valid Insert")
     try:
         valid_point = Point(
-            id="product_4",
+            id=4,
             vector=[0.1, 0.1, 0.1],
             payload={"price": 400, "name": "Product D", "category": "books"}
         )
@@ -170,7 +170,7 @@ def main():
     print_section("Step 6: Test Invalid Insert (Type Mismatch)")
     try:
         invalid_point = Point(
-            id="product_5",
+            id=5,
             vector=[0.2, 0.2, 0.2],
             payload={"price": "five hundred", "name": "Product E"}  # price should be integer
         )
@@ -193,7 +193,7 @@ def main():
     print_section("Step 7: Test Invalid Insert (Missing Required Field)")
     try:
         invalid_point = Point(
-            id="product_6",
+            id=6,
             vector=[0.3, 0.3, 0.3],
             payload={"price": 600}  # missing required 'name' field
         )
@@ -236,7 +236,7 @@ def main():
 
         # Now invalid data should be allowed
         invalid_point = Point(
-            id="product_7",
+            id=7,
             vector=[0.4, 0.4, 0.4],
             payload={"price": "seven hundred", "name": "Product G"}
         )

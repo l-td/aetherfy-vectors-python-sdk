@@ -17,18 +17,16 @@ class TestWorkspaceInitialization:
     def test_workspace_manual_setting(self):
         """Test setting workspace manually."""
         client = AetherfyVectorsClient(
-            api_key="afy_test_1234567890123456",
-            workspace="my-workspace"
+            api_key="afy_test_1234567890123456", workspace="my-workspace"
         )
 
         assert client.workspace == "my-workspace"
 
     def test_workspace_auto_detection(self):
         """Test workspace='auto' reads from environment."""
-        with patch.dict(os.environ, {'AETHERFY_WORKSPACE': 'env-workspace'}):
+        with patch.dict(os.environ, {"AETHERFY_WORKSPACE": "env-workspace"}):
             client = AetherfyVectorsClient(
-                api_key="afy_test_1234567890123456",
-                workspace='auto'
+                api_key="afy_test_1234567890123456", workspace="auto"
             )
 
             assert client.workspace == "env-workspace"
@@ -37,8 +35,7 @@ class TestWorkspaceInitialization:
         """Test workspace='auto' when env var not set."""
         with patch.dict(os.environ, {}, clear=True):
             client = AetherfyVectorsClient(
-                api_key="afy_test_1234567890123456",
-                workspace='auto'
+                api_key="afy_test_1234567890123456", workspace="auto"
             )
 
             assert client.workspace is None
@@ -56,8 +53,7 @@ class TestCollectionScoping:
     def test_scope_collection_with_workspace(self):
         """Test scoping collection name with workspace."""
         client = AetherfyVectorsClient(
-            api_key="afy_test_1234567890123456",
-            workspace="my-workspace"
+            api_key="afy_test_1234567890123456", workspace="my-workspace"
         )
 
         scoped = client._scope_collection("documents")
@@ -83,8 +79,7 @@ class TestVectorOperationsWithWorkspace:
     def mock_client(self):
         """Create a client with mocked HTTP session."""
         client = AetherfyVectorsClient(
-            api_key="afy_test_1234567890123456",
-            workspace="test-workspace"
+            api_key="afy_test_1234567890123456", workspace="test-workspace"
         )
         client._make_request = Mock()
         yield client
@@ -94,9 +89,7 @@ class TestVectorOperationsWithWorkspace:
         mock_client._make_request.return_value = {"result": []}
 
         mock_client.search(
-            collection_name="documents",
-            query_vector=[0.1, 0.2, 0.3],
-            limit=10
+            collection_name="documents", query_vector=[0.1, 0.2, 0.3], limit=10
         )
 
         # Verify the request was made with scoped collection in URL
@@ -114,9 +107,7 @@ class TestVectorOperationsWithWorkspace:
 
         mock_client.upsert(
             collection_name="documents",
-            points=[
-                {"id": "1", "vector": [0.1, 0.2], "payload": {"text": "test"}}
-            ]
+            points=[{"id": 1, "vector": [0.1, 0.2], "payload": {"text": "test"}}],
         )
 
         # Verify the request was made with scoped collection in URL
@@ -129,10 +120,7 @@ class TestVectorOperationsWithWorkspace:
         """Test retrieve operation scopes collection name."""
         mock_client._make_request.return_value = {"result": []}
 
-        mock_client.retrieve(
-            collection_name="documents",
-            ids=["1", "2"]
-        )
+        mock_client.retrieve(collection_name="documents", ids=[1, 2])
 
         # Verify the request was made with scoped collection in URL
         call_args = mock_client._make_request.call_args
@@ -144,10 +132,7 @@ class TestVectorOperationsWithWorkspace:
         """Test delete operation scopes collection name."""
         mock_client._make_request.return_value = {"status": "ok"}
 
-        mock_client.delete(
-            collection_name="documents",
-            points_selector=["1", "2"]
-        )
+        mock_client.delete(collection_name="documents", points_selector=[1, 2])
 
         # Verify the request was made with scoped collection in URL
         call_args = mock_client._make_request.call_args
@@ -165,7 +150,8 @@ class TestVectorOperationsWithWorkspace:
         in test_client.py).
         """
         mock_client._make_request.return_value = {
-            "result": {"count": 42}, "status": "ok"
+            "result": {"count": 42},
+            "status": "ok",
         }
 
         result = mock_client.count(collection_name="documents")
@@ -184,8 +170,7 @@ class TestCollectionManagementWithWorkspace:
     def mock_client(self):
         """Create a client with mocked HTTP session."""
         client = AetherfyVectorsClient(
-            api_key="afy_test_1234567890123456",
-            workspace="test-workspace"
+            api_key="afy_test_1234567890123456", workspace="test-workspace"
         )
         client._make_request = Mock()
         yield client
@@ -198,7 +183,7 @@ class TestCollectionManagementWithWorkspace:
 
         mock_client.create_collection(
             collection_name="documents",
-            vectors_config=VectorConfig(size=384, distance=DistanceMetric.COSINE)
+            vectors_config=VectorConfig(size=384, distance=DistanceMetric.COSINE),
         )
 
         # URL must be the nested list/create endpoint.
@@ -208,8 +193,8 @@ class TestCollectionManagementWithWorkspace:
 
         # Body name must be BARE.
         request_data = call_args[0][2]
-        assert request_data['name'] == 'documents'
-        assert '/' not in request_data['name']
+        assert request_data["name"] == "documents"
+        assert "/" not in request_data["name"]
 
     def test_delete_collection_with_workspace(self, mock_client):
         """Test delete_collection scopes collection name."""
@@ -239,7 +224,7 @@ class TestCollectionManagementWithWorkspace:
         key). The SDK no longer needs to unscope client-side."""
         mock_client._make_request.return_value = {
             "name": "documents",
-            "config": {"params": {"vectors": {"size": 384, "distance": "Cosine"}}}
+            "config": {"params": {"vectors": {"size": 384, "distance": "Cosine"}}},
         }
 
         result = mock_client.get_collection(collection_name="documents")
@@ -249,7 +234,7 @@ class TestCollectionManagementWithWorkspace:
         assert "workspaces/test-workspace/collections/documents" in call_args[0][1]
 
         # Response name is bare as returned by vectordb.
-        assert result.name == 'documents'
+        assert result.name == "documents"
 
     def test_get_collections_with_workspace(self, mock_client):
         """Post-A/B: GET /workspaces/{ws}/collections returns ONLY this
@@ -261,8 +246,18 @@ class TestCollectionManagementWithWorkspace:
         client-side prefix-matching; that's gone."""
         mock_client._make_request.return_value = {
             "collections": [
-                {"name": "documents", "config": {"params": {"vectors": {"size": 384, "distance": "Cosine"}}}},
-                {"name": "images", "config": {"params": {"vectors": {"size": 512, "distance": "Cosine"}}}},
+                {
+                    "name": "documents",
+                    "config": {
+                        "params": {"vectors": {"size": 384, "distance": "Cosine"}}
+                    },
+                },
+                {
+                    "name": "images",
+                    "config": {
+                        "params": {"vectors": {"size": 512, "distance": "Cosine"}}
+                    },
+                },
             ]
         }
 
@@ -276,8 +271,8 @@ class TestCollectionManagementWithWorkspace:
         # No client-side filtering; names returned verbatim.
         assert len(result) == 2
         names = [c.name for c in result]
-        assert 'documents' in names
-        assert 'images' in names
+        assert "documents" in names
+        assert "images" in names
 
 
 class TestSchemaOperationsWithWorkspace:
@@ -287,8 +282,7 @@ class TestSchemaOperationsWithWorkspace:
     def mock_client(self):
         """Create a client with mocked HTTP session."""
         client = AetherfyVectorsClient(
-            api_key="afy_test_1234567890123456",
-            workspace="test-workspace"
+            api_key="afy_test_1234567890123456", workspace="test-workspace"
         )
         client._make_request = Mock()
         yield client
@@ -306,7 +300,7 @@ class TestSchemaOperationsWithWorkspace:
             "schema": {"fields": {}},
             "etag": "schema-v1",
             "enforcement_mode": "off",
-            "description": None
+            "description": None,
         }
 
         mock_client.get_schema(collection_name="documents")
@@ -320,12 +314,11 @@ class TestSchemaOperationsWithWorkspace:
 
         mock_client._make_request.return_value = {"etag": "schema-v2"}
 
-        schema = Schema(fields={"title": FieldDefinition(type="keyword", required=True)})
-
-        mock_client.set_schema(
-            collection_name="documents",
-            schema=schema
+        schema = Schema(
+            fields={"title": FieldDefinition(type="keyword", required=True)}
         )
+
+        mock_client.set_schema(collection_name="documents", schema=schema)
 
         call_args = mock_client._make_request.call_args
         assert "schema/test-workspace%2Fdocuments" in call_args[0][1]
@@ -347,7 +340,7 @@ class TestSchemaOperationsWithWorkspace:
             "total_points": 5000,
             "fields": {},
             "suggested_schema": {"fields": {}},
-            "processing_time_ms": 150
+            "processing_time_ms": 150,
         }
 
         mock_client.analyze_schema(collection_name="documents")
@@ -362,7 +355,7 @@ class TestSchemaOperationsWithWorkspace:
             "schema": {"fields": {}},
             "etag": "schema-v3",
             "enforcement_mode": "off",
-            "description": None
+            "description": None,
         }
 
         mock_client.refresh_schema(collection_name="documents")
@@ -386,10 +379,7 @@ class TestBackwardCompatibility:
         mock_client._make_request.return_value = {"result": []}
 
         # Should work without workspace scoping
-        mock_client.search(
-            collection_name="documents",
-            query_vector=[0.1, 0.2, 0.3]
-        )
+        mock_client.search(collection_name="documents", query_vector=[0.1, 0.2, 0.3])
 
         call_args = mock_client._make_request.call_args
         # Collection should NOT be scoped (no workspace prefix)
@@ -400,8 +390,18 @@ class TestBackwardCompatibility:
         """Test get_collections returns all collections without workspace."""
         mock_client._make_request.return_value = {
             "collections": [
-                {"name": "documents", "config": {"params": {"vectors": {"size": 384, "distance": "Cosine"}}}},
-                {"name": "images", "config": {"params": {"vectors": {"size": 512, "distance": "Cosine"}}}}
+                {
+                    "name": "documents",
+                    "config": {
+                        "params": {"vectors": {"size": 384, "distance": "Cosine"}}
+                    },
+                },
+                {
+                    "name": "images",
+                    "config": {
+                        "params": {"vectors": {"size": 512, "distance": "Cosine"}}
+                    },
+                },
             ]
         }
 
@@ -410,5 +410,5 @@ class TestBackwardCompatibility:
         # Should return all collections as-is
         assert len(result) == 2
         names = [c.name for c in result]
-        assert 'documents' in names
-        assert 'images' in names
+        assert "documents" in names
+        assert "images" in names

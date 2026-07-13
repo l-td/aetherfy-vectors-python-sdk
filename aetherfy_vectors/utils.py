@@ -7,6 +7,7 @@ and data validation across the SDK.
 
 import json
 import random
+import re
 import time
 from typing import Any, Dict, List, Optional, Union, Callable
 from urllib.parse import quote, urlparse
@@ -67,20 +68,80 @@ def validate_collection_name(collection_name: str) -> None:
         raise ValidationError("Collection name contains invalid characters")
 
 
+# Point-id validation — mirrors the server's ingress rule (vectordb
+# utils/pointIds.js, 400 INVALID_POINT_ID). The UUID core after any
+# urn:uuid: / brace wrapper is stripped: canonical hyphenated or simple
+# (bare 32 hex), case-insensitive. Explicit regexes rather than
+# uuid.UUID(), which accepts MORE than Qdrant's four forms (its parser
+# strips braces/urn:/hyphens loosely, so e.g. misplaced hyphens pass).
+_UUID_CANONICAL_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
+_UUID_SIMPLE_RE = re.compile(r"^[0-9a-f]{32}$", re.IGNORECASE)
+_URN_UUID_PREFIX = "urn:uuid:"
+
+# The server's integer bound (JS Number.MAX_SAFE_INTEGER = 2^53 − 1),
+# NOT a Python limitation — see validate_point_id's docstring.
+_MAX_POINT_ID_INT = 2**53 - 1
+
+
+def _is_uuid_point_id(value: str) -> bool:
+    """True iff ``value`` is any of Qdrant's four accepted UUID string forms:
+    canonical (8-4-4-4-12), simple (32 hex), braced ({…}), URN (urn:uuid:…).
+    """
+    core = value
+    # The urn:uuid: prefix and { } braces are mutually exclusive wrappers in
+    # the forms Qdrant accepts — strip whichever is present, then hex-check
+    # the core.
+    if core[: len(_URN_UUID_PREFIX)].lower() == _URN_UUID_PREFIX:
+        core = core[len(_URN_UUID_PREFIX) :]
+    elif len(core) >= 2 and core[0] == "{" and core[-1] == "}":
+        core = core[1:-1]
+    return bool(_UUID_CANONICAL_RE.match(core) or _UUID_SIMPLE_RE.match(core))
+
+
 def validate_point_id(point_id: Union[str, int]) -> None:
-    """Validate point ID format.
+    """Validate a point ID against the server's ingress rule.
+
+    Valid point ids are exactly two shapes:
+
+    - An unsigned integer no larger than 2**53 − 1. The bound is the
+      SERVER's, not a Python limitation: Python ints are
+      arbitrary-precision, but the server's Node parse layer decodes JSON
+      numbers as IEEE-754 doubles, which represent integers exactly only
+      up to 2^53 − 1 — an id past that would be silently mangled before
+      storage, so the server rejects it (an id it accepts is an id it can
+      round-trip intact). Enforcing the same bound here mirrors the wire
+      truth. Callers needing bigger stable ids use a UUID.
+    - A UUID string in any of the four forms Qdrant accepts: canonical
+      (8-4-4-4-12), simple (32 hex, no hyphens), braced ({…}), or URN
+      (urn:uuid:…), case-insensitive.
+
+    Rejecting anything else does not change which ids WORK — the server
+    already responds 400 INVALID_POINT_ID to them; this raises the same
+    rejection client-side, before the request is sent.
 
     Args:
         point_id: The point ID to validate.
 
     Raises:
-        ValidationError: If point ID is invalid.
+        ValidationError: If the point ID is invalid — same wording as the
+            server's 400 INVALID_POINT_ID response, so client-side and
+            server-side rejections read the same.
     """
-    if not isinstance(point_id, (str, int)):
-        raise ValidationError("Point ID must be a string or integer")
-
-    if isinstance(point_id, str) and not point_id.strip():
-        raise ValidationError("Point ID cannot be empty string")
+    # bool is an int subclass in Python, but JSON true/false is not a
+    # valid point id — reject it before the int branch would accept it.
+    if isinstance(point_id, int) and not isinstance(point_id, bool):
+        if 0 <= point_id <= _MAX_POINT_ID_INT:
+            return
+    elif isinstance(point_id, str):
+        if _is_uuid_point_id(point_id):
+            return
+    raise ValidationError(
+        f"Point ID '{point_id}' is invalid — use an unsigned integer "
+        "or a UUID string."
+    )
 
 
 def build_api_url(base_url: str, endpoint: str) -> str:

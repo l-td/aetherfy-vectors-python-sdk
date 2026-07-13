@@ -279,7 +279,7 @@ class MemoryClient:
     def list_threads(self) -> List[str]:
         """All thread ids in this workspace."""
         return [
-            col.name[len(_THREAD_PREFIX):]
+            col.name[len(_THREAD_PREFIX) :]
             for col in self._client.get_collections()
             if col.name.startswith(_THREAD_PREFIX)
         ]
@@ -300,7 +300,9 @@ class MemoryClient:
         self, time_range: str = "24h", region: Optional[str] = None
     ) -> PerformanceAnalytics:
         """Global performance analytics across this workspace."""
-        return self._client.get_performance_analytics(time_range=time_range, region=region)
+        return self._client.get_performance_analytics(
+            time_range=time_range, region=region
+        )
 
     def get_namespace_analytics(
         self, name: str, time_range: str = "24h"

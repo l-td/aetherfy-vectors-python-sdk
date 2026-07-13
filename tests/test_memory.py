@@ -35,6 +35,20 @@ from aetherfy_memory.exceptions import (
     ThreadNotFoundError,
 )
 from aetherfy_vectors.models import Collection, DistanceMetric, VectorConfig
+from aetherfy_vectors.exceptions import ValidationError
+from aetherfy_vectors.utils import validate_point_id
+
+
+def _validating_upsert(_collection, points):
+    """Mock upsert side-effect that runs the real point-id validator on each
+    point, mirroring what AetherfyVectorsClient.upsert does (via
+    format_points_for_upsert). Lets memory tests pin that an invalid explicit
+    id reaches — and is rejected by — the validator, rather than being masked
+    by a fully no-op MagicMock upsert.
+    """
+    for p in points:
+        validate_point_id(p["id"])
+    return True
 
 
 def _fake_collection(name: str) -> Collection:
@@ -80,7 +94,9 @@ def memory(fake_vectors_client):
 
 
 class TestMemoryClientConstruction:
-    def test_workspace_surfaces_from_underlying_client(self, memory, fake_vectors_client):
+    def test_workspace_surfaces_from_underlying_client(
+        self, memory, fake_vectors_client
+    ):
         assert memory.workspace == "my-bot"
 
     def test_vectors_escape_hatch(self, memory, fake_vectors_client):
@@ -149,7 +165,9 @@ class TestNameValidation:
 
 
 class TestThreadPrefixIsolation:
-    @pytest.mark.parametrize("op", ["create_namespace", "namespace", "delete_namespace"])
+    @pytest.mark.parametrize(
+        "op", ["create_namespace", "namespace", "delete_namespace"]
+    )
     def test_user_apis_reject_thread_prefix_via_regex(self, memory, op):
         with pytest.raises(InvalidNameError):
             getattr(memory, op)("__thread__foo")
@@ -284,9 +302,7 @@ class TestThreadLifecycle:
         fake_vectors_client.collection_exists.return_value = False
         assert memory.delete_thread("conv-99") is False
 
-    def test_delete_thread_drops_prefixed_collection(
-        self, memory, fake_vectors_client
-    ):
+    def test_delete_thread_drops_prefixed_collection(self, memory, fake_vectors_client):
         fake_vectors_client.collection_exists.return_value = True
         fake_vectors_client.delete_collection.return_value = True
         memory.delete_thread("conv-99")
@@ -306,9 +322,7 @@ class TestThreadLifecycle:
         # User-facing id, not the internal prefix
         assert returned.name == "conv-99"
         assert returned.points_count == 42
-        fake_vectors_client.get_collection.assert_called_once_with(
-            "__thread__conv-99"
-        )
+        fake_vectors_client.get_collection.assert_called_once_with("__thread__conv-99")
 
     def test_get_thread_missing_raises(self, memory, fake_vectors_client):
         fake_vectors_client.collection_exists.return_value = False
@@ -335,17 +349,15 @@ class TestPointIdGeneration:
         r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
     )
 
-    def test_namespace_add_returns_canonical_uuid(
-        self, memory, fake_vectors_client
-    ):
+    def test_namespace_add_returns_canonical_uuid(self, memory, fake_vectors_client):
         import re
 
         fake_vectors_client.collection_exists.return_value = True
         ns = memory.namespace("customer-42")
         pid = ns.add(text="x", vector=[0.1])
-        assert re.match(self.CANONICAL_UUID_RE, pid), (
-            f"Expected canonical UUID, got {pid!r}"
-        )
+        assert re.match(
+            self.CANONICAL_UUID_RE, pid
+        ), f"Expected canonical UUID, got {pid!r}"
 
     def test_namespace_add_many_returns_canonical_uuids(
         self, memory, fake_vectors_client
@@ -354,13 +366,11 @@ class TestPointIdGeneration:
 
         fake_vectors_client.collection_exists.return_value = True
         ns = memory.namespace("customer-42")
-        ids = ns.add_many(
-            [{"text": str(i), "vector": [0.1]} for i in range(8)]
-        )
+        ids = ns.add_many([{"text": str(i), "vector": [0.1]} for i in range(8)])
         for pid in ids:
-            assert re.match(self.CANONICAL_UUID_RE, pid), (
-                f"Expected canonical UUID, got {pid!r}"
-            )
+            assert re.match(
+                self.CANONICAL_UUID_RE, pid
+            ), f"Expected canonical UUID, got {pid!r}"
 
     def test_thread_add_and_append_many_return_canonical_uuids(
         self, memory, fake_vectors_client
@@ -371,15 +381,12 @@ class TestPointIdGeneration:
         t = memory.thread("conv-99")
         single = t.add(role="user", content="hi", vector=[0.1])
         many = t.append_many(
-            [
-                {"role": "user", "content": str(i), "vector": [0.1]}
-                for i in range(4)
-            ]
+            [{"role": "user", "content": str(i), "vector": [0.1]} for i in range(4)]
         )
         for pid in [single, *many]:
-            assert re.match(self.CANONICAL_UUID_RE, pid), (
-                f"Expected canonical UUID, got {pid!r}"
-            )
+            assert re.match(
+                self.CANONICAL_UUID_RE, pid
+            ), f"Expected canonical UUID, got {pid!r}"
 
 
 class TestNamespaceOperations:
@@ -407,9 +414,46 @@ class TestNamespaceOperations:
     def test_add_respects_custom_id(self, memory, fake_vectors_client):
         fake_vectors_client.collection_exists.return_value = True
         ns = memory.namespace("customer-42")
-        ns.add(id="fixed-id-1", text="x", vector=[0.1])
+        ns.add(id="11111111-1111-4111-8111-111111111111", text="x", vector=[0.1])
         args = fake_vectors_client.upsert.call_args
-        assert args.args[1][0]["id"] == "fixed-id-1"
+        assert args.args[1][0]["id"] == "11111111-1111-4111-8111-111111111111"
+
+    def test_add_integer_id_reaches_upsert_as_a_number(
+        self, memory, fake_vectors_client
+    ):
+        # An integer is a valid unsigned-integer point id. It must reach the
+        # wire AS A NUMBER — a prior str() coercion turned 42 into "42", a
+        # numeric string the ingress validator rejects.
+        fake_vectors_client.collection_exists.return_value = True
+        ns = memory.namespace("customer-42")
+        returned = ns.add(id=42, text="x", vector=[0.1])
+        sent_id = fake_vectors_client.upsert.call_args.args[1][0]["id"]
+        assert sent_id == 42
+        assert isinstance(sent_id, int) and not isinstance(sent_id, bool)
+        # add() returns the id as-authored, not stringified.
+        assert returned == 42 and isinstance(returned, int)
+
+    def test_add_default_id_is_a_uuid_string(self, memory, fake_vectors_client):
+        fake_vectors_client.collection_exists.return_value = True
+        ns = memory.namespace("customer-42")
+        returned = ns.add(text="x", vector=[0.1])
+        sent_id = fake_vectors_client.upsert.call_args.args[1][0]["id"]
+        assert isinstance(sent_id, str)
+        # Canonical uuid4 — must pass the point-id validator.
+        validate_point_id(sent_id)
+        assert returned == sent_id
+
+    def test_add_non_uuid_string_id_is_rejected_by_the_validator(
+        self, memory, fake_vectors_client
+    ):
+        # The (b) boundary: a semantic string key is NOT a valid point id.
+        # Memory passes it through as-authored; the client's upsert validator
+        # rejects it. (The mock's upsert runs the real validator here.)
+        fake_vectors_client.collection_exists.return_value = True
+        fake_vectors_client.upsert.side_effect = _validating_upsert
+        ns = memory.namespace("customer-42")
+        with pytest.raises(ValidationError):
+            ns.add(id="user-42-preferences", text="x", vector=[0.1])
 
     def test_add_nests_user_metadata(self, memory, fake_vectors_client):
         fake_vectors_client.collection_exists.return_value = True
@@ -476,17 +520,36 @@ class TestNamespaceOperations:
         ids = ns.add_many(
             [
                 {"text": "a", "vector": [0.1], "metadata": {"i": 0}},
-                {"text": "b", "vector": [0.2], "id": "fixed-1"},
+                {
+                    "text": "b",
+                    "vector": [0.2],
+                    "id": "22222222-2222-4222-8222-222222222222",
+                },
                 {"text": "c", "vector": [0.3]},
             ]
         )
         assert len(ids) == 3
-        assert ids[1] == "fixed-1"
+        assert ids[1] == "22222222-2222-4222-8222-222222222222"
         fake_vectors_client.upsert.assert_called_once()
         coll, points = fake_vectors_client.upsert.call_args.args
         assert coll == "customer-42"
         assert [p["payload"]["text"] for p in points] == ["a", "b", "c"]
         assert points[0]["payload"]["metadata"] == {"i": 0}
+
+    def test_add_many_integer_id_reaches_upsert_as_a_number(
+        self, memory, fake_vectors_client
+    ):
+        fake_vectors_client.collection_exists.return_value = True
+        ns = memory.namespace("customer-42")
+        ids = ns.add_many(
+            [
+                {"text": "a", "vector": [0.1], "id": 7},
+                {"text": "b", "vector": [0.2]},
+            ]
+        )
+        _coll, points = fake_vectors_client.upsert.call_args.args
+        assert points[0]["id"] == 7 and isinstance(points[0]["id"], int)
+        assert ids[0] == 7 and isinstance(ids[0], int)
 
     def test_add_many_pinpoints_bad_index(self, memory, fake_vectors_client):
         fake_vectors_client.collection_exists.return_value = True
@@ -542,6 +605,23 @@ class TestThreadOperations:
         assert payload["content"] == "hi"
         assert payload["ts"] == 1000.0
 
+    def test_thread_add_integer_id_reaches_upsert_as_a_number(
+        self, memory, fake_vectors_client
+    ):
+        t = self._open_thread(memory, fake_vectors_client)
+        pid = t.add(role="user", content="hi", vector=[0.1], id=99)
+        sent_id = fake_vectors_client.upsert.call_args.args[1][0]["id"]
+        assert sent_id == 99 and isinstance(sent_id, int)
+        assert pid == 99 and isinstance(pid, int)
+
+    def test_thread_add_non_uuid_string_id_rejected_by_validator(
+        self, memory, fake_vectors_client
+    ):
+        fake_vectors_client.upsert.side_effect = _validating_upsert
+        t = self._open_thread(memory, fake_vectors_client)
+        with pytest.raises(ValidationError):
+            t.add(role="user", content="hi", vector=[0.1], id="conv-99-msg-1")
+
     def test_thread_add_sets_ts_when_omitted(self, memory, fake_vectors_client):
         t = self._open_thread(memory, fake_vectors_client)
         t.add(role="user", content="hi", vector=[0.1])
@@ -568,11 +648,11 @@ class TestThreadOperations:
                     "content": "hello",
                     "vector": [0.2],
                     "ts": 1001.0,
-                    "id": "fixed",
+                    "id": "33333333-3333-4333-8333-333333333333",
                 },
             ]
         )
-        assert ids[1] == "fixed"
+        assert ids[1] == "33333333-3333-4333-8333-333333333333"
         fake_vectors_client.upsert.assert_called_once()
         coll, points = fake_vectors_client.upsert.call_args.args
         assert coll == "__thread__conv-99"
@@ -607,13 +687,14 @@ class TestThreadOperations:
             )
         fake_vectors_client.upsert.assert_not_called()
 
-    def test_thread_add_many_redirects_to_append_many(
-        self, memory, fake_vectors_client
-    ):
+    def test_thread_has_no_add_many(self, memory, fake_vectors_client):
+        # Thread and Namespace both extend _Scope but declare their own write
+        # API; Thread does NOT inherit Namespace.add_many, so there is no
+        # method to call (previously a NoReturn override raised at runtime —
+        # now the method simply does not exist). Callers use append_many.
         t = self._open_thread(memory, fake_vectors_client)
-        with pytest.raises(TypeError, match="append_many"):
-            t.add_many([])
-        fake_vectors_client.upsert.assert_not_called()
+        assert not hasattr(t, "add_many")
+        assert hasattr(t, "append_many")
 
     def test_thread_history_returns_messages_in_order(
         self, memory, fake_vectors_client
@@ -625,15 +706,15 @@ class TestThreadOperations:
             "next_page_offset": None,
             "points": [
                 {
-                    "id": "p3",
+                    "id": "00000000-0000-4000-8000-000000000003",
                     "payload": {"role": "user", "content": "third", "ts": 3.0},
                 },
                 {
-                    "id": "p1",
+                    "id": "00000000-0000-4000-8000-000000000001",
                     "payload": {"role": "user", "content": "first", "ts": 1.0},
                 },
                 {
-                    "id": "p2",
+                    "id": "00000000-0000-4000-8000-000000000002",
                     "payload": {
                         "role": "assistant",
                         "content": "second",
@@ -653,12 +734,64 @@ class TestThreadOperations:
         fake_vectors_client.scroll.return_value = {
             "next_page_offset": None,
             "points": [
-                {"id": "p1", "payload": {"role": "u", "content": "a", "ts": 1.0}},
-                {"id": "p2", "payload": {"role": "u", "content": "b", "ts": 2.0}},
+                {
+                    "id": "00000000-0000-4000-8000-000000000001",
+                    "payload": {"role": "u", "content": "a", "ts": 1.0},
+                },
+                {
+                    "id": "00000000-0000-4000-8000-000000000002",
+                    "payload": {"role": "u", "content": "b", "ts": 2.0},
+                },
             ],
         }
         history = t.history(limit=10, order="desc")
         assert [m.content for m in history] == ["b", "a"]
+
+    # Round-trip: what add() writes is what history() reads back, id TYPE intact.
+    def test_thread_history_round_trips_integer_id_as_int(
+        self, memory, fake_vectors_client
+    ):
+        t = self._open_thread(memory, fake_vectors_client)
+        t.add(role="user", content="hi", vector=[0.1], id=42, ts=5.0)
+        # Feed back exactly what add wrote, as the server would return it.
+        written = fake_vectors_client.upsert.call_args.args[1][0]
+        fake_vectors_client.scroll.return_value = {
+            "next_page_offset": None,
+            "points": [written],
+        }
+        history = t.history(limit=10)
+        assert len(history) == 1
+        assert history[0].id == 42
+        assert isinstance(history[0].id, int) and not isinstance(history[0].id, bool)
+
+    def test_thread_history_round_trips_uuid_id_as_str(
+        self, memory, fake_vectors_client
+    ):
+        t = self._open_thread(memory, fake_vectors_client)
+        uuid_id = "550e8400-e29b-41d4-a716-446655440000"
+        t.add(role="user", content="hi", vector=[0.1], id=uuid_id, ts=5.0)
+        written = fake_vectors_client.upsert.call_args.args[1][0]
+        fake_vectors_client.scroll.return_value = {
+            "next_page_offset": None,
+            "points": [written],
+        }
+        history = t.history(limit=10)
+        assert history[0].id == uuid_id
+        assert isinstance(history[0].id, str)
+
+    def test_thread_history_round_trips_default_uuid_id_as_str(
+        self, memory, fake_vectors_client
+    ):
+        t = self._open_thread(memory, fake_vectors_client)
+        pid = t.add(role="user", content="hi", vector=[0.1], ts=5.0)
+        assert isinstance(pid, str)
+        written = fake_vectors_client.upsert.call_args.args[1][0]
+        fake_vectors_client.scroll.return_value = {
+            "next_page_offset": None,
+            "points": [written],
+        }
+        history = t.history(limit=10)
+        assert history[0].id == pid
 
     def test_thread_history_respects_limit(self, memory, fake_vectors_client):
         t = self._open_thread(memory, fake_vectors_client)
@@ -666,7 +799,7 @@ class TestThreadOperations:
             "next_page_offset": None,
             "points": [
                 {
-                    "id": f"p{i}",
+                    "id": f"00000000-0000-4000-8000-{i:012d}",
                     "payload": {"role": "u", "content": str(i), "ts": float(i)},
                 }
                 for i in range(10)
@@ -689,9 +822,7 @@ class TestThreadOperations:
         with pytest.raises(ValueError):
             t.history(limit=0)
 
-    def test_thread_clear_drops_prefixed_collection(
-        self, memory, fake_vectors_client
-    ):
+    def test_thread_clear_drops_prefixed_collection(self, memory, fake_vectors_client):
         t = self._open_thread(memory, fake_vectors_client)
         t.clear()
         fake_vectors_client.delete_collection.assert_called_once_with(
@@ -711,9 +842,7 @@ class TestAnalyticsParity:
             time_range="7d", region="us-east-1"
         )
 
-    def test_namespace_analytics_requires_existence(
-        self, memory, fake_vectors_client
-    ):
+    def test_namespace_analytics_requires_existence(self, memory, fake_vectors_client):
         fake_vectors_client.collection_exists.return_value = False
         with pytest.raises(NamespaceNotFoundError):
             memory.get_namespace_analytics("nope")

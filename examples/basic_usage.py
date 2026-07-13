@@ -36,7 +36,7 @@ def main():
         # 2. Prepare some sample data
         sample_points = [
             {
-                "id": "doc_1",
+                "id": 1,
                 "vector": [0.1, 0.2, 0.3, 0.4],
                 "payload": {
                     "title": "Introduction to Machine Learning",
@@ -45,7 +45,7 @@ def main():
                 }
             },
             {
-                "id": "doc_2", 
+                "id": 2, 
                 "vector": [0.5, 0.6, 0.7, 0.8],
                 "payload": {
                     "title": "Advanced Neural Networks",
@@ -54,7 +54,7 @@ def main():
                 }
             },
             {
-                "id": "doc_3",
+                "id": 3,
                 "vector": [0.9, 0.1, 0.5, 0.3],
                 "payload": {
                     "title": "Vector Databases Explained",
@@ -106,7 +106,7 @@ def main():
         print("Retrieving specific points...")
         retrieved_points = client.retrieve(
             collection_name=collection_name,  
-            ids=["doc_1", "doc_3"],
+            ids=[1, 3],
             with_payload=True,
             with_vectors=True
         )

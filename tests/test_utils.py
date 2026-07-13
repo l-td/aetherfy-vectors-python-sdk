@@ -120,27 +120,109 @@ class TestValidateCollectionName:
 
 
 class TestValidatePointId:
-    """Test point ID validation."""
+    """Point-ID validation matrix.
 
-    def test_validate_point_id_string_success(self):
-        """Test successful point ID validation with string."""
-        validate_point_id("point_123")  # Should not raise
+    Mirrors the server matrix in vectordb tests/utils/pointIds.test.js —
+    one assertion per case, so a divergence names the exact id shape. A
+    point id is an unsigned integer (<= 2**53 - 1) or a UUID string in any
+    of Qdrant's four accepted forms (canonical, simple, braced, urn:uuid:).
+    """
 
-    def test_validate_point_id_int_success(self):
-        """Test successful point ID validation with integer."""
-        validate_point_id(123)  # Should not raise
+    _MAX = 2**53 - 1
 
-    def test_validate_point_id_invalid_type(self):
-        """Test point ID validation fails for invalid type."""
-        with pytest.raises(ValidationError) as exc_info:
-            validate_point_id([1, 2, 3])
-        assert "must be a string or integer" in str(exc_info.value)
+    # ---- accepted: unsigned integers ---------------------------------------
+    def test_accepts_zero(self):
+        validate_point_id(0)  # Should not raise
 
-    def test_validate_point_id_empty_string(self):
-        """Test point ID validation fails for empty string."""
-        with pytest.raises(ValidationError) as exc_info:
+    def test_accepts_small_positive_integer(self):
+        validate_point_id(42)  # Should not raise
+
+    def test_accepts_max_safe_integer_bound(self):
+        validate_point_id(self._MAX)  # Should not raise
+
+    # ---- accepted: UUID strings, all four Qdrant forms ---------------------
+    def test_accepts_lowercase_canonical_uuid(self):
+        validate_point_id("550e8400-e29b-41d4-a716-446655440000")
+
+    def test_accepts_uppercase_uuid_case_insensitive(self):
+        validate_point_id("550E8400-E29B-41D4-A716-446655440000")
+
+    def test_accepts_simple_no_hyphen_uuid(self):
+        validate_point_id("550e8400e29b41d4a716446655440000")
+
+    def test_accepts_urn_form_uuid(self):
+        validate_point_id("urn:uuid:550e8400-e29b-41d4-a716-446655440000")
+
+    def test_accepts_urn_prefix_mixed_case(self):
+        validate_point_id("URN:UUID:550e8400-e29b-41d4-a716-446655440000")
+
+    def test_accepts_braced_uuid(self):
+        validate_point_id("{550e8400-e29b-41d4-a716-446655440000}")
+
+    # ---- rejected: numbers out of the accepted set -------------------------
+    def test_rejects_negative_integer(self):
+        with pytest.raises(ValidationError):
+            validate_point_id(-1)
+
+    def test_rejects_integer_above_safe_bound(self):
+        with pytest.raises(ValidationError):
+            validate_point_id(self._MAX + 1)
+
+    def test_rejects_float(self):
+        with pytest.raises(ValidationError):
+            validate_point_id(1.5)  # type: ignore[arg-type]
+
+    def test_rejects_bool(self):
+        # bool is an int subclass but JSON true/false is not a valid id.
+        with pytest.raises(ValidationError):
+            validate_point_id(True)  # type: ignore[arg-type]
+
+    # ---- rejected: strings that are not UUIDs ------------------------------
+    def test_rejects_numeric_string(self):
+        with pytest.raises(ValidationError):
+            validate_point_id("123")
+
+    def test_rejects_arbitrary_string(self):
+        with pytest.raises(ValidationError):
+            validate_point_id("my_point_1")
+
+    def test_rejects_empty_string(self):
+        with pytest.raises(ValidationError):
+            validate_point_id("")
+
+    def test_rejects_whitespace_string(self):
+        with pytest.raises(ValidationError):
             validate_point_id("   ")
-        assert "cannot be empty string" in str(exc_info.value)
+
+    def test_rejects_hex_of_wrong_length(self):
+        with pytest.raises(ValidationError):
+            validate_point_id("550e8400e29b41d4a71644665544000")  # 31 chars
+
+    def test_rejects_braced_uuid_without_closing_brace(self):
+        with pytest.raises(ValidationError):
+            validate_point_id("{550e8400-e29b-41d4-a716-446655440000")
+
+    def test_rejects_uuid_with_non_hex_chars(self):
+        with pytest.raises(ValidationError):
+            validate_point_id("550e8400-e29b-41d4-a716-44665544zzzz")
+
+    # ---- rejected: non-string, non-int -------------------------------------
+    def test_rejects_list(self):
+        with pytest.raises(ValidationError):
+            validate_point_id([1, 2, 3])  # type: ignore[arg-type]
+
+    def test_rejects_none(self):
+        with pytest.raises(ValidationError):
+            validate_point_id(None)  # type: ignore[arg-type]
+
+    # ---- error copy --------------------------------------------------------
+    def test_error_mirrors_server_wording_and_names_the_id(self):
+        with pytest.raises(ValidationError) as exc_info:
+            validate_point_id("my_point_1")
+        assert str(exc_info.value) == (
+            "Point ID 'my_point_1' is invalid — use an unsigned integer "
+            "or a UUID string."
+        )
 
 
 class TestBuildApiUrl:
@@ -167,10 +249,7 @@ class TestBuildApiUrl:
             "https://api.example.com",
             "collections/foo/points/search",
         )
-        assert (
-            url
-            == "https://api.example.com/api/v1/collections/foo/points/search"
-        )
+        assert url == "https://api.example.com/api/v1/collections/foo/points/search"
 
     def test_build_api_url_regions_discovery(self):
         url = build_api_url("https://api.example.com", "regions")
@@ -192,10 +271,7 @@ class TestQuoteCollectionName:
         assert quote_collection_name("customer-42") == "customer-42"
 
     def test_scoped_name_slash_becomes_pct2f(self):
-        assert (
-            quote_collection_name("my-bot/customer-42")
-            == "my-bot%2Fcustomer-42"
-        )
+        assert quote_collection_name("my-bot/customer-42") == "my-bot%2Fcustomer-42"
 
     def test_other_reserved_chars_escaped(self):
         # safe='' means every reserved char gets percent-encoded.
@@ -321,6 +397,7 @@ class TestParseErrorResponse:
     def test_parse_error_response_429_rate_limit(self):
         """Test that plain 429 without STORAGE_LIMIT_EXCEEDED still maps to RateLimitExceededError."""
         from aetherfy_vectors.exceptions import RateLimitExceededError
+
         response_data = {"message": "Too many requests", "request_id": "req_123"}
         error = parse_error_response(response_data, 429)
         assert isinstance(error, RateLimitExceededError)
@@ -381,15 +458,15 @@ class TestFormatPointsForUpsert:
     def test_format_points_for_upsert_success(self):
         """Test successful points formatting."""
         points = [
-            {"id": "point_1", "vector": [1.0, 2.0, 3.0], "payload": {"key": "value"}},
-            {"id": "point_2", "vector": [4.0, 5.0, 6.0]},
+            {"id": 1, "vector": [1.0, 2.0, 3.0], "payload": {"key": "value"}},
+            {"id": 2, "vector": [4.0, 5.0, 6.0]},
         ]
         formatted = format_points_for_upsert(points)
         assert len(formatted) == 2
-        assert formatted[0]["id"] == "point_1"
+        assert formatted[0]["id"] == 1
         assert formatted[0]["vector"] == [1.0, 2.0, 3.0]
         assert formatted[0]["payload"] == {"key": "value"}
-        assert formatted[1]["id"] == "point_2"
+        assert formatted[1]["id"] == 2
         assert "payload" not in formatted[1]
 
     def test_format_points_for_upsert_not_list(self):
@@ -406,7 +483,7 @@ class TestFormatPointsForUpsert:
 
     def test_format_points_for_upsert_point_not_dict(self):
         """Test points formatting fails when point is not dict."""
-        points = [{"id": "point_1", "vector": [1.0]}, "not a dict"]
+        points = [{"id": 1, "vector": [1.0]}, "not a dict"]
         with pytest.raises(ValidationError) as exc_info:
             format_points_for_upsert(points)
         assert "must be a dictionary" in str(exc_info.value)
@@ -422,7 +499,7 @@ class TestFormatPointsForUpsert:
 
     def test_format_points_for_upsert_missing_vector(self):
         """Test points formatting fails when vector is missing."""
-        points = [{"id": "point_1"}]
+        points = [{"id": 1}]
         with pytest.raises(ValidationError) as exc_info:
             format_points_for_upsert(points)
         assert "must have a 'vector' field" in str(exc_info.value)

@@ -21,7 +21,11 @@ class DistanceMetric(Enum):
 
 @dataclass
 class Point:
-    """Represents a vector point with payload."""
+    """Represents a vector point with payload.
+
+    ``id`` is an unsigned integer (<= 2**53 - 1) or a UUID string — the two
+    forms the server accepts. See ``utils.validate_point_id``.
+    """
 
     id: Union[str, int]
     vector: List[float]

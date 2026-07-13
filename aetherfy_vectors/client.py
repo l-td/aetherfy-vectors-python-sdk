@@ -8,7 +8,7 @@ that routes requests through the global vector database service.
 import json
 import math
 import os
-from typing import List, Dict, Any, Iterator, Optional, Union
+from typing import List, Dict, Any, Iterator, Optional, Sequence, Union
 import requests
 from requests.adapters import HTTPAdapter
 
@@ -785,7 +785,10 @@ class AetherfyVectorsClient:
     # Point Management Methods
 
     def upsert(
-        self, collection_name: str, points: List[Union[Point, Dict[str, Any]]], **kwargs
+        self,
+        collection_name: str,
+        points: Sequence[Union[Point, Dict[str, Any]]],
+        **kwargs,
     ) -> bool:
         """Insert or update points in a collection.
 

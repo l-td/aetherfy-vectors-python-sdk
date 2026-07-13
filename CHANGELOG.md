@@ -5,7 +5,28 @@ All notable changes to the Aetherfy Vectors Python SDK will be documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.0.0] - 2024-01-15
+## [Unreleased]
+
+### Changed
+- `validate_point_id` now enforces the server's point-id rule client-side:
+  an id must be an unsigned integer `<= 2**53 - 1` or a UUID string in any
+  of the four Qdrant-accepted forms (canonical, simple 32-hex, braced,
+  `urn:uuid:`). Invalid ids raise `ValidationError` with the same wording
+  as the server's 400 `INVALID_POINT_ID` response. This does not change
+  which ids work — ids the validator now rejects were already rejected by
+  the server; the error just surfaces before the request is sent. The
+  `2**53 - 1` bound mirrors the server's JSON-number parse layer
+  (IEEE-754 doubles), not a Python `int` limitation.
+
+### Fixed
+- Memory SDK: `Namespace.add`/`add_many` and `Thread.add`/`append_many` no
+  longer `str()`-coerce an explicit `id`. An integer id (a valid
+  unsigned-integer point id) now reaches the wire as an `int` instead of
+  being turned into a numeric string like `"42"` — which the point-id
+  validator rejects. A non-int/non-UUID explicit id is passed through and
+  correctly rejected by the upsert validator. Return types widen from
+  `str`/`List[str]` to `Union[str, int]` / `List[Union[str, int]]`, and
+  `Message.id` accepts `Union[str, int]`.
 
 ### Added
 - Initial release of Aetherfy Vectors Python SDK

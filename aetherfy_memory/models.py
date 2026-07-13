@@ -3,7 +3,7 @@ Models for the Aetherfy Memory SDK.
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 
 # Default vector dimension for auto-created scopes. Matches sentence-transformers
@@ -23,7 +23,10 @@ class Message:
     role: str
     content: str
     vector: Optional[List[float]] = None
-    id: Optional[str] = None
+    # A point id is an unsigned integer or a UUID string — an id authored on
+    # `add` is carried through as-is (an int stays an int). `from_point`
+    # reconstructs the read side (see its note).
+    id: Optional[Union[str, int]] = None
     ts: Optional[float] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
 
@@ -42,10 +45,17 @@ class Message:
 
     @classmethod
     def from_point(cls, point: Dict[str, Any]) -> "Message":
-        """Reconstruct a Message from a retrieved Qdrant point."""
+        """Reconstruct a Message from a retrieved Qdrant point.
+
+        The id is preserved as stored — an integer point id comes back an
+        ``int``, a UUID a ``str``. str()-coercing here would make
+        ``add(id=42)`` then ``history()`` return id ``"42"``, breaking the
+        caller's ``msg.id == 42`` check (the read-side twin of the write-side
+        str() bug).
+        """
         payload = point.get("payload") or {}
         return cls(
-            id=str(point.get("id")) if point.get("id") is not None else None,
+            id=point.get("id"),
             role=payload.get("role", ""),
             content=payload.get("content", ""),
             ts=payload.get("ts"),

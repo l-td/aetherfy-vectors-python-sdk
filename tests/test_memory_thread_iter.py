@@ -20,28 +20,36 @@ def test_iter_history_asc_yields_messages_oldest_first():
     th, client = _make_thread()
     # Mixed-ts points, intentionally out of order on the wire.
     client.scroll_iter.return_value = iter([
-        {"id": "m3", "payload": {"role": "user", "content": "c", "ts": 30.0}},
-        {"id": "m1", "payload": {"role": "user", "content": "a", "ts": 10.0}},
-        {"id": "m2", "payload": {"role": "user", "content": "b", "ts": 20.0}},
+        {"id": "00000000-0000-4000-8000-000000000003", "payload": {"role": "user", "content": "c", "ts": 30.0}},
+        {"id": "00000000-0000-4000-8000-000000000001", "payload": {"role": "user", "content": "a", "ts": 10.0}},
+        {"id": "00000000-0000-4000-8000-000000000002", "payload": {"role": "user", "content": "b", "ts": 20.0}},
     ])
 
     out = list(th.iter_history())
 
-    assert [m.id for m in out] == ["m1", "m2", "m3"]
+    assert [m.id for m in out] == [
+        "00000000-0000-4000-8000-000000000001",
+        "00000000-0000-4000-8000-000000000002",
+        "00000000-0000-4000-8000-000000000003",
+    ]
     assert [m.ts for m in out] == [10.0, 20.0, 30.0]
 
 
 def test_iter_history_desc_yields_newest_first():
     th, client = _make_thread()
     client.scroll_iter.return_value = iter([
-        {"id": "m1", "payload": {"role": "user", "content": "a", "ts": 10.0}},
-        {"id": "m3", "payload": {"role": "user", "content": "c", "ts": 30.0}},
-        {"id": "m2", "payload": {"role": "user", "content": "b", "ts": 20.0}},
+        {"id": "00000000-0000-4000-8000-000000000001", "payload": {"role": "user", "content": "a", "ts": 10.0}},
+        {"id": "00000000-0000-4000-8000-000000000003", "payload": {"role": "user", "content": "c", "ts": 30.0}},
+        {"id": "00000000-0000-4000-8000-000000000002", "payload": {"role": "user", "content": "b", "ts": 20.0}},
     ])
 
     out = list(th.iter_history(order="desc"))
 
-    assert [m.id for m in out] == ["m3", "m2", "m1"]
+    assert [m.id for m in out] == [
+        "00000000-0000-4000-8000-000000000003",
+        "00000000-0000-4000-8000-000000000002",
+        "00000000-0000-4000-8000-000000000001",
+    ]
 
 
 def test_iter_history_invalid_order_raises():
@@ -54,26 +62,32 @@ def test_iter_history_invalid_order_raises():
 def test_iter_history_skips_points_without_payload():
     th, client = _make_thread()
     client.scroll_iter.return_value = iter([
-        {"id": "m1", "payload": {"role": "user", "content": "a", "ts": 1.0}},
-        {"id": "no-payload"},  # no payload key — skipped
-        {"id": "m2", "payload": {"role": "user", "content": "b", "ts": 2.0}},
+        {"id": "00000000-0000-4000-8000-000000000001", "payload": {"role": "user", "content": "a", "ts": 1.0}},
+        {"id": "00000000-0000-4000-8000-0000000000fa"},  # no payload key — skipped
+        {"id": "00000000-0000-4000-8000-000000000002", "payload": {"role": "user", "content": "b", "ts": 2.0}},
     ])
 
     out = list(th.iter_history())
-    assert [m.id for m in out] == ["m1", "m2"]
+    assert [m.id for m in out] == [
+        "00000000-0000-4000-8000-000000000001",
+        "00000000-0000-4000-8000-000000000002",
+    ]
 
 
 def test_iter_history_skips_messages_without_ts():
     th, client = _make_thread()
     client.scroll_iter.return_value = iter([
-        {"id": "m1", "payload": {"role": "user", "content": "a", "ts": 1.0}},
+        {"id": "00000000-0000-4000-8000-000000000001", "payload": {"role": "user", "content": "a", "ts": 1.0}},
         # Message.from_point with payload missing ts → m.ts is None → skipped.
-        {"id": "no-ts", "payload": {"role": "user", "content": "x"}},
-        {"id": "m2", "payload": {"role": "user", "content": "b", "ts": 2.0}},
+        {"id": "00000000-0000-4000-8000-0000000000fb", "payload": {"role": "user", "content": "x"}},
+        {"id": "00000000-0000-4000-8000-000000000002", "payload": {"role": "user", "content": "b", "ts": 2.0}},
     ])
 
     out = list(th.iter_history())
-    assert [m.id for m in out] == ["m1", "m2"]
+    assert [m.id for m in out] == [
+        "00000000-0000-4000-8000-000000000001",
+        "00000000-0000-4000-8000-000000000002",
+    ]
 
 
 def test_iter_history_walks_scroll_iter_not_single_shot_scroll():

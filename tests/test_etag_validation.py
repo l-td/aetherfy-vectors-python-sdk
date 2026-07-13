@@ -16,30 +16,31 @@ class TestETagValidation:
         """Mock collection info response with ETag"""
         return {
             "result": {
-                "config": {
-                    "params": {
-                        "vectors": {
-                            "size": 768,
-                            "distance": "Cosine"
-                        }
-                    }
-                }
+                "config": {"params": {"vectors": {"size": 768, "distance": "Cosine"}}}
             },
-            "schema_version": "abc12345"
+            "schema_version": "abc12345",
         }
 
     @pytest.fixture
     def mock_successful_upsert_response(self):
         """Mock successful upsert response"""
+
         def _create_response(status_code=200):
             mock_response = Mock()
             mock_response.status_code = status_code
             mock_response.json.return_value = {"result": {"status": "acknowledged"}}
             mock_response.content = True
             return mock_response
+
         return _create_response
 
-    def test_schema_cache_on_first_upsert(self, client, mock_requests, mock_collection_response, mock_successful_upsert_response):
+    def test_schema_cache_on_first_upsert(
+        self,
+        client,
+        mock_requests,
+        mock_collection_response,
+        mock_successful_upsert_response,
+    ):
         """Test that schema is fetched and cached on first upsert"""
         # First call: GET collection info
         # Second call: GET payload schema (returns 404 - no schema)
@@ -48,30 +49,38 @@ class TestETagValidation:
         mock_requests.request.side_effect = [
             Mock(status_code=200, json=lambda: mock_collection_response, content=True),
             schema_404_error,
-            mock_successful_upsert_response()
+            mock_successful_upsert_response(),
         ]
 
         # First upsert
-        points = [{"id": "1", "vector": [0.1] * 768, "payload": {}}]
+        points = [{"id": 1, "vector": [0.1] * 768, "payload": {}}]
         client.upsert("test-collection", points)
 
         # Should have called request 3 times (GET collection, GET schema, PUT upsert)
         assert mock_requests.request.call_count == 3
         assert "test-collection" in client._schema_cache
 
-    def test_schema_cache_reused_on_subsequent_upserts(self, client, mock_requests, mock_collection_response, mock_successful_upsert_response):
+    def test_schema_cache_reused_on_subsequent_upserts(
+        self,
+        client,
+        mock_requests,
+        mock_collection_response,
+        mock_successful_upsert_response,
+    ):
         """Test that cached schema is reused on subsequent upserts"""
         # First upsert: GET collection + GET payload schema (404) + PUT upsert
         # Second upsert: only PUT (both caches hit)
         schema_404_error = AetherfyVectorsException("Schema not found", status_code=404)
         mock_requests.request.side_effect = [
-            Mock(status_code=200, json=lambda: mock_collection_response, content=True),  # GET collection
+            Mock(
+                status_code=200, json=lambda: mock_collection_response, content=True
+            ),  # GET collection
             schema_404_error,  # GET payload schema (404)
             mock_successful_upsert_response(),  # First PUT
             mock_successful_upsert_response(),  # Second PUT (no GETs)
         ]
 
-        points = [{"id": "1", "vector": [0.1] * 768, "payload": {}}]
+        points = [{"id": 1, "vector": [0.1] * 768, "payload": {}}]
 
         # First upsert - should fetch schemas
         client.upsert("test-collection", points)
@@ -83,17 +92,23 @@ class TestETagValidation:
         # Should only add one more call (PUT), not three (GET+GET+PUT)
         assert mock_requests.request.call_count == call_count_after_first + 1
 
-    def test_etag_sent_in_upsert_header(self, client, mock_requests, mock_collection_response, mock_successful_upsert_response):
+    def test_etag_sent_in_upsert_header(
+        self,
+        client,
+        mock_requests,
+        mock_collection_response,
+        mock_successful_upsert_response,
+    ):
         """Test that ETag is sent in If-Match header"""
         schema_404_error = AetherfyVectorsException("Schema not found", status_code=404)
         mock_requests.request.side_effect = [
             Mock(status_code=200, json=lambda: mock_collection_response, content=True),
             schema_404_error,
-            mock_successful_upsert_response()
+            mock_successful_upsert_response(),
         ]
 
         # Upsert
-        points = [{"id": "1", "vector": [0.1] * 768, "payload": {}}]
+        points = [{"id": 1, "vector": [0.1] * 768, "payload": {}}]
         client.upsert("test-collection", points)
 
         # Check If-Match header was sent in the PUT request (third call)
@@ -101,17 +116,17 @@ class TestETagValidation:
         assert "If-Match" in put_call_kwargs["headers"]
         assert put_call_kwargs["headers"]["If-Match"] == "abc12345"
 
-    def test_dimension_mismatch_caught_before_request(self, client, mock_requests, mock_collection_response):
+    def test_dimension_mismatch_caught_before_request(
+        self, client, mock_requests, mock_collection_response
+    ):
         """Test that dimension mismatch is caught client-side before making request"""
         # Only mock GET schema - PUT should never be called
         mock_requests.request.return_value = Mock(
-            status_code=200,
-            json=lambda: mock_collection_response,
-            content=True
+            status_code=200, json=lambda: mock_collection_response, content=True
         )
 
         # Upsert with wrong dimensions
-        points = [{"id": "1", "vector": [0.1] * 384, "payload": {}}]  # Wrong size!
+        points = [{"id": 1, "vector": [0.1] * 384, "payload": {}}]  # Wrong size!
 
         with pytest.raises(ValueError) as exc_info:
             client.upsert("test-collection", points)
@@ -124,7 +139,9 @@ class TestETagValidation:
         # Should only have called GET (not PUT) - failed validation client-side
         assert mock_requests.request.call_count == 1
 
-    def test_schema_changed_412_response(self, client, mock_requests, mock_collection_response):
+    def test_schema_changed_412_response(
+        self, client, mock_requests, mock_collection_response
+    ):
         """Test handling of 412 response when schema changes"""
         # Mock GET collection, GET schema (404), then mock 412 error on PUT
         schema_404_error = AetherfyVectorsException("Schema not found", status_code=404)
@@ -133,7 +150,7 @@ class TestETagValidation:
         mock_412_response.json.return_value = {
             "error": {
                 "code": "SCHEMA_VERSION_MISMATCH",
-                "message": "Collection schema has changed"
+                "message": "Collection schema has changed",
             }
         }
         mock_412_response.content = True
@@ -141,11 +158,11 @@ class TestETagValidation:
         mock_requests.request.side_effect = [
             Mock(status_code=200, json=lambda: mock_collection_response, content=True),
             schema_404_error,
-            mock_412_response
+            mock_412_response,
         ]
 
         # Upsert should fail with schema changed error
-        points = [{"id": "1", "vector": [0.1] * 768, "payload": {}}]
+        points = [{"id": 1, "vector": [0.1] * 768, "payload": {}}]
 
         with pytest.raises(ValidationError) as exc_info:
             client.upsert("test-collection", points)
@@ -182,7 +199,9 @@ class TestETagValidation:
         # Both should be cleared
         assert len(client._schema_cache) == 0
 
-    def test_backend_validation_error_400(self, client, mock_requests, mock_collection_response):
+    def test_backend_validation_error_400(
+        self, client, mock_requests, mock_collection_response
+    ):
         """Test handling of 400 validation error from backend"""
         # Mock GET collection, GET schema (404), then mock 400 error on PUT
         schema_404_error = AetherfyVectorsException("Schema not found", status_code=404)
@@ -191,7 +210,7 @@ class TestETagValidation:
         mock_400_response.json.return_value = {
             "error": {
                 "code": "DIMENSION_MISMATCH",
-                "message": "Vector dimension mismatch: expected 768, got 384"
+                "message": "Vector dimension mismatch: expected 768, got 384",
             }
         }
         mock_400_response.content = True
@@ -199,11 +218,11 @@ class TestETagValidation:
         mock_requests.request.side_effect = [
             Mock(status_code=200, json=lambda: mock_collection_response, content=True),
             schema_404_error,
-            mock_400_response
+            mock_400_response,
         ]
 
         # Upsert
-        points = [{"id": "1", "vector": [0.1] * 768, "payload": {}}]
+        points = [{"id": 1, "vector": [0.1] * 768, "payload": {}}]
 
         # SDK converts ValidationError to ValueError for backward compatibility
         with pytest.raises(ValueError) as exc_info:
@@ -219,20 +238,18 @@ class TestETagValidation:
         mock_500_response = Mock()
         mock_500_response.status_code = 500
         mock_500_response.json.return_value = {
-            "error": {
-                "message": "Internal server error"
-            }
+            "error": {"message": "Internal server error"}
         }
         mock_500_response.content = b'{"error":{"message":"Internal server error"}}'
 
         mock_requests.request.side_effect = [
             Mock(status_code=200, json=lambda: mock_collection_response, content=True),
             schema_404_error,
-            mock_500_response
+            mock_500_response,
         ]
 
         # Upsert should fail with server error
-        points = [{"id": "1", "vector": [0.1] * 768, "payload": {}}]
+        points = [{"id": 1, "vector": [0.1] * 768, "payload": {}}]
 
         with pytest.raises(AetherfyVectorsException) as exc_info:
             client.upsert("test-collection", points)

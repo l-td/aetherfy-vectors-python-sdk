@@ -62,17 +62,17 @@ def demonstrate_migration():
         # SAME CODE works in both libraries:
         points = [
             {
-                "id": "point_1",
+                "id": 1,
                 "vector": [0.1] * 128,  # 128-dimensional vector
                 "payload": {"category": "example", "user_id": 123}
             },
             {
-                "id": "point_2", 
+                "id": 2, 
                 "vector": [0.2] * 128,
                 "payload": {"category": "demo", "user_id": 456}
             },
             {
-                "id": "point_3",
+                "id": 3,
                 "vector": [0.3] * 128,
                 "payload": {"category": "example", "user_id": 789}
             }
@@ -124,7 +124,7 @@ def demonstrate_migration():
         # IDENTICAL API:
         retrieved_points = client.retrieve(
             collection_name=collection_name,
-            ids=["point_1", "point_3"],
+            ids=[1, 3],
             with_payload=True,
             with_vectors=True
         )
