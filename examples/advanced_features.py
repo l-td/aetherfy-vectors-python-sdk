@@ -89,7 +89,7 @@ def analytics_example():
             
             # Add some test data
             test_points = [
-                {"id": f"point_{i}", "vector": [i*0.1, i*0.2, i*0.3, i*0.4], 
+                {"id": i, "vector": [i*0.1, i*0.2, i*0.3, i*0.4], 
                  "payload": {"category": f"cat_{i%3}", "value": i}}
                 for i in range(10)
             ]

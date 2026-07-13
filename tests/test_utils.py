@@ -172,10 +172,23 @@ class TestValidatePointId:
         with pytest.raises(ValidationError):
             validate_point_id(1.5)  # type: ignore[arg-type]
 
-    def test_rejects_bool(self):
+    def test_rejects_nan(self):
+        with pytest.raises(ValidationError):
+            validate_point_id(float("nan"))  # type: ignore[arg-type]
+
+    def test_rejects_infinity(self):
+        with pytest.raises(ValidationError):
+            validate_point_id(float("inf"))  # type: ignore[arg-type]
+
+    def test_rejects_bool_true(self):
         # bool is an int subclass but JSON true/false is not a valid id.
         with pytest.raises(ValidationError):
             validate_point_id(True)  # type: ignore[arg-type]
+
+    def test_rejects_bool_false(self):
+        # False == 0 (a valid id) but a bool is still not a valid point id.
+        with pytest.raises(ValidationError):
+            validate_point_id(False)  # type: ignore[arg-type]
 
     # ---- rejected: strings that are not UUIDs ------------------------------
     def test_rejects_numeric_string(self):
@@ -210,6 +223,10 @@ class TestValidatePointId:
     def test_rejects_list(self):
         with pytest.raises(ValidationError):
             validate_point_id([1, 2, 3])  # type: ignore[arg-type]
+
+    def test_rejects_dict(self):
+        with pytest.raises(ValidationError):
+            validate_point_id({})  # type: ignore[arg-type]
 
     def test_rejects_none(self):
         with pytest.raises(ValidationError):

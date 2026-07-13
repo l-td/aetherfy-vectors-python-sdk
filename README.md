@@ -120,9 +120,9 @@ Your requests are automatically routed to the optimal region:
 Efficient batch processing with automatic optimization:
 
 ```python
-# Bulk insert thousands of points
+# Bulk insert thousands of points (ids are unsigned integers or UUID strings)
 large_batch = [
-    {"id": f"doc_{i}", "vector": [...], "payload": {...}}
+    {"id": i, "vector": [...], "payload": {...}}
     for i in range(10000)
 ]
 

@@ -35,7 +35,7 @@ def generate_sample_data(count: int, vector_dim: int = 128) -> List[Dict[str, An
         }
         
         points.append({
-            "id": f"doc_{i}",
+            "id": i,
             "vector": vector,
             "payload": payload
         })
@@ -228,7 +228,7 @@ def batch_delete_example(collection_name: str):
         print(f"\n1. Delete by ID batches")
         
         # Generate IDs to delete (first 1000 points)
-        ids_to_delete = [f"doc_{i}" for i in range(1000)]
+        ids_to_delete = list(range(1000))
         batch_size = 100
         
         delete_start = time.time()
@@ -288,7 +288,7 @@ def batch_retrieve_example(collection_name: str):
         batch_size = 50
         
         # Get available IDs (assuming some points still exist)
-        all_ids = [f"doc_{i}" for i in range(2000, 2000 + total_ids)]
+        all_ids = list(range(2000, 2000 + total_ids))
         
         print(f"Retrieving {total_ids} points in batches of {batch_size}...")
         
