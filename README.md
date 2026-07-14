@@ -265,10 +265,11 @@ msgs = [
 ids = thread.append_many(msgs)
 ```
 
-`Thread.add_many()` is overridden to raise with guidance toward
-`append_many()` — `add_many` would write `text`/`metadata` payloads into
-a `role`/`content`/`ts` schema, which is almost always a mistake. Reach
-for `append_many()` on threads.
+Threads have no `add_many()` — a `Thread` is not a `Namespace` subclass
+(they share a scope base but declare their own write API), so there is
+no `add_many` to call. `add_many` writes `text`/`metadata` payloads,
+which don't fit a thread's `role`/`content`/`ts` schema. Use
+`append_many()` on threads.
 
 ### set_metadata — atomic replace, explicit-compose merge
 
