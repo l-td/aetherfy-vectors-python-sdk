@@ -63,8 +63,9 @@ jobs:
         pytest tests/ -v --cov=aetherfy_vectors --cov=aetherfy_memory --cov-report=xml --cov-report=term-missing
 
     - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v3
+      uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238  # v4.6.0
       with:
+        version: v11.3.1
         file: ./coverage.xml
         flags: unittests
         name: codecov-umbrella
