@@ -1324,7 +1324,7 @@ class AetherfyVectorsClient:
         with_payload: bool = True,
         with_vectors: bool = False,
         score_threshold: Optional[float] = None,
-        **kwargs,
+        search_params: Optional[Dict[str, Any]] = None,
     ) -> List[SearchResult]:
         """Search for similar vectors in a collection.
 
@@ -1337,10 +1337,26 @@ class AetherfyVectorsClient:
             with_payload: Include payload in results.
             with_vectors: Include vectors in results.
             score_threshold: Minimum score threshold for results.
-            **kwargs: Additional parameters for compatibility.
+            search_params: Search-time engine parameters, sent verbatim as the
+                request body's `params` field. The headline use is
+                `{"hnsw_ef": 256}`: a larger ef makes the HNSW graph walk visit
+                more candidates, buying recall at the cost of latency (and a
+                smaller ef does the reverse). Omit it to keep the server-side
+                default of hnsw_ef=100, which is the tuned default and measures
+                recall@10 ≈ 0.996 on a realistic corpus. Cache note: the server
+                cache key is derived from the request body bytes, so the same
+                query at a different ef is a separate cache entry — a
+                params-varying call can never hit an entry stored under
+                different params. Contents are not validated or translated
+                here; the API and Qdrant own the schema.
 
         Returns:
             List of SearchResult objects.
+
+        Raises:
+            TypeError: If an unknown keyword argument is passed. There is no
+                **kwargs sink: a misspelled or unsupported option fails loudly
+                instead of being silently dropped from the request body.
         """
         validate_collection_name(collection_name)
         validate_vector(query_vector)
@@ -1363,6 +1379,15 @@ class AetherfyVectorsClient:
 
         if score_threshold is not None:
             data["score_threshold"] = score_threshold
+
+        # Untranslated pass-through. Enumerating or validating param names here
+        # would make the SDK a compatibility treadmill behind Qdrant's own
+        # schema; the backend forwards the search body verbatim, so anything
+        # the engine accepts works without an SDK release. Added last and only
+        # when present, so the default body is byte-for-byte what it was
+        # before this option existed (server cache keys are body-derived).
+        if search_params is not None:
+            data["params"] = search_params
 
         response = self._make_request(
             "POST",

@@ -171,8 +171,38 @@ class _Scope:
         with_payload: bool = True,
         with_vectors: bool = False,
         score_threshold: Optional[float] = None,
+        search_params: Optional[Dict[str, Any]] = None,
     ) -> List[SearchResult]:
-        """Semantic search within this scope only."""
+        """Semantic search within this scope only.
+
+        Args:
+            vector: Query vector.
+            limit: Maximum number of results.
+            offset: Number of results to skip.
+            filter: Payload filter conditions.
+            with_payload: Include payload in results.
+            with_vectors: Include vectors in results.
+            score_threshold: Minimum score threshold.
+            search_params: Search-time engine parameters, forwarded verbatim
+                as the request body's `params` field. The headline use is
+                `{"hnsw_ef": 256}`: a larger ef makes the HNSW graph walk
+                visit more candidates, buying recall at the cost of latency.
+                Recall matters here — retrieving the *right* memory usually
+                beats saving a millisecond. Omit it to keep the tuned
+                server-side default (hnsw_ef=100). Different params values
+                produce different request bodies and therefore different
+                server cache entries, so the same query at a different ef is
+                a separate entry, never a wrong hit. Not validated or
+                translated; see AetherfyVectorsClient.search.
+
+        Returns:
+            List of SearchResult objects.
+
+        Raises:
+            TypeError: If an unknown keyword argument is passed — this
+                signature is keyword-only with no **kwargs sink, so a
+                misspelled option fails loudly instead of being dropped.
+        """
         return self._client.search(
             self._collection,
             query_vector=vector,
@@ -182,6 +212,7 @@ class _Scope:
             with_payload=with_payload,
             with_vectors=with_vectors,
             score_threshold=score_threshold,
+            search_params=search_params,
         )
 
     def retrieve(

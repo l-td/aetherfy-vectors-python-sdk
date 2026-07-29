@@ -570,9 +570,19 @@ results = client.search(
     query_filter=None,
     with_payload=True,
     with_vectors=False,
-    score_threshold=None
+    score_threshold=None,
+    search_params=None      # engine params, sent verbatim as the body's `params`
 )
+
+# Trade latency for recall: a larger hnsw_ef makes the graph walk visit more
+# candidates. Omit search_params to keep the tuned server default (hnsw_ef=100).
+results = client.search(collection_name, query_vector, search_params={"hnsw_ef": 256})
 ```
+
+`search_params` is passed through untranslated — the API and Qdrant own the
+schema, so the SDK validates nothing and needs no release to track new params.
+Note that the server cache key is derived from the request body, so the same
+query at a different `hnsw_ef` is a separate cache entry (never a wrong hit).
 
 ### Schema Management (Aetherfy-specific)
 

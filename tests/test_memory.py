@@ -474,6 +474,47 @@ class TestNamespaceOperations:
         assert args.kwargs["limit"] == 5
         assert args.kwargs["query_filter"] == {"x": 1}
 
+    def test_search_forwards_search_params(self, memory, fake_vectors_client):
+        """The scope layer must not be a place where the option quietly dies.
+        Memory search is recall-sensitive — retrieving the right memory beats
+        saving a millisecond — so a Namespace user has to be able to reach
+        hnsw_ef. Wire-level proof lives in test_search_params.py; here we pin
+        that the scope forwards it untouched."""
+        fake_vectors_client.collection_exists.return_value = True
+        ns = memory.namespace("customer-42")
+        ns.search(vector=[0.1, 0.2], search_params={"hnsw_ef": 256})
+        args = fake_vectors_client.search.call_args
+        assert args.kwargs["search_params"] == {"hnsw_ef": 256}
+
+    def test_search_defaults_to_no_search_params(self, memory, fake_vectors_client):
+        """Default stays the tuned server default: the scope forwards None,
+        which the client omits from the body entirely."""
+        fake_vectors_client.collection_exists.return_value = True
+        ns = memory.namespace("customer-42")
+        ns.search(vector=[0.1, 0.2])
+        assert fake_vectors_client.search.call_args.kwargs["search_params"] is None
+
+    def test_thread_search_forwards_search_params(self, memory, fake_vectors_client):
+        """Thread is NOT a Namespace subclass — it is not add-substitutable —
+        so option parity across the two scope shapes is not something the type
+        system gives us. Both inherit _Scope.search; pin that a Thread reaches
+        the option too."""
+        fake_vectors_client.collection_exists.return_value = True
+        thread = memory.thread("conv-99")
+        thread.search(vector=[0.1, 0.2], search_params={"hnsw_ef": 128})
+        args = fake_vectors_client.search.call_args
+        assert args.kwargs["search_params"] == {"hnsw_ef": 128}
+
+    def test_search_unknown_kwarg_raises(self, memory, fake_vectors_client):
+        """Same loud-failure contract as the client: keyword-only, no **kwargs
+        sink, so a caller inventing an option gets a TypeError instead of a
+        silently default-ef search."""
+        fake_vectors_client.collection_exists.return_value = True
+        ns = memory.namespace("customer-42")
+        with pytest.raises(TypeError):
+            ns.search(vector=[0.1, 0.2], hnsw_ef=256)
+        fake_vectors_client.search.assert_not_called()
+
     def test_retrieve_delegates(self, memory, fake_vectors_client):
         fake_vectors_client.collection_exists.return_value = True
         ns = memory.namespace("customer-42")

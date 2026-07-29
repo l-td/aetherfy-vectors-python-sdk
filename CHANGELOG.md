@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- `client.search()` no longer ends in `**kwargs`: unknown keyword arguments
+  now raise `TypeError` instead of being silently dropped from the request
+  body — the same contract `scroll_iter` already had. (`Namespace`/
+  `Thread.search()` were already keyword-only.)
 - `validate_point_id` now enforces the server's point-id rule client-side:
   an id must be an unsigned integer `<= 2**53 - 1` or a UUID string in any
   of the four Qdrant-accepted forms (canonical, simple 32-hex, braced,
@@ -29,6 +33,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Message.id` accepts `Union[str, int]`.
 
 ### Added
+- `search_params` on `client.search()` and `Namespace`/`Thread.search()` —
+  engine params sent verbatim as the body's `params`, e.g.
+  `search_params={"hnsw_ef": 256}` to trade latency for recall. Omitting it
+  leaves the default body unchanged. Works against every deployed backend:
+  the API has always forwarded the search body verbatim, so there is no
+  version gate.
 - Initial release of Aetherfy Vectors Python SDK
 - Drop-in replacement for qdrant-client with 100% API compatibility
 - Global vector database operations with automatic replication
