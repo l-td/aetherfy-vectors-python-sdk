@@ -82,7 +82,7 @@ class MemoryClient:
         self,
         api_key: Optional[str] = None,
         *,
-        endpoint: str = DEFAULT_ENDPOINT,
+        endpoint: Optional[str] = None,
         timeout: float = DEFAULT_TIMEOUT,
         workspace: Optional[str] = "auto",
         client: Optional[AetherfyVectorsClient] = None,
@@ -93,7 +93,19 @@ class MemoryClient:
             api_key: Aetherfy API key. Reads AETHERFY_API_KEY if omitted
                 (auto-injected by the control plane at deploy time).
                 Ignored if `client` is provided.
-            endpoint: API endpoint URL. Ignored if `client` is provided.
+            endpoint: API endpoint URL. Resolution order matches
+                AetherfyVectorsClient exactly:
+                1. Explicit ``endpoint`` argument.
+                2. ``AETHERFY_VECTORS_URL`` environment variable — the
+                   control plane injects this on every agent machine, so a
+                   deployed agent reaches its regional endpoint without any
+                   code change.
+                3. Default ``https://vectors.aetherfy.com``.
+                Leave it unset unless you are targeting a local or custom
+                deployment: passing it explicitly SUPPRESSES the injected
+                env var, which is how a deployed agent ends up silently
+                talking to the default endpoint. Ignored if `client` is
+                provided.
             timeout: Request timeout in seconds. Ignored if `client` is provided.
             workspace: Workspace name. Defaults to "auto" (reads
                 AETHERFY_WORKSPACE). Pass None to disable workspace scoping
@@ -108,6 +120,15 @@ class MemoryClient:
         if client is not None:
             self._client = client
         else:
+            # `endpoint` defaults to None, NOT to DEFAULT_ENDPOINT: passing a
+            # concrete URL down is indistinguishable from the caller asking
+            # for one, and AetherfyVectorsClient treats an explicit endpoint
+            # as the highest-precedence source. Defaulting to the constant
+            # therefore made AETHERFY_VECTORS_URL unreachable through this
+            # constructor — a deployed agent using memory talked to the
+            # global default endpoint instead of the injected regional one,
+            # silently. Forward None and let the one endpoint resolver in
+            # AetherfyVectorsClient.__init__ own the precedence.
             self._client = AetherfyVectorsClient(
                 api_key=api_key,
                 endpoint=endpoint,
