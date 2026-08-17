@@ -51,6 +51,7 @@ from .utils import (
     parse_error_response,
     format_points_for_upsert,
     quote_collection_name,
+    serialize_filter,
 )
 
 
@@ -1104,7 +1105,7 @@ class AetherfyVectorsClient:
             data: Dict[str, Any] = {"points": points_selector}
         else:
             # Delete by filter
-            data = {"filter": points_selector}
+            data = {"filter": serialize_filter(points_selector, "delete")}
 
         self._make_request(
             "POST",
@@ -1372,10 +1373,7 @@ class AetherfyVectorsClient:
         }
 
         if query_filter:
-            if isinstance(query_filter, Filter):
-                data["filter"] = query_filter.to_dict()
-            else:
-                data["filter"] = query_filter
+            data["filter"] = serialize_filter(query_filter, "search")
 
         if score_threshold is not None:
             data["score_threshold"] = score_threshold
@@ -1442,10 +1440,7 @@ class AetherfyVectorsClient:
         if offset is not None:
             data["offset"] = offset
         if scroll_filter:
-            if isinstance(scroll_filter, Filter):
-                data["filter"] = scroll_filter.to_dict()
-            else:
-                data["filter"] = scroll_filter
+            data["filter"] = serialize_filter(scroll_filter, "scroll")
 
         response = self._make_request(
             "POST",
@@ -1524,7 +1519,7 @@ class AetherfyVectorsClient:
     def count(
         self,
         collection_name: str,
-        count_filter: Optional[Dict[str, Any]] = None,
+        count_filter: Optional[Union[Filter, Dict[str, Any]]] = None,
         exact: bool = True,
         **kwargs,
     ) -> int:
@@ -1532,7 +1527,9 @@ class AetherfyVectorsClient:
 
         Args:
             collection_name: Name of the collection.
-            count_filter: Filter conditions for counting.
+            count_filter: Filter conditions for counting. Accepts a
+                ``Filter`` or a plain dict, matching search/scroll/delete —
+                it used to take a dict only.
             exact: Whether to return exact count.
             **kwargs: Additional parameters for compatibility.
 
@@ -1545,7 +1542,7 @@ class AetherfyVectorsClient:
 
         data: Dict[str, Any] = {"exact": exact}
         if count_filter:
-            data["filter"] = count_filter
+            data["filter"] = serialize_filter(count_filter, "count")
 
         response = self._make_request(
             "POST",

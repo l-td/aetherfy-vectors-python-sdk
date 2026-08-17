@@ -144,6 +144,72 @@ def validate_point_id(point_id: Union[str, int]) -> None:
     )
 
 
+# Filter clause vocabulary, in the order the request body carries it.
+#
+# The three keys are already the WIRE names — Python's vocabulary is
+# snake_case, so `must_not` needs no translation and `Filter.to_dict()` has
+# always emitted it correctly. What was missing is the other half of the
+# contract: every filter-taking method also accepts a plain dict, and that
+# dict was forwarded to the engine VERBATIM. A caller who wrote
+# `{"mustNot": [...]}` — the spelling the JS SDK uses, and the natural guess
+# for anyone arriving from those docs — had the whole exclusion clause
+# dropped on the floor. No error, no warning; the points they meant to
+# exclude came back in the results.
+#
+# Insertion order IS the emitted order. Server cache keys are derived from
+# the request body BYTES, so a fixed order means two callers who wrote the
+# same clauses in different orders share one cache entry instead of two.
+_FILTER_CLAUSES = ("must", "must_not", "should")
+
+
+def serialize_filter(filter_obj: Any, method_name: str) -> Optional[Dict[str, Any]]:
+    """Normalize a filter (``Filter`` or plain dict) into the request body form.
+
+    Args:
+        filter_obj: A ``Filter`` instance, a plain dict of clauses, or None.
+        method_name: Calling method, used in the error message.
+
+    Returns:
+        The body's ``filter`` value, or None when nothing was supplied (so
+        callers can skip the key entirely and leave a filterless body's
+        bytes unchanged).
+
+    Raises:
+        ValidationError: If a dict carries a key outside must/must_not/should.
+            Unknown keys FAIL rather than pass through: silently forwarding
+            an unrecognized clause is exactly how the camelCase spelling
+            stayed invisible.
+    """
+    # Import here: models imports nothing from utils today, and a
+    # module-level import would create a cycle if that ever changes.
+    from .models import Filter
+
+    if filter_obj is None:
+        return None
+
+    if isinstance(filter_obj, Filter):
+        return filter_obj.to_dict()
+
+    if not isinstance(filter_obj, dict):
+        raise ValidationError(
+            f"{method_name}: filter must be a Filter or a dict with "
+            f"must / must_not / should clauses, got "
+            f"{type(filter_obj).__name__}."
+        )
+
+    unknown = [k for k in filter_obj if k not in _FILTER_CLAUSES]
+    if unknown:
+        hint = ""
+        if "mustNot" in unknown:
+            hint = " Write the clause as `must_not`; `mustNot` is the JavaScript SDK's spelling."
+        raise ValidationError(
+            f"{method_name}: unknown filter clause(s): {', '.join(sorted(unknown))}. "
+            f"Valid clauses are must, must_not, should.{hint}"
+        )
+
+    return {k: filter_obj[k] for k in _FILTER_CLAUSES if filter_obj.get(k) is not None}
+
+
 def build_api_url(base_url: str, endpoint: str) -> str:
     """Build a fully-qualified API URL from a base host and an endpoint path.
 
