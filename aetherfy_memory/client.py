@@ -83,6 +83,7 @@ class MemoryClient:
         api_key: Optional[str] = None,
         *,
         endpoint: Optional[str] = None,
+        api_region: Optional[str] = None,
         timeout: float = DEFAULT_TIMEOUT,
         workspace: Optional[str] = "auto",
         client: Optional[AetherfyVectorsClient] = None,
@@ -106,14 +107,28 @@ class MemoryClient:
                 env var, which is how a deployed agent ends up silently
                 talking to the default endpoint. Ignored if `client` is
                 provided.
+            api_region: Which regional API endpoint to CONNECT to
+                ('us-east-1', 'eu-central-1', or 'ap-southeast-1') — a
+                transport/routing override, NOT where collections live.
+                Forwarded verbatim to AetherfyVectorsClient, which owns the
+                resolution: it sits BELOW ``endpoint`` and below
+                ``AETHERFY_VECTORS_URL``, so the control-plane-injected URL
+                always wins and a local-dev ``api_region=`` left in the code
+                does not hijack a deployed agent (a warning is logged if both
+                are set). Load-bearing only for standalone vectordb usage,
+                local development and debugging. Reads
+                ``AETHERFY_VECTORS_API_REGION`` when omitted. Ignored if
+                `client` is provided. Mirrors the JS SDK, whose
+                MemoryClientConfig extends ClientConfig and has always
+                accepted `apiRegion`.
             timeout: Request timeout in seconds. Ignored if `client` is provided.
             workspace: Workspace name. Defaults to "auto" (reads
                 AETHERFY_WORKSPACE). Pass None to disable workspace scoping
                 (collections land in a shared namespace — not recommended
                 outside local dev). Ignored if `client` is provided.
             client: Bring-your-own AetherfyVectorsClient. When supplied, all
-                other parameters (api_key, endpoint, timeout, workspace) are
-                ignored and this client is used as-is. Useful when sharing
+                other parameters (api_key, endpoint, api_region, timeout,
+                workspace) are ignored and this client is used as-is. Useful when sharing
                 a single vectors client across MemoryClient and other code,
                 or when you need a custom session / retry strategy.
         """
@@ -129,9 +144,14 @@ class MemoryClient:
             # global default endpoint instead of the injected regional one,
             # silently. Forward None and let the one endpoint resolver in
             # AetherfyVectorsClient.__init__ own the precedence.
+            # `api_region` is forwarded, not interpreted. Reimplementing the
+            # precedence here is how the endpoint bug happened in the first
+            # place: this constructor decided something the resolver already
+            # owns. One resolver, one place, both entry points.
             self._client = AetherfyVectorsClient(
                 api_key=api_key,
                 endpoint=endpoint,
+                api_region=api_region,
                 timeout=timeout,
                 workspace=workspace,
             )
