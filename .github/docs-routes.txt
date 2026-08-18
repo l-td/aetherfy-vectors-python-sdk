@@ -1,0 +1,21 @@
+# Documentation routes referenced by README.md.
+#
+# ONE list, TWO consumers, on purpose:
+#   * tests/test_readme_guard.py pins that every docs.aetherfy.com link in the
+#     README is one of these (offline, every CI run);
+#   * .github/workflows/docs-links.yml fetches each one weekly and fails red on
+#     any non-200 (network, scheduled only).
+#
+# The guard alone could never catch a docs-site RESTRUCTURE: it checks that a
+# URL is in this list, not that the URL resolves. Add a route here only after
+# confirming it loads — docs.aetherfy.com/api and vectors.aetherfy.com/docs
+# were both invented, and both 404'd.
+https://docs.aetherfy.com
+https://docs.aetherfy.com/vectors
+https://docs.aetherfy.com/vectors/api
+https://docs.aetherfy.com/vectors/sdk
+https://docs.aetherfy.com/vectors/filtering
+https://docs.aetherfy.com/vectors/limits
+https://docs.aetherfy.com/vectors/errors
+https://docs.aetherfy.com/vectors/search-tuning
+https://docs.aetherfy.com/quickstart

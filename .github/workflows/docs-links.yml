@@ -1,0 +1,54 @@
+name: Docs links
+
+# The README's docs links are pinned OFFLINE by tests/test_readme_guard.py:
+# every docs.aetherfy.com URL must appear in .github/docs-routes.txt. That
+# catches an invented path. It cannot catch a docs-site RESTRUCTURE — the day
+# those routes move, the allowlist still matches itself and CI stays green
+# while every link in the README 404s.
+#
+# So the same list is fetched for real, on a schedule. Network is fine here and
+# deliberately absent from unit CI, which must stay hermetic and offline.
+on:
+  schedule:
+    - cron: '17 6 * * 1' # Mondays, 06:17 UTC — off the hour, nothing else runs then
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch every documented route
+        run: |
+          set -uo pipefail
+          fail=0
+          while read -r url; do
+            case "$url" in ''|'#'*) continue ;; esac
+            # An explicit User-Agent is REQUIRED: the edge answers 403/1010 to
+            # curl's default UA, which would fail this job for the wrong reason
+            # and teach everyone to ignore it.
+            #
+            # No -L on purpose. A 301/308 means the page MOVED, which is
+            # precisely the restructure this job exists to catch — the README
+            # should link the destination, not be quietly redirected to it.
+            code=$(curl -sS -o /dev/null -w '%{http_code}' \
+                     -A 'aetherfy-docs-link-check (+github actions)' \
+                     --max-time 20 "$url" || echo 000)
+            if [ "$code" = "200" ]; then
+              echo "  ok   $code  $url"
+            else
+              echo "  FAIL $code  $url"
+              fail=1
+            fi
+          done < .github/docs-routes.txt
+
+          if [ "$fail" -ne 0 ]; then
+            echo ""
+            echo "A documented route no longer answers 200."
+            echo "If docs.aetherfy.com was restructured, fix the READMEs FIRST,"
+            echo "then update .github/docs-routes.txt in BOTH SDK repos — the"
+            echo "offline guard pins this same file, so a stale copy passes"
+            echo "silently until this job runs."
+            exit 1
+          fi
