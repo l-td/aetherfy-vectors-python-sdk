@@ -3,7 +3,7 @@
 [![PyPI version](https://badge.fury.io/py/aetherfy-vectors.svg)](https://badge.fury.io/py/aetherfy-vectors)
 [![Python Support](https://img.shields.io/pypi/pyversions/aetherfy-vectors.svg)](https://pypi.org/project/aetherfy-vectors/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Tests](https://github.com/aetherfy/aetherfy-vectors-python/workflows/Tests/badge.svg)](https://github.com/aetherfy/aetherfy-vectors-python/actions)
+[![Tests](https://github.com/l-td/aetherfy-vectors-python-sdk/workflows/Tests/badge.svg)](https://github.com/l-td/aetherfy-vectors-python-sdk/actions)
 
 A **drop-in replacement** for `qdrant-client` that provides **global vector database operations** with automatic replication, intelligent caching, and **sub-50ms latency worldwide**.
 
@@ -39,7 +39,7 @@ from aetherfy_vectors import AetherfyVectorsClient
 client = AetherfyVectorsClient(api_key="afy_live_your_api_key_here")
 
 # All your existing code works unchanged! 🎉
-results = client.search(collection="my_collection", vector=[0.1, 0.2, 0.3])
+results = client.search(collection_name="my_collection", query_vector=[0.1, 0.2, 0.3])
 ```
 
 ### Basic Usage Example
@@ -132,7 +132,8 @@ client.upsert("large_collection", large_batch)
 
 ### Complex Filtering
 
-Full compatibility with qdrant-client filters:
+Full compatibility with qdrant-client filters. Three clauses, and only
+three: `must`, `must_not`, `should`.
 
 ```python
 results = client.search(
@@ -142,11 +143,37 @@ results = client.search(
         "must": [
             {"key": "category", "match": {"value": "electronics"}},
             {"key": "price", "range": {"gte": 100, "lte": 1000}}
-        ]
+        ],
+        "must_not": [
+            {"key": "status", "match": {"value": "discontinued"}}
+        ],
     },
     limit=20
 )
 ```
+
+The same clauses are available as a typed object, if you prefer it to a dict:
+
+```python
+from aetherfy_vectors.models import Filter
+
+results = client.search(
+    collection_name="products",
+    query_vector=[...],
+    query_filter=Filter(
+        must=[{"key": "category", "match": {"value": "electronics"}}],
+        must_not=[{"key": "status", "match": {"value": "discontinued"}}],
+    ),
+    limit=20,
+)
+```
+
+A clause name outside those three raises `ValidationError` before the
+request leaves the process — including `mustNot`, which is the JavaScript
+SDK's spelling of `must_not`. Unknown clauses are never forwarded and never
+dropped: writing the wrong one is an error you see, not a filter that
+quietly matches everything. The same rule applies everywhere a filter is
+accepted — `search`, `scroll`, `scroll_iter`, `count`, `delete`.
 
 ### Context Manager Support
 
@@ -377,7 +404,7 @@ results = client.search("documents", query_vector=embedding, limit=10)
 
 # List — only returns collections in your workspace
 collections = client.get_collections()
-# → [CollectionDescription(name='documents', ...)]  (short names, not scoped names)
+# → [Collection(name='documents', ...)]  (short names, not scoped names)
 ```
 
 ### Multi-agent example
@@ -527,7 +554,9 @@ collection placement, pass `regions=` to `create_collection` (see below).
 # collection to a subset of your scope; omit it to default to your full
 # scope. (Distinct from the constructor's `api_region`, which only picks
 # the endpoint to connect to.)
-collection = client.create_collection(name, vectors_config, distance=None, regions=None)
+collection = client.create_collection(
+    collection_name, vectors_config, distance=None, description=None, regions=None
+)
 
 # List collections
 collections = client.get_collections()
@@ -554,7 +583,8 @@ points = client.retrieve(collection_name, ids, with_payload=True, with_vectors=F
 # Delete points
 client.delete(collection_name, point_ids_or_filter)
 
-# Count points
+# Count points — count_filter takes a Filter or a plain dict, same as
+# search / scroll / delete
 count = client.count(collection_name, count_filter=None, exact=True)
 ```
 
@@ -587,8 +617,10 @@ query at a different `hnsw_ef` is a separate cache entry (never a wrong hit).
 ### Schema Management (Aetherfy-specific)
 
 ```python
-# Set, fetch, and remove a payload schema
-etag = client.set_schema(collection_name, schema, enforcement="strict", description=None)
+# Set, fetch, and remove a payload schema.
+# enforcement defaults to "off" — pass "warn" or "strict" to have the
+# server act on violations.
+etag = client.set_schema(collection_name, schema, enforcement="off", description=None)
 schema = client.get_schema(collection_name)           # None if not set
 client.delete_schema(collection_name)
 
@@ -700,7 +732,7 @@ def health_check():
    pip install aetherfy-vectors
    ```
 
-2. **Get your API key** from [Aetherfy Dashboard](https://dashboard.aetherfy.com)
+2. **Get your API key** from the [Aetherfy dashboard](https://app.aetherfy.com/dashboard/settings/api-keys)
 
 3. **Update imports**:
    ```python
@@ -736,14 +768,15 @@ def health_check():
 
 ## 🤝 Contributing
 
-We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
+We welcome contributions! Open an issue or a pull request on
+[GitHub](https://github.com/l-td/aetherfy-vectors-python-sdk).
 
 ### Development Setup
 
 ```bash
 # Clone the repository
-git clone https://github.com/aetherfy/aetherfy-vectors-python.git
-cd aetherfy-vectors-python
+git clone https://github.com/l-td/aetherfy-vectors-python-sdk.git
+cd aetherfy-vectors-python-sdk
 
 # Install development dependencies
 pip install -r requirements-dev.txt
@@ -762,9 +795,9 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## 🆘 Support
 
 - **Documentation**: [https://docs.aetherfy.com/vectors](https://docs.aetherfy.com/vectors)
-- **API Reference**: [https://vectors.aetherfy.com/docs](https://vectors.aetherfy.com/docs)
-- **Issues**: [GitHub Issues](https://github.com/aetherfy/aetherfy-vectors-python/issues)
-- **Discord**: [Aetherfy Community](https://discord.gg/aetherfy)
+- **API Reference**: [https://docs.aetherfy.com/vectors/api](https://docs.aetherfy.com/vectors/api)
+- **SDK Reference**: [https://docs.aetherfy.com/vectors/sdk](https://docs.aetherfy.com/vectors/sdk)
+- **Issues**: [GitHub Issues](https://github.com/l-td/aetherfy-vectors-python-sdk/issues)
 - **Email**: [developers@aetherfy.com](mailto:developers@aetherfy.com)
 
 ## 🌟 Why Choose Aetherfy Vectors?
@@ -786,4 +819,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-**Ready to experience global vector search?** [Get your API key](https://dashboard.aetherfy.com) and migrate in minutes! 🚀
+**Ready to experience global vector search?** [Get your API key](https://app.aetherfy.com/dashboard/settings/api-keys) and migrate in minutes! 🚀
