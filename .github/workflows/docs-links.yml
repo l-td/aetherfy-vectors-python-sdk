@@ -22,7 +22,19 @@ jobs:
       - name: Fetch every documented route
         run: |
           set -uo pipefail
+
+          # ANTI-NO-OP. Without this, a missing, renamed or emptied
+          # docs-routes.txt means the loop body never runs, `fail` stays 0 and
+          # the step exits GREEN having checked nothing — a liveness job that
+          # reports success while checking zero links is worse than no job.
+          if [ ! -s .github/docs-routes.txt ]; then
+            echo "docs-routes.txt is missing or empty — nothing to check."
+            echo "This job asserts liveness; with no list it asserts nothing."
+            exit 1
+          fi
+
           fail=0
+          checked=0
           while read -r url; do
             case "$url" in ''|'#'*) continue ;; esac
             # An explicit User-Agent is REQUIRED: the edge answers 403/1010 to
@@ -35,6 +47,7 @@ jobs:
             code=$(curl -sS -o /dev/null -w '%{http_code}' \
                      -A 'aetherfy-docs-link-check (+github actions)' \
                      --max-time 20 "$url" || echo 000)
+            checked=$((checked + 1))
             if [ "$code" = "200" ]; then
               echo "  ok   $code  $url"
             else
@@ -42,6 +55,15 @@ jobs:
               fail=1
             fi
           done < .github/docs-routes.txt
+
+          echo ""
+          echo "routes checked: $checked"
+          if [ "$checked" -lt 5 ]; then
+            echo "fewer routes than this repo documents — the list was gutted,"
+            echo "or the read loop stopped seeing it. Failing rather than"
+            echo "reporting success over a near-empty list."
+            exit 1
+          fi
 
           if [ "$fail" -ne 0 ]; then
             echo ""
