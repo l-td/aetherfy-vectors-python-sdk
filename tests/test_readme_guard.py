@@ -113,7 +113,12 @@ def _class_from_call(call: ast.Call, bindings: Dict[str, type]):
                 obj = resolve_symbol(pkg, ann)
                 if inspect.isclass(obj):
                     return obj
-        elif inspect.isclass(ann):
+        elif inspect.isclass(ann) and ann.__module__.split(".")[0] in OUR_PACKAGES:
+            # Only OUR classes become receivers. Without the module test this
+            # bound `count = client.count(...)` to builtins.int and `etag` to
+            # builtins.str — harmless today (nothing calls a method on them)
+            # but it contradicts the scope stated above, and the first bad
+            # sample to call one would be told "int has no attribute ...".
             return ann
     return None
 
@@ -311,20 +316,24 @@ OWNED_REPOS = {
     f"{GITHUB_OWNER}/aetherfy-cli",
 }
 
-# Routes that exist on docs.aetherfy.com. Liveness is not CI-checkable (no
-# network in tests); the docs verification pass owns whether they resolve. This
-# pins the STRINGS so a typo or an invented path cannot ship.
-KNOWN_DOCS_ROUTES = {
-    "https://docs.aetherfy.com",
-    "https://docs.aetherfy.com/vectors",
-    "https://docs.aetherfy.com/vectors/api",
-    "https://docs.aetherfy.com/vectors/sdk",
-    "https://docs.aetherfy.com/vectors/filtering",
-    "https://docs.aetherfy.com/vectors/limits",
-    "https://docs.aetherfy.com/vectors/errors",
-    "https://docs.aetherfy.com/vectors/search-tuning",
-    "https://docs.aetherfy.com/quickstart",
-}
+DOCS_ROUTES_FILE = REPO_ROOT / ".github" / "docs-routes.txt"
+
+
+def known_docs_routes() -> set:
+    """The one list of documented routes, shared with the liveness workflow.
+
+    Deliberately NOT a literal here. This guard can only check that a URL is in
+    the list; whether the list still resolves is checked for real by
+    .github/workflows/docs-links.yml on a weekly schedule. Two copies of the
+    list would let those two answers disagree, which is the exact shape of the
+    bug this whole batch exists to kill.
+    """
+    routes = set()
+    for line in DOCS_ROUTES_FILE.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            routes.add(line)
+    return routes
 
 GITHUB_URL_RE = re.compile(r"https://github\.com/[A-Za-z0-9_.\-/]+")
 DOCS_URL_RE = re.compile(r"https://docs\.aetherfy\.com[A-Za-z0-9_.\-/]*")
@@ -358,16 +367,42 @@ def test_github_urls_name_repositories_we_own():
 
 
 def test_docs_links_are_known_routes():
+    routes = known_docs_routes()
+    assert len(routes) >= 5, (
+        f"only {len(routes)} routes read from {DOCS_ROUTES_FILE.name} — the "
+        f"loader is broken and this assertion would pass vacuously"
+    )
     found = 0
     for url in DOCS_URL_RE.findall(read_readme()):
         found += 1
-        assert url.rstrip("/") in KNOWN_DOCS_ROUTES, (
-            f"README links {url}, which is not a known docs route. Add it to "
-            f"KNOWN_DOCS_ROUTES only after confirming it resolves on the live "
-            f"site — docs.aetherfy.com/api and vectors.aetherfy.com/docs were "
-            f"both invented and both 404'd."
+        assert url.rstrip("/") in routes, (
+            f"README links {url}, which is not in .github/docs-routes.txt. Add "
+            f"it there only after confirming it resolves on the live site — "
+            f"docs.aetherfy.com/api and vectors.aetherfy.com/docs were both "
+            f"invented and both 404'd."
         )
     assert found >= 2, f"only {found} docs URLs found — the scan is dead"
+
+
+def test_the_liveness_workflow_still_guards_these_routes():
+    """This guard cannot see a docs-site restructure; that job can.
+
+    Same reasoning as the CI-trigger assertion: a check that lives in a file
+    nothing else references can be deleted without any red. So the offline
+    guard asserts the online one exists and reads the same list.
+    """
+    workflow = REPO_ROOT / ".github" / "workflows" / "docs-links.yml"
+    assert workflow.exists(), (
+        "docs-links.yml is gone — the docs routes are now pinned as strings "
+        "with nothing checking they resolve, which is how a restructure rots "
+        "silently in the allowlist"
+    )
+    body = workflow.read_text(encoding="utf-8")
+    assert ".github/docs-routes.txt" in body, (
+        "the liveness workflow no longer reads docs-routes.txt — it and this "
+        "guard must check the same list, or they can disagree silently"
+    )
+    assert "schedule:" in body, "the liveness check must run on a schedule"
 
 
 # ---------------------------------------------------------------------------
@@ -430,6 +465,28 @@ def test_perf_claim_patterns_actually_fire():
         assert not any(p.search(fine) for p, _ in PERF_CLAIM_PATTERNS), (
             f"false positive on: {fine}"
         )
+
+
+def test_ci_actually_runs_this_guard_on_readme_changes():
+    """A path-filtered workflow can switch this whole file off, silently.
+
+    Found by audit: .github/workflows/test.yml filters on
+    aetherfy_vectors/**, aetherfy_memory/**, tests/**, setup.py — and NOT on
+    README.md. A commit touching only the README therefore triggered no
+    workflow at all, so the guard never ran on the exact change it exists to
+    police. It would still have caught a README made stale by a CODE change,
+    which is why nothing looked broken.
+
+    A missing path filter fails GREEN — no run, no red, no signal. So the
+    trigger is asserted here, where a red is visible.
+    """
+    workflow = (REPO_ROOT / ".github" / "workflows" / "test.yml").read_text(encoding="utf-8")
+    blocks = workflow.count("- 'README.md'")
+    assert blocks >= 2, (
+        f"README.md appears in {blocks} of the workflow's path filters; both the "
+        f"push and pull_request blocks need it, or a README-only change runs no "
+        f"CI and this guard is decoration"
+    )
 
 
 def test_install_line_is_left_alone():
