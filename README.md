@@ -5,13 +5,13 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Tests](https://github.com/l-td/aetherfy-vectors-python-sdk/workflows/Tests/badge.svg)](https://github.com/l-td/aetherfy-vectors-python-sdk/actions)
 
-A **drop-in replacement** for `qdrant-client` that provides **global vector database operations** with automatic replication, intelligent caching, and **sub-50ms latency worldwide**.
+A **drop-in replacement** for `qdrant-client` that provides **global vector database operations** with automatic replication, intelligent caching, and **low latency worldwide**.
 
 ## 🚀 Key Features
 
 - **🔄 Drop-in Replacement**: 100% compatible with `qdrant-client` API
-- **🌍 Global Performance**: Sub-50ms latency from anywhere in the world
-- **⚡ Intelligent Caching**: 85%+ cache hit rates for optimal performance
+- **🌍 Global Performance**: Low latency from anywhere in the world
+- **⚡ Intelligent Caching**: High cache hit rates for optimal performance
 - **🛡️ Zero DevOps**: No infrastructure management or regional deployment needed
 - **📊 Built-in Analytics**: Real-time performance metrics and usage insights
 - **🔧 Auto-Failover**: Intelligent routing and retry mechanisms
@@ -108,9 +108,9 @@ Your requests are automatically routed to the optimal region:
 
 ```python
 # No configuration needed - routing is automatic!
-# Requests from US → US regions (20ms)
-# Requests from EU → EU regions (15ms)  
-# Requests from Asia → Asia regions (25ms)
+# Requests from the US  → the US region
+# Requests from the EU  → the EU region
+# Requests from Asia    → the Asia-Pacific region
 ```
 
 ## 🔧 Advanced Usage
@@ -480,8 +480,8 @@ Schema violations raise `SchemaValidationError` (with a list of per-field errors
 
 | Feature | Local Qdrant | Aetherfy Vectors |
 |---------|-------------|------------------|
-| **Global Latency** | 200-2000ms | **<50ms** |
-| **Cache Hit Rate** | 0% | **85%+** |
+| **Global Latency** | Single region, wherever you host it | **Served from the nearest region** |
+| **Caching** | None | **Built in** |
 | **DevOps Required** | High | **Zero** |
 | **Auto-Failover** | Manual | **Automatic** |
 | **Global Replication** | Manual | **Automatic** |
@@ -810,7 +810,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ### For Teams
 - **No DevOps overhead** - focus on your product, not infrastructure
 - **Built-in monitoring** - comprehensive analytics out of the box
-- **Reliable performance** - 99.9% uptime with automatic failover
+- **Reliable performance** - automatic failover
 
 ### For Enterprises
 - **Global scalability** - handles millions of vectors effortlessly

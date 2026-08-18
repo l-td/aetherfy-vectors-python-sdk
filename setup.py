@@ -35,7 +35,7 @@ def get_version():
 setup(
     name="aetherfy-vectors",
     version=get_version(),
-    description="Global vector database client with automatic replication and sub-50ms latency worldwide",
+    description="Global vector database client with automatic replication and low latency worldwide",
     long_description=read_readme(),
     long_description_content_type="text/markdown",
     author="Aetherfy",
