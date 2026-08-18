@@ -25,6 +25,9 @@ pip install aetherfy-vectors
 
 ## 🏃‍♂️ Quick Start
 
+The snippets below build on each other; each assumes the imports and client
+from the previous ones.
+
 ### Migration from qdrant-client
 
 Replace your existing qdrant-client code with just **2 lines changed**:
