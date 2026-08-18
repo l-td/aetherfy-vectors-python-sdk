@@ -1563,10 +1563,18 @@ class AetherfyVectorsClient:
             collection_name: Name of the collection.
 
         Returns:
-            Schema object if schema is defined, None otherwise.
+            The collection's Schema, or None when no schema is defined.
 
         Raises:
-            SchemaNotFoundError: If no schema is defined for the collection.
+            AetherfyVectorsException: On any non-404 failure.
+
+        A missing schema does NOT raise. The backend answers 404 for both
+        "collection exists but has no schema" and "collection is gone", and
+        neither is an error for a getter — the 404 is caught and None is
+        returned (the COLLECTION_NOT_FOUND case additionally evicts the local
+        caches). This docstring used to promise SchemaNotFoundError as well as
+        None, which cannot both be true; delete_schema is the sibling that
+        really does raise it, and the two are deliberately different.
         """
         validate_collection_name(collection_name)
 
