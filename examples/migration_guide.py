@@ -156,10 +156,6 @@ def demonstrate_migration():
             print(f"✓ Average latency: {perf_analytics.avg_latency_ms:.1f}ms")
             print(f"✓ Active regions: {len(perf_analytics.active_regions)}")
             
-            # Collection-specific analytics
-            coll_analytics = client.get_collection_analytics(collection_name)
-            print(f"✓ Collection cache hit rate: {coll_analytics.cache_hit_rate:.1%}")
-            
             # Usage statistics
             usage_stats = client.get_usage_stats()
             print(f"✓ Plan: {usage_stats.plan_name}")

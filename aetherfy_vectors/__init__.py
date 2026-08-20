@@ -27,7 +27,6 @@ from .models import (
     Point,
     Collection,
     PerformanceAnalytics,
-    CollectionAnalytics,
     UsageStats,
 )
 from .schema import (
@@ -52,7 +51,6 @@ __all__ = [
     "Point",
     "Collection",
     "PerformanceAnalytics",
-    "CollectionAnalytics",
     "UsageStats",
     "Schema",
     "FieldDefinition",

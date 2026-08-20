@@ -22,7 +22,6 @@ from .models import (
     DistanceMetric,
     Filter,
     PerformanceAnalytics,
-    CollectionAnalytics,
     UsageStats,
 )
 from .exceptions import (
@@ -1786,20 +1785,6 @@ class AetherfyVectorsClient:
             Performance analytics data.
         """
         return self.analytics.get_performance_analytics(time_range, region)
-
-    def get_collection_analytics(
-        self, collection_name: str, time_range: str = "24h"
-    ) -> CollectionAnalytics:
-        """Retrieve analytics for a specific collection.
-
-        Args:
-            collection_name: Name of the collection.
-            time_range: Time range for analytics (1h, 24h, 7d, 30d).
-
-        Returns:
-            Collection-specific analytics data.
-        """
-        return self.analytics.get_collection_analytics(collection_name, time_range)
 
     def get_usage_stats(self) -> UsageStats:
         """Retrieve current usage statistics against customer limits.

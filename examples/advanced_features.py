@@ -73,11 +73,11 @@ def analytics_example():
         if usage.requests_usage_percent > 80:
             print("⚠️  Warning: Request usage above 80%")
         
-        # 4. Collection-Specific Analytics
-        print(f"\n4. Collection Analytics")
+        # 4. Demo Collection — the fixture section 7 measures against
+        print(f"\n4. Demo Collection Setup")
         print("-" * 40)
-        
-        # First, let's create a test collection with some data
+
+        # Created and seeded here, measured in section 7, deleted at the end.
         test_collection = "analytics_demo"
         
         try:
@@ -94,25 +94,16 @@ def analytics_example():
                 for i in range(10)
             ]
             client.upsert(test_collection, test_points)
-            
-            # Perform some searches to generate analytics data
+
+            # Warm the caches so section 7's timings are steady-state
             for i in range(5):
                 client.search(test_collection, [i*0.1, i*0.2, i*0.3, i*0.4], limit=3)
-            
-            # Get collection analytics
-            coll_analytics = client.get_collection_analytics(test_collection)
-            print(f"Collection: {coll_analytics.collection_name}")
-            print(f"Total Points: {coll_analytics.total_points:,}")
-            print(f"Search Requests: {coll_analytics.search_requests:,}")
-            print(f"Avg Search Latency: {coll_analytics.avg_search_latency_ms:.1f}ms")
-            print(f"Cache Hit Rate: {coll_analytics.cache_hit_rate:.1%}")
-            print(f"Top Regions: {', '.join(coll_analytics.top_regions)}")
-            if coll_analytics.storage_size_mb:
-                print(f"Storage Size: {coll_analytics.storage_size_mb:.2f} MB")
-            
+
+            print(f"Seeded {test_collection} with {len(test_points)} points")
+
         except Exception as e:
-            print(f"Collection analytics demo skipped: {e}")
-        
+            print(f"Demo collection setup skipped: {e}")
+
         # 5. Cache Performance Monitoring
         print(f"\n5. Cache Performance")
         print("-" * 40)
@@ -126,25 +117,8 @@ def analytics_example():
         except Exception as e:
             print(f"Cache analytics: {e}")
         
-        # 6. Top Collections by Activity
-        print(f"\n6. Top Collections")
-        print("-" * 40)
-        
-        try:
-            top_collections = client.analytics.get_top_collections(
-                metric="requests", 
-                time_range="24h", 
-                limit=5
-            )
-            
-            print("Most Active Collections (by requests):")
-            for i, collection in enumerate(top_collections, 1):
-                print(f"  {i}. {collection['name']} - {collection['requests']:,} requests")
-        except Exception as e:
-            print(f"Top collections: {e}")
-        
-        # 7. Region-Specific Performance
-        print(f"\n7. Region Performance Details")
+        # 6. Region-Specific Performance
+        print(f"\n6. Region Performance Details")
         print("-" * 40)
         
         try:
@@ -164,8 +138,8 @@ def analytics_example():
         except Exception as e:
             print(f"Region performance: {e}")
         
-        # 8. Real-time Performance Monitoring
-        print(f"\n8. Real-time Monitoring Example")
+        # 7. Real-time Performance Monitoring
+        print(f"\n7. Real-time Monitoring Example")
         print("-" * 40)
         
         if test_collection and client.collection_exists(test_collection):

@@ -96,10 +96,6 @@ print(f"Cache hit rate: {analytics.cache_hit_rate:.1%}")
 print(f"Average latency: {analytics.avg_latency_ms:.1f}ms")
 print(f"Active regions: {len(analytics.active_regions)}")
 
-# Collection-specific analytics
-collection_stats = client.get_collection_analytics("documents")
-print(f"Search requests: {collection_stats.search_requests:,}")
-
 # Usage statistics
 usage = client.get_usage_stats()
 print(f"Points used: {usage.current_points:,}/{usage.max_points:,}")
@@ -640,9 +636,6 @@ client.clear_schema_cache(collection_name=None)       # None clears all
 ```python
 # Global performance
 analytics = client.get_performance_analytics(time_range="24h", region=None)
-
-# Collection analytics
-stats = client.get_collection_analytics(collection_name, time_range="24h")
 
 # Usage statistics
 usage = client.get_usage_stats()

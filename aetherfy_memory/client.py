@@ -25,7 +25,6 @@ from typing import List, Optional
 from aetherfy_vectors.client import AetherfyVectorsClient
 from aetherfy_vectors.models import (
     Collection,
-    CollectionAnalytics,
     DistanceMetric,
     PerformanceAnalytics,
     UsageStats,
@@ -344,25 +343,6 @@ class MemoryClient:
         return self._client.get_performance_analytics(
             time_range=time_range, region=region
         )
-
-    def get_namespace_analytics(
-        self, name: str, time_range: str = "24h"
-    ) -> CollectionAnalytics:
-        """Per-namespace analytics — mirror of get_collection_analytics."""
-        _validate_user_name(name, "namespace name")
-        if not self._client.collection_exists(name):
-            raise NamespaceNotFoundError(name)
-        return self._client.get_collection_analytics(name, time_range=time_range)
-
-    def get_thread_analytics(
-        self, thread_id: str, time_range: str = "24h"
-    ) -> CollectionAnalytics:
-        """Per-thread analytics."""
-        _validate_user_name(thread_id, "thread id")
-        collection = _THREAD_PREFIX + thread_id
-        if not self._client.collection_exists(collection):
-            raise ThreadNotFoundError(thread_id)
-        return self._client.get_collection_analytics(collection, time_range=time_range)
 
     def get_usage_stats(self) -> UsageStats:
         """Usage stats for this workspace."""

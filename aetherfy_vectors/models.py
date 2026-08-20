@@ -133,32 +133,6 @@ class PerformanceAnalytics:
 
 
 @dataclass
-class CollectionAnalytics:
-    """Analytics data for a specific collection."""
-
-    collection_name: str
-    total_points: int
-    search_requests: int
-    avg_search_latency_ms: float
-    cache_hit_rate: float
-    top_regions: List[str]
-    storage_size_mb: Optional[float] = None
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "CollectionAnalytics":
-        """Create CollectionAnalytics from dictionary."""
-        return cls(
-            collection_name=data["collection_name"],
-            total_points=data["total_points"],
-            search_requests=data["search_requests"],
-            avg_search_latency_ms=data["avg_search_latency_ms"],
-            cache_hit_rate=data["cache_hit_rate"],
-            top_regions=data["top_regions"],
-            storage_size_mb=data.get("storage_size_mb"),
-        )
-
-
-@dataclass
 class UsageStats:
     """Current usage statistics against customer limits."""
 

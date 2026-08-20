@@ -323,16 +323,3 @@ class _Scope:
     def clear_schema_cache(self) -> None:
         """Clear the client-side schema cache for this scope."""
         self._client.clear_schema_cache(self._collection)
-
-    # ---------------------------------------------------------------------
-    # Analytics
-    # ---------------------------------------------------------------------
-
-    def get_analytics(self, time_range: str = "24h"):
-        """Per-scope analytics (requests, latency, storage).
-
-        time_range: one of '1h', '24h', '7d', '30d'.
-        """
-        return self._client.get_collection_analytics(
-            self._collection, time_range=time_range
-        )

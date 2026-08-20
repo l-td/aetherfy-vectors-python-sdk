@@ -183,20 +183,6 @@ def sample_performance_analytics():
 
 
 @pytest.fixture
-def sample_collection_analytics():
-    """Sample collection analytics data."""
-    return {
-        "collection_name": "test_collection",
-        "total_points": 1000,
-        "search_requests": 500,
-        "avg_search_latency_ms": 18.5,
-        "cache_hit_rate": 0.92,
-        "top_regions": ["us-east-1", "eu-central-1"],
-        "storage_size_mb": 45.2,
-    }
-
-
-@pytest.fixture
 def sample_usage_stats():
     """Sample usage statistics data."""
     return {
@@ -251,20 +237,6 @@ class MockAnalyticsClient:
                 "requests_per_second": 150.0,
                 "active_regions": ["us-east-1", "eu-central-1"],
                 "region_performance": {},
-            }
-        )
-
-    def get_collection_analytics(self, collection_name: str, time_range: str = "24h"):
-        from aetherfy_vectors.models import CollectionAnalytics
-
-        return CollectionAnalytics.from_dict(
-            {
-                "collection_name": collection_name,
-                "total_points": 1000,
-                "search_requests": 500,
-                "avg_search_latency_ms": 18.5,
-                "cache_hit_rate": 0.92,
-                "top_regions": ["us-east-1"],
             }
         )
 

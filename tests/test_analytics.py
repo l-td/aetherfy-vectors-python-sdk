@@ -9,7 +9,7 @@ from unittest.mock import Mock, patch
 import requests
 
 from aetherfy_vectors.analytics import AnalyticsClient
-from aetherfy_vectors.models import PerformanceAnalytics, CollectionAnalytics, UsageStats
+from aetherfy_vectors.models import PerformanceAnalytics, UsageStats
 from aetherfy_vectors.exceptions import AetherfyVectorsException
 
 
@@ -62,26 +62,6 @@ class TestAnalyticsClient:
         args, kwargs = mock_get.call_args
         assert kwargs["params"]["time_range"] == "7d"
         assert kwargs["params"]["region"] == "us-east-1"
-    
-    @patch('aetherfy_vectors.analytics.requests.get')
-    def test_get_collection_analytics_success(self, mock_get, analytics_client, sample_collection_analytics):
-        """Test successful collection analytics retrieval."""
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = sample_collection_analytics
-        mock_get.return_value = mock_response
-        
-        analytics = analytics_client.get_collection_analytics("test_collection")
-        
-        assert isinstance(analytics, CollectionAnalytics)
-        assert analytics.collection_name == "test_collection"
-        assert analytics.total_points == 1000
-        assert analytics.search_requests == 500
-        assert analytics.cache_hit_rate == 0.92
-        
-        mock_get.assert_called_once()
-        args, kwargs = mock_get.call_args
-        assert "analytics/collections/test_collection" in args[0]
     
     @patch('aetherfy_vectors.analytics.requests.get')
     def test_get_usage_stats_success(self, mock_get, analytics_client, sample_usage_stats):
@@ -143,29 +123,6 @@ class TestAnalyticsClient:
         
         assert cache_stats["hit_rate"] == 0.89
         assert cache_stats["total_requests"] == 10000
-    
-    @patch('aetherfy_vectors.analytics.requests.get')
-    def test_get_top_collections_success(self, mock_get, analytics_client):
-        """Test successful top collections retrieval."""
-        top_collections_data = [
-            {"name": "collection1", "requests": 1000, "latency_ms": 15.2},
-            {"name": "collection2", "requests": 800, "latency_ms": 18.7}
-        ]
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = top_collections_data
-        mock_get.return_value = mock_response
-        
-        top_collections = analytics_client.get_top_collections(
-            metric="requests", time_range="7d", limit=5
-        )
-        
-        assert len(top_collections) == 2
-        assert top_collections[0]["name"] == "collection1"
-        
-        args, kwargs = mock_get.call_args
-        assert kwargs["params"]["metric"] == "requests"
-        assert kwargs["params"]["limit"] == "5"
 
 
 class TestAnalyticsErrorHandling:
@@ -193,22 +150,6 @@ class TestAnalyticsErrorHandling:
             analytics_client.get_performance_analytics()
     
     @patch('aetherfy_vectors.analytics.requests.get')
-    def test_collection_analytics_not_found(self, mock_get, analytics_client):
-        """Test collection analytics for non-existent collection."""
-        mock_response = Mock()
-        mock_response.status_code = 404
-        mock_response.json.return_value = {
-            "message": "Collection not found",
-            "error_code": "COLLECTION_NOT_FOUND",
-            "request_id": "req_456"
-        }
-        mock_response.content = True
-        mock_get.return_value = mock_response
-        
-        with pytest.raises(AetherfyVectorsException):
-            analytics_client.get_collection_analytics("nonexistent_collection")
-    
-    @patch('aetherfy_vectors.analytics.requests.get')
     def test_request_exception_handling(self, mock_get, analytics_client):
         """Test handling of request exceptions."""
         mock_get.side_effect = requests.RequestException("Network error")
@@ -226,17 +167,6 @@ class TestAnalyticsErrorHandling:
 
         with pytest.raises(AetherfyVectorsException):
             analytics_client.get_performance_analytics()
-
-    @patch('aetherfy_vectors.analytics.requests.get')
-    def test_collection_analytics_request_exception(self, mock_get, analytics_client):
-        """Test RequestException handling in collection analytics."""
-        mock_get.side_effect = requests.RequestException("Network error")
-
-        with pytest.raises(AetherfyVectorsException) as exc_info:
-            analytics_client.get_collection_analytics("test_collection")
-
-        assert "Failed to retrieve collection analytics" in str(exc_info.value)
-        assert "Network error" in str(exc_info.value)
 
     @patch('aetherfy_vectors.analytics.requests.get')
     def test_region_performance_request_exception(self, mock_get, analytics_client):
@@ -261,17 +191,6 @@ class TestAnalyticsErrorHandling:
         assert "Timeout error" in str(exc_info.value)
 
     @patch('aetherfy_vectors.analytics.requests.get')
-    def test_top_collections_request_exception(self, mock_get, analytics_client):
-        """Test RequestException handling in top collections."""
-        mock_get.side_effect = requests.RequestException("Service unavailable")
-
-        with pytest.raises(AetherfyVectorsException) as exc_info:
-            analytics_client.get_top_collections()
-
-        assert "Failed to retrieve top collections" in str(exc_info.value)
-        assert "Service unavailable" in str(exc_info.value)
-
-    @patch('aetherfy_vectors.analytics.requests.get')
     def test_performance_analytics_empty_response(self, mock_get, analytics_client):
         """Test handling of empty response body in performance analytics."""
         mock_response = Mock()
@@ -284,18 +203,6 @@ class TestAnalyticsErrorHandling:
             analytics_client.get_performance_analytics()
 
     @patch('aetherfy_vectors.analytics.requests.get')
-    def test_collection_analytics_empty_response(self, mock_get, analytics_client):
-        """Test handling of empty response body in collection analytics."""
-        mock_response = Mock()
-        mock_response.status_code = 500
-        mock_response.content = None  # Empty response
-        mock_response.json.return_value = {}
-        mock_get.return_value = mock_response
-
-        with pytest.raises(AetherfyVectorsException):
-            analytics_client.get_collection_analytics("test_collection")
-
-    @patch('aetherfy_vectors.analytics.requests.get')
     def test_usage_stats_empty_response(self, mock_get, analytics_client):
         """Test handling of empty response body in usage stats."""
         mock_response = Mock()
@@ -306,18 +213,6 @@ class TestAnalyticsErrorHandling:
 
         with pytest.raises(AetherfyVectorsException):
             analytics_client.get_usage_stats()
-
-    @patch('aetherfy_vectors.analytics.requests.get')
-    def test_top_collections_empty_response(self, mock_get, analytics_client):
-        """Test handling of empty response body in top collections."""
-        mock_response = Mock()
-        mock_response.status_code = 500
-        mock_response.content = None  # Empty response
-        mock_response.json.return_value = {}
-        mock_get.return_value = mock_response
-
-        with pytest.raises(AetherfyVectorsException):
-            analytics_client.get_top_collections()
 
 
 class TestAnalyticsModels:
@@ -334,17 +229,6 @@ class TestAnalyticsModels:
         assert "us-east-1" in analytics.region_performance
         assert analytics.total_requests == 129600
         assert analytics.error_rate == 0.002
-    
-    def test_collection_analytics_from_dict(self, sample_collection_analytics):
-        """Test CollectionAnalytics creation from dictionary."""
-        analytics = CollectionAnalytics.from_dict(sample_collection_analytics)
-        
-        assert analytics.collection_name == "test_collection"
-        assert analytics.total_points == 1000
-        assert analytics.search_requests == 500
-        assert analytics.avg_search_latency_ms == 18.5
-        assert analytics.cache_hit_rate == 0.92
-        assert analytics.storage_size_mb == 45.2
     
     def test_usage_stats_from_dict(self, sample_usage_stats):
         """Test UsageStats creation from dictionary."""
@@ -396,11 +280,6 @@ class TestAnalyticsIntegration:
         perf_analytics = client.get_performance_analytics()
         assert isinstance(perf_analytics, PerformanceAnalytics)
         assert perf_analytics.cache_hit_rate == 0.85
-        
-        # Test collection analytics
-        coll_analytics = client.get_collection_analytics("test_collection")
-        assert isinstance(coll_analytics, CollectionAnalytics)
-        assert coll_analytics.collection_name == "test_collection"
         
         # Test usage stats
         usage_stats = client.get_usage_stats()

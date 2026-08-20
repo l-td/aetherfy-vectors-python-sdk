@@ -106,7 +106,7 @@ is no earlier release for these changes to be "changes since".
 - Collection management (create, delete, list, info)
 - Point operations (upsert, retrieve, delete, count)
 - Vector search with filtering and pagination
-- Global and collection-specific analytics
+- Global performance analytics
 - Usage statistics and quota monitoring
 - API key authentication with environment variable support
 - Automatic request routing, failover and retry
@@ -117,7 +117,6 @@ is no earlier release for these changes to be "changes since".
 - `SearchResult` - Search result with score and metadata
 - `Collection` - Collection information and configuration
 - `PerformanceAnalytics` - Global performance metrics
-- `CollectionAnalytics` - Collection-specific metrics
 - `UsageStats` - Usage statistics and limits
 - `Filter` - Query filter for search operations
 - Comprehensive exception hierarchy for error handling

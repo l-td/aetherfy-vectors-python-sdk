@@ -883,27 +883,6 @@ class TestAnalyticsParity:
             time_range="7d", region="us-east-1"
         )
 
-    def test_namespace_analytics_requires_existence(self, memory, fake_vectors_client):
-        fake_vectors_client.collection_exists.return_value = False
-        with pytest.raises(NamespaceNotFoundError):
-            memory.get_namespace_analytics("nope")
-
-    def test_namespace_analytics_delegates(self, memory, fake_vectors_client):
-        fake_vectors_client.collection_exists.return_value = True
-        memory.get_namespace_analytics("customer-42", time_range="1h")
-        fake_vectors_client.get_collection_analytics.assert_called_once_with(
-            "customer-42", time_range="1h"
-        )
-
-    def test_thread_analytics_uses_prefixed_collection(
-        self, memory, fake_vectors_client
-    ):
-        fake_vectors_client.collection_exists.return_value = True
-        memory.get_thread_analytics("conv-99")
-        fake_vectors_client.get_collection_analytics.assert_called_once_with(
-            "__thread__conv-99", time_range="24h"
-        )
-
     def test_usage_stats(self, memory, fake_vectors_client):
         memory.get_usage_stats()
         fake_vectors_client.get_usage_stats.assert_called_once()
