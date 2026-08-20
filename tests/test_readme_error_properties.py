@@ -10,28 +10,53 @@ become contractual; this is the check that says they are true.
 It is the twin of tests/test_readme_guard.py, which checks the SAMPLES against
 the API. That guard checks calls; this one checks the SHAPE OF WHAT IS CAUGHT.
 
-THE CHECK, narrow on purpose, and its edges stated honestly:
+THE CHECK has three rules, and a claim must pass all three:
+
+  1. RESOLVES — the documented property has an assignment site (a literal
+     `self.<prop> = `) somewhere in the class or its ancestors.
+  2. RESOLVES CONCRETELY — that site is in the class the README NAMED, not
+     merely inherited from a base. See below; this is the rule that catches the
+     bug the whole README-guards arc exists because of.
+  3. NAMES A CLASS WE CAN SEE — a claim about a class missing from the scanned
+     sources REFUSES, red. It is never skipped, because a skipped claim is
+     coverage lost in silence.
+
+RULE 2, and why it is not paranoia. The defect that started this arc (recorded
+in the JS twin's header) was a README logging `error.details` on a
+SchemaValidationError. `details` IS declared on the base and IS assigned by the
+base constructor — so rule 1 passes it — but SchemaValidationError never passes
+`details` up, so it is always empty and the violations the reader wanted live in
+`errors`. Requiring the site to be on the concrete class catches that
+statically, with no dataflow: the base's `self.details = ` is not
+SchemaValidationError promising anything.
+
+  * BASE_PROPERTY_ALLOWLIST is the escape hatch for a base property that IS
+    populated for every subclass. It is EMPTY today — every property the README
+    documents resolves on the concrete class or to the native allowance below —
+    and it is rot-checked, so an entry that stops being needed reds.
+
+SCOPE, stated honestly:
 
   * A CLAIM is `except <OurError> as e:` inside a README ```python fence, plus
-    an `e.<prop>` read anywhere in that handler's body. That is the ONLY claim
-    form parsed. Prose is deliberately not parsed: prose is ambiguous about
-    whose property it names — the Limits section's "a structured `error.code`"
-    is the SERVER envelope's key, not an attribute of any class in this
-    package, and a parser that read it as one would red on a true sentence.
+    an `e.<prop>` read anywhere in that handler's body. "Ours" means the README
+    itself imported the name from one of OUR_PACKAGES in some fence — that is
+    what separates our classes from `except Exception as e:`, without a naming
+    convention that a future class could fail to follow.
 
-  * An ASSIGNMENT SITE is a literal `self.<prop> = ...` in the class or one of
-    its ancestors, found with `ast`. Nothing else counts.
+  * Prose is deliberately not parsed: prose is ambiguous about whose property
+    it names — the Limits section's "a structured `error.code`" is the SERVER
+    envelope's key, not an attribute of any class in this package, and a parser
+    that read it as one would red on a true sentence.
 
-  * What this does NOT prove: that the assignment always runs. A site inside an
-    `if` still counts as a site. Whether a subclass ever populates an inherited
-    optional is dataflow — the hole this guard's JS twin documents around
-    `details` — and reviewers still own that.
+  * What this still does NOT prove: that the assignment always runs. A site
+    inside an `if` counts as a site. Rule 2 removes the inherited-optional case,
+    which is the one that has actually bitten; a concrete class that assigns a
+    property only on some paths is still the reviewer's problem.
 
-  * A property assigned any other way (setattr, a helper that writes onto the
-    instance from outside, a base class outside the scanned files) is REPORTED,
-    not guessed at. The JS side has a live example of exactly that shape:
-    `AetherfyVectorsError.code` is stamped by `createErrorFromResponse`, not by
-    a constructor, so documenting `err.code` there would report. If that ever
+  * A property assigned any other way (setattr, a helper writing onto the
+    instance from outside, a base outside the scanned files) is REPORTED, not
+    guessed at. The JS side has a live example: `AetherfyVectorsError.code` is
+    stamped by `createErrorFromResponse`, not by a constructor. If that ever
     becomes a false red here, the fix is to assign the property directly in the
     class, not to widen this check into a dataflow engine.
 
@@ -57,13 +82,17 @@ README = REPO_ROOT / "README.md"
 # The files that define this package's exception classes. Deliberately an
 # explicit short list rather than a walk of the packages: aetherfy_vectors/
 # schema.py defines an unrelated `ValidationError` dataclass, and a walk would
-# collide it with the exception of the same name. test_every_error_class_the_
-# readme_imports_is_in_the_scanned_sources below is what keeps this list honest
-# if the exceptions ever move.
+# collide it with the exception of the same name. Two things keep this list
+# honest: a claim about a class missing from it REFUSES (rule 3), and
+# test_every_error_class_the_readme_imports_is_in_the_scanned_sources reds even
+# for classes no claim has been made about yet.
 ERROR_SOURCES: Tuple[str, ...] = (
     "aetherfy_vectors/exceptions.py",
     "aetherfy_memory/exceptions.py",
 )
+
+# Packages whose imported names the README is understood to be documenting.
+OUR_PACKAGES = ("aetherfy_vectors", "aetherfy_memory")
 
 # Where the ancestor walk stops. BaseException supplies `args` with no
 # `self.args = ` anywhere in this repository, so it is named explicitly rather
@@ -75,11 +104,34 @@ NATIVE_ROOTS: Dict[str, Set[str]] = {
     "object": set(),
 }
 
-# The README documents five error properties today. The floor is a tripwire on
-# the EXTRACTOR, not a cap on the README: parsing fewer than this means the
-# error-handling section moved, renamed its handler variable, or stopped being
-# a ```python fence, and a silent zero would read as "all claims hold".
-MIN_CLAIMS = 5
+# Base-class properties the README may document on a SUBCLASS, because the base
+# populates them for every subclass on every path that raises. Each entry needs
+# a reason; all of them are rot-checked by
+# test_the_base_property_allowlist_has_not_rotted, which reds on an entry that
+# has stopped being needed.
+#
+# EMPTY, and that is the finding: every property the README documents today
+# resolves on the concrete class it names. Adding an entry here is a deliberate
+# act that says "this base property is genuinely populated for this subclass" —
+# it is not the way to silence a red you do not understand.
+BASE_PROPERTY_ALLOWLIST: Dict[str, str] = {}
+
+# THE CENSUS. The exact set of error-object promises the README makes, as
+# `Class.property`. This is a pinned expectation, not a floor: rewrite the error
+# section into a different idiom — a table, `isinstance` inside a bare `except`,
+# a walrus — and the parser stops seeing claims it used to see, which reds HERE
+# as a census mismatch instead of quietly checking less than it did yesterday.
+#
+# To resolve a red: if the README genuinely documents a different set now,
+# update this list in the same commit. That edit is the conscious act a count
+# floor cannot force.
+EXPECTED_CLAIMS: List[str] = [
+    "QuotaExceededError.current",
+    "QuotaExceededError.limit",
+    "QuotaExceededError.quota_type",
+    "RateLimitExceededError.retry_after",
+    "SchemaValidationError.errors",
+]
 
 FENCE_RE = re.compile(r"^```(\w+)\n(.*?)^```", re.MULTILINE | re.DOTALL)
 
@@ -107,6 +159,21 @@ def python_fences(markdown: str) -> List[str]:
         indents = [len(ln) - len(ln.lstrip()) for ln in lines if ln.strip()]
         strip = min(indents) if indents else 0
         out.append("\n".join(ln[strip:] if len(ln) >= strip else ln for ln in lines))
+    return out
+
+
+def _parsed_fences(markdown: str) -> List[Tuple[int, ast.Module]]:
+    """(fence number, tree) for every python fence that parses.
+
+    An unparseable fence is already red in test_readme_guard.py; this guard has
+    nothing to add and must not double-report it.
+    """
+    out = []
+    for index, fence in enumerate(python_fences(markdown), 1):
+        try:
+            out.append((index, ast.parse(fence)))
+        except SyntaxError:
+            continue
     return out
 
 
@@ -242,21 +309,43 @@ class Claim(NamedTuple):
     where: str
 
 
-def readme_claims(markdown: str, known_classes: Set[str]) -> List[Claim]:
-    """Every `except <OurError> as e:` / `e.<prop>` pair, in document order.
+def readme_owned_names(markdown: str) -> Set[str]:
+    """Every symbol the README imports from one of OUR_PACKAGES.
+
+    This is how a claim about OUR class is told apart from `except Exception as
+    e:` — by what the page itself imported, not by a naming convention a future
+    class could fail to follow. It deliberately does not filter by an `Error`
+    suffix: a handler is the only place these names are used as an except type,
+    so nothing else can be mistaken for one.
+    """
+    owned: Set[str] = set()
+    for _, tree in _parsed_fences(markdown):
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module:
+                if node.module.split(".")[0] in OUR_PACKAGES:
+                    owned.update(alias.name for alias in node.names)
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name.split(".")[0] in OUR_PACKAGES:
+                        owned.add((alias.asname or alias.name).split(".")[0])
+    return owned
+
+
+def readme_claims(markdown: str) -> List[Claim]:
+    """Every `except <OurError> as e:` / `e.<prop>` pair, deduplicated.
 
     A tuple handler (`except (A, B) as e:`) claims the property against BOTH
     classes, because the body runs for either — that is the promise the reader
     is handed, not a choice between two.
+
+    Note what is NOT filtered here: a handler naming one of our imported names
+    produces a claim even when the class is absent from the scanned sources.
+    `audit` refuses those. Dropping them here is exactly the silent coverage
+    loss this guard is supposed to be immune to.
     """
+    owned = readme_owned_names(markdown)
     claims: List[Claim] = []
-    for index, fence in enumerate(python_fences(markdown), 1):
-        try:
-            tree = ast.parse(fence)
-        except SyntaxError:
-            # An unparseable fence is already red in test_readme_guard.py; this
-            # guard has nothing to add and must not double-report it.
-            continue
+    for index, tree in _parsed_fences(markdown):
         for node in ast.walk(tree):
             if not isinstance(node, ast.ExceptHandler) or not node.name:
                 continue
@@ -265,7 +354,7 @@ def readme_claims(markdown: str, known_classes: Set[str]) -> List[Claim]:
                 named = [node.type.id]
             elif isinstance(node.type, ast.Tuple):
                 named = [e.id for e in node.type.elts if isinstance(e, ast.Name)]
-            ours = [name for name in named if name in known_classes]
+            ours = [name for name in named if name in owned]
             if not ours:
                 continue  # `except Exception as e:` is the reader's own business
             for sub in ast.walk(node):
@@ -283,11 +372,16 @@ def readme_claims(markdown: str, known_classes: Set[str]) -> List[Claim]:
     return sorted(set(claims))
 
 
+def census(markdown: str) -> List[str]:
+    """The claims as pinnable `Class.property` strings."""
+    return sorted({f"{c.cls}.{c.prop}" for c in readme_claims(markdown)})
+
+
 def audit(
     markdown: str, table: Dict[str, ClassInfo]
 ) -> Tuple[List[str], List[Claim]]:
     """Returns (problems, claims). Zero claims is itself a problem."""
-    claims = readme_claims(markdown, set(table))
+    claims = readme_claims(markdown)
     if not claims:
         return (
             [
@@ -301,17 +395,53 @@ def audit(
 
     problems: List[str] = []
     for claim in claims:
+        info = table.get(claim.cls)
+
+        # Rule 3 — a class we cannot see is refused, never skipped.
+        if info is None:
+            problems.append(
+                f"{claim.where}: the README documents `{claim.cls}.{claim.prop}`, "
+                f"but {claim.cls} is not defined in "
+                f"{' / '.join(ERROR_SOURCES)}. This guard REFUSES rather than "
+                f"skipping it: a skipped claim is coverage lost in silence. Add "
+                f"the file that defines {claim.cls} to ERROR_SOURCES."
+            )
+            continue
+
         props, chain_problem = inherited_props(table, claim.cls)
         if chain_problem is not None:
             problems.append(f"{claim.where}: {chain_problem}")
             continue
-        if claim.prop not in props:
+
+        # Rule 1 — it resolves at all.
+        site = props.get(claim.prop)
+        if site is None:
             problems.append(
                 f"{claim.where}: `{claim.cls}.{claim.prop}` is documented, but no "
                 f"`self.{claim.prop} = ` exists in {claim.cls} or its ancestors "
                 f"({' -> '.join(_chain(table, claim.cls))}). A reader's handler "
                 f"would raise AttributeError. Assign it, or stop documenting it."
             )
+            continue
+
+        # Rule 2 — it resolves on the class the README named.
+        if claim.prop in info.props:
+            continue
+        if site.startswith("native "):
+            continue
+        if claim.prop in BASE_PROPERTY_ALLOWLIST:
+            continue
+        problems.append(
+            f"{claim.where}: `{claim.cls}.{claim.prop}` is documented, but "
+            f"{claim.cls} never assigns it — the only site is inherited, at "
+            f"{site}. That is the shape of the defect this guard exists for: "
+            f"`details` was declared and assigned on the base, so it type-checked "
+            f"and existed, but the subclass the README named never populated it "
+            f"and readers got an empty value. Assign it on {claim.cls}, document "
+            f"the property the class actually sets, or — only if the base truly "
+            f"populates it for every subclass — add it to BASE_PROPERTY_ALLOWLIST "
+            f"with a reason."
+        )
     return problems, claims
 
 
@@ -334,10 +464,14 @@ def _chain(table: Dict[str, ClassInfo], class_name: str) -> List[str]:
 def claims_table(markdown: str, table: Dict[str, ClassInfo]) -> str:
     """The report artifact: property -> assignment site, or MISSING."""
     lines = []
-    for claim in readme_claims(markdown, set(table)):
+    for claim in readme_claims(markdown):
         props, _ = inherited_props(table, claim.cls)
         site = props.get(claim.prop, "MISSING")
-        lines.append(f"{claim.cls}.{claim.prop} -> {site}")
+        info = table.get(claim.cls)
+        scope = "concrete" if info and claim.prop in info.props else "inherited"
+        if site.startswith("native "):
+            scope = "native"
+        lines.append(f"{claim.cls}.{claim.prop} -> {site} ({scope})")
     return "\n".join(lines)
 
 
@@ -360,17 +494,46 @@ def test_every_documented_error_property_has_an_assignment_site():
         "assigned directly in exceptions.py — it is reading nothing useful"
     )
 
-    problems, claims = audit(read_readme(), table)
-
-    assert len(claims) >= MIN_CLAIMS, (
-        f"only {len(claims)} error-property claims parsed from README.md, expected "
-        f"at least {MIN_CLAIMS} — the claim parser has gone blind"
-    )
+    problems, _ = audit(read_readme(), table)
     assert not problems, (
         "README documents error properties that nothing assigns:\n  "
         + "\n  ".join(problems)
         + "\n\nEvery claim, and where it resolves:\n"
         + claims_table(read_readme(), table)
+    )
+
+
+def test_the_claim_census_is_exactly_what_is_pinned():
+    """The set, not a floor. See EXPECTED_CLAIMS for how to resolve a red."""
+    assert census(read_readme()) == EXPECTED_CLAIMS
+
+
+def test_the_census_reds_when_the_readme_documents_less():
+    """Mutation proof for the census, asserted-applied first.
+
+    The failure this defends against is a README rewrite into an idiom the
+    parser does not recognise: the claims silently disappear and everything
+    still passes. Deleting one handler is that failure in miniature.
+    """
+    original = read_readme()
+    handler = (
+        "except QuotaExceededError as e:\n"
+        "    print(f\"Quota '{e.quota_type}' exceeded: {e.current}/{e.limit}\")\n"
+    )
+    assert handler in original, (
+        "the mutation target has moved; this proof would silently check nothing"
+    )
+    shrunk = original.replace(handler, "", 1)
+    assert shrunk != original
+
+    parsed = census(shrunk)
+    # The mutation LANDED — the three QuotaExceededError promises are gone.
+    assert not any(c.startswith("QuotaExceededError.") for c in parsed), (
+        f"the mutation did not land: {parsed}"
+    )
+    assert parsed != EXPECTED_CLAIMS, (
+        "the census did not notice a README that documents three fewer "
+        "properties — it cannot force the conscious update it exists for"
     )
 
 
@@ -406,6 +569,68 @@ def test_a_planted_claim_is_caught():
     assert clean == [], f"the check flags the real README: {clean}"
 
 
+def test_the_founding_bug_replanted_is_caught():
+    """Rule 2, proved against the defect the arc exists because of.
+
+    `details` is declared on AetherfyVectorsException and assigned by its
+    constructor, so it EXISTS on every subclass and rule 1 passes it. But
+    SchemaValidationError never passes `details` up, so a reader who followed a
+    README documenting `e.details` would get `{}` where the violations should
+    be. That is the JS twin's recorded historical defect, in this package's
+    spelling. It must red.
+    """
+    table = build_class_table(live_sources())
+    original = read_readme()
+    anchor = "except SchemaValidationError as e:\n    for violation in e.errors:"
+    assert anchor in original, "the mutation target has moved"
+    planted = original.replace(anchor, f"{anchor}\n        print(e.details)", 1)
+    assert planted != original
+
+    # The mutation LANDED as a real claim, not a typo the parser dropped.
+    assert "SchemaValidationError.details" in census(planted), (
+        "the planted read was not parsed as a claim, so the red below — if any — "
+        "would not be the founding bug"
+    )
+    # And rule 1 alone would have PASSED it: the site genuinely exists.
+    props, _ = inherited_props(table, "SchemaValidationError")
+    assert "details" in props, (
+        "premise broken: `details` no longer resolves at all, so this no longer "
+        "reproduces a bug that rule 1 misses"
+    )
+
+    problems, _ = audit(planted, table)
+    assert any(
+        "SchemaValidationError" in p and "details" in p and "inherited" in p
+        for p in problems
+    ), f"the founding bug did not red: {problems}"
+
+
+def test_the_base_property_allowlist_has_not_rotted():
+    """An exemption that stopped being needed is an exemption that must go."""
+    table = build_class_table(live_sources())
+    needed: Set[str] = set()
+    for claim in readme_claims(read_readme()):
+        info = table.get(claim.cls)
+        if info is None or claim.prop in info.props:
+            continue
+        props, _ = inherited_props(table, claim.cls)
+        site = props.get(claim.prop)
+        if site is None or site.startswith("native "):
+            continue
+        needed.add(claim.prop)
+
+    stale = sorted(set(BASE_PROPERTY_ALLOWLIST) - needed)
+    assert not stale, (
+        f"BASE_PROPERTY_ALLOWLIST exempts {', '.join(stale)}, which no README "
+        f"claim needs any more. Delete the entry — a stale exemption is a hole "
+        f"held open for a reason that has expired."
+    )
+    assert all(reason.strip() for reason in BASE_PROPERTY_ALLOWLIST.values()), (
+        "every allowlist entry needs a reason; an unexplained exemption is "
+        "indistinguishable from a silenced red"
+    )
+
+
 def test_zero_claims_is_a_failure_not_a_pass():
     """Vacuity guard. A section that moved must never read as 'all claims hold'."""
     table = build_class_table(live_sources())
@@ -419,6 +644,7 @@ def test_zero_claims_is_a_failure_not_a_pass():
     # the handler variable is no longer bound, so nothing is claimed.
     unbound = (
         "```python\n"
+        "from aetherfy_vectors.exceptions import RateLimitExceededError\n"
         "try:\n"
         "    client.search('c', [0.1])\n"
         "except RateLimitExceededError:\n"
@@ -428,6 +654,47 @@ def test_zero_claims_is_a_failure_not_a_pass():
     problems, claims = audit(unbound, table)
     assert claims == []
     assert problems, "an error section that claims nothing must still be red"
+
+
+def test_a_claim_about_an_unseen_class_refuses():
+    """Rule 3. The residual hole, closed: skipping is never the answer."""
+    table = build_class_table(live_sources())
+    markdown = (
+        "```python\n"
+        "from aetherfy_vectors.exceptions import BrandNewError\n"
+        "try:\n"
+        "    client.search('c', [0.1])\n"
+        "except BrandNewError as e:\n"
+        "    print(e.whatever)\n"
+        "```\n"
+    )
+    problems, claims = audit(markdown, table)
+    assert [f"{c.cls}.{c.prop}" for c in claims] == ["BrandNewError.whatever"], (
+        "the claim was dropped instead of carried through to a refusal — that is "
+        "the silent coverage loss this rule exists to prevent"
+    )
+    assert any("BrandNewError" in p and "REFUSES" in p for p in problems), (
+        f"a claim about an unscanned class did not refuse: {problems}"
+    )
+
+
+def test_a_foreign_exception_is_not_claimed_against_us():
+    """The other side of rule 3: `except Exception as e:` is not our business."""
+    table = build_class_table(live_sources())
+    markdown = (
+        "```python\n"
+        "try:\n"
+        "    collections = client.get_collections()\n"
+        "except Exception as e:\n"
+        "    return {'status': 'unhealthy', 'error': str(e)}\n"
+        "```\n"
+    )
+    _, claims = audit(markdown, table)
+    assert claims == [], f"a builtin exception was claimed against our classes: {claims}"
+
+    # The README's own health-check sample is exactly this shape, so the live
+    # census is the standing proof that it stays out.
+    assert not any(c.startswith("Exception.") for c in census(read_readme()))
 
 
 def test_deleting_a_real_assignment_turns_the_check_red():
@@ -532,26 +799,16 @@ def test_duplicate_class_names_are_refused():
 def test_every_error_class_the_readme_imports_is_in_the_scanned_sources():
     """Coverage pin for ERROR_SOURCES itself.
 
-    A class the table does not know is not checked and is not reported either —
-    `readme_claims` only claims against known class names, so moving an
-    exception to a new file would drop its claims SILENTLY. That is the one
-    fail-green this design has, and this is the assertion that closes it.
+    Distinct from rule 3, which refuses a CLAIM about an unseen class: this reds
+    for a class the README imports but has not documented a property on yet, so
+    a move is caught before the first claim is even made.
     """
     table = build_class_table(live_sources())
-    imported: Set[str] = set()
-    for fence in python_fences(read_readme()):
-        try:
-            tree = ast.parse(fence)
-        except SyntaxError:
-            continue
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.ImportFrom) or not node.module:
-                continue
-            if not node.module.startswith(("aetherfy_vectors", "aetherfy_memory")):
-                continue
-            for alias in node.names:
-                if alias.name.endswith(("Error", "Exception")):
-                    imported.add(alias.name)
+    imported = {
+        name
+        for name in readme_owned_names(read_readme())
+        if name.endswith(("Error", "Exception"))
+    }
 
     assert len(imported) >= 10, (
         f"only {len(imported)} error classes found in the README's imports — the "
