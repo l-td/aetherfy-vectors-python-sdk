@@ -308,12 +308,12 @@ class TestParseErrorResponse:
         response_data = {
             "message": "Unauthorized",
             "request_id": "req_123",
-            "error_code": "AUTH_INVALID_API_KEY",
+            "error_code": "INVALID_API_KEY",
         }
         error = parse_error_response(response_data, 401)
         assert isinstance(error, AuthenticationError)
         assert "Unauthorized" in str(error)
-        assert error.error_code == "AUTH_INVALID_API_KEY"
+        assert error.error_code == "INVALID_API_KEY"
 
     def test_parse_error_response_429(self):
         """Test parsing 429 rate limit error."""
