@@ -165,24 +165,6 @@ def mock_error_response():
 
 
 @pytest.fixture
-def sample_performance_analytics():
-    """Sample performance analytics data."""
-    return {
-        "cache_hit_rate": 0.85,
-        "avg_latency_ms": 23.5,
-        "requests_per_second": 150.0,
-        "active_regions": ["us-east-1", "eu-central-1", "ap-southeast-1"],
-        "region_performance": {
-            "us-east-1": {"latency_ms": 20.1, "requests_per_second": 60.0},
-            "eu-central-1": {"latency_ms": 25.3, "requests_per_second": 45.0},
-            "ap-southeast-1": {"latency_ms": 28.7, "requests_per_second": 45.0},
-        },
-        "total_requests": 129600,
-        "error_rate": 0.002,
-    }
-
-
-@pytest.fixture
 def sample_usage_stats():
     """Sample usage statistics data."""
     return {
@@ -217,48 +199,3 @@ def reset_environment():
     os.environ.update(original_env)
 
 
-class MockAnalyticsClient:
-    """Mock analytics client for testing."""
-
-    def __init__(
-        self, base_url: str, auth_headers: Dict[str, str], timeout: float = 30.0
-    ):
-        self.base_url = base_url
-        self.auth_headers = auth_headers
-        self.timeout = timeout
-
-    def get_performance_analytics(self, time_range: str = "24h", region: str = None):
-        from aetherfy_vectors.models import PerformanceAnalytics
-
-        return PerformanceAnalytics.from_dict(
-            {
-                "cache_hit_rate": 0.85,
-                "avg_latency_ms": 23.5,
-                "requests_per_second": 150.0,
-                "active_regions": ["us-east-1", "eu-central-1"],
-                "region_performance": {},
-            }
-        )
-
-    def get_usage_stats(self):
-        from aetherfy_vectors.models import UsageStats
-
-        return UsageStats.from_dict(
-            {
-                "current_collections": 5,
-                "max_collections": 10,
-                "current_points": 50000,
-                "max_points": 100000,
-                "requests_this_month": 25000,
-                "max_requests_per_month": 100000,
-                "storage_used_mb": 250.5,
-                "max_storage_mb": 1000.0,
-                "plan_name": "Professional",
-            }
-        )
-
-
-@pytest.fixture
-def mock_analytics_client():
-    """Mock analytics client fixture."""
-    return MockAnalyticsClient

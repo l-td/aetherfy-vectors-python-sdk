@@ -85,20 +85,13 @@ for result in results:
 
 ## 🌟 Unique Features
 
-### Global Performance Analytics
-
-Monitor your vector database performance globally:
+### Usage Against Your Plan Limits
 
 ```python
-# Get global performance metrics
-analytics = client.get_performance_analytics()
-print(f"Cache hit rate: {analytics.cache_hit_rate:.1%}")
-print(f"Average latency: {analytics.avg_latency_ms:.1f}ms")
-print(f"Active regions: {len(analytics.active_regions)}")
-
-# Usage statistics
 usage = client.get_usage_stats()
 print(f"Points used: {usage.current_points:,}/{usage.max_points:,}")
+print(f"Collections: {usage.current_collections}/{usage.max_collections}")
+print(f"Plan: {usage.plan_name}")
 ```
 
 ### Intelligent Global Routing
@@ -631,13 +624,9 @@ client.refresh_schema(collection_name)
 client.clear_schema_cache(collection_name=None)       # None clears all
 ```
 
-### Analytics (Aetherfy-specific)
+### Usage statistics (Aetherfy-specific)
 
 ```python
-# Global performance
-analytics = client.get_performance_analytics(time_range="24h", region=None)
-
-# Usage statistics
 usage = client.get_usage_stats()
 ```
 
@@ -694,19 +683,21 @@ client = AetherfyVectorsClient(
 ### Built-in Dashboard Data
 
 ```python
-# Get comprehensive metrics for monitoring dashboards
-perf = client.get_performance_analytics()
+# Quota consumption, for a plan-usage dashboard
 usage = client.get_usage_stats()
 
 dashboard_data = {
-    "latency_ms": perf.avg_latency_ms,
-    "cache_hit_rate": perf.cache_hit_rate,
-    "requests_per_second": perf.requests_per_second,
-    "error_rate": perf.error_rate,
-    "usage_percent": usage.points_usage_percent,
-    "active_regions": len(perf.active_regions)
+    "collections_percent": usage.collections_usage_percent,
+    "points_percent": usage.points_usage_percent,
+    "requests_percent": usage.requests_usage_percent,
+    "storage_percent": usage.storage_usage_percent,
+    "plan": usage.plan_name,
 }
 ```
+
+Aetherfy does not expose latency or cache-hit telemetry through this SDK. Measure
+request latency at your own call site — it is the only number that reflects what
+your application actually experienced.
 
 ### Health Checks
 

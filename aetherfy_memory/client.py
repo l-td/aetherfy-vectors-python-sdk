@@ -26,7 +26,6 @@ from aetherfy_vectors.client import AetherfyVectorsClient
 from aetherfy_vectors.models import (
     Collection,
     DistanceMetric,
-    PerformanceAnalytics,
     UsageStats,
     VectorConfig,
 )
@@ -333,16 +332,8 @@ class MemoryClient:
         return self._client.delete_collection(collection)
 
     # ---------------------------------------------------------------------
-    # Global analytics (parity with AetherfyVectorsClient)
+    # Usage stats (parity with AetherfyVectorsClient)
     # ---------------------------------------------------------------------
-
-    def get_performance_analytics(
-        self, time_range: str = "24h", region: Optional[str] = None
-    ) -> PerformanceAnalytics:
-        """Global performance analytics across this workspace."""
-        return self._client.get_performance_analytics(
-            time_range=time_range, region=region
-        )
 
     def get_usage_stats(self) -> UsageStats:
         """Usage stats for this workspace."""

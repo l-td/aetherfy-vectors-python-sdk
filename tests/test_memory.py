@@ -872,17 +872,11 @@ class TestThreadOperations:
 
 
 # =============================================================================
-# Analytics parity
+# Usage-stats parity
 # =============================================================================
 
 
-class TestAnalyticsParity:
-    def test_global_performance_analytics(self, memory, fake_vectors_client):
-        memory.get_performance_analytics(time_range="7d", region="us-east-1")
-        fake_vectors_client.get_performance_analytics.assert_called_once_with(
-            time_range="7d", region="us-east-1"
-        )
-
+class TestUsageStatsParity:
     def test_usage_stats(self, memory, fake_vectors_client):
         memory.get_usage_stats()
         fake_vectors_client.get_usage_stats.assert_called_once()

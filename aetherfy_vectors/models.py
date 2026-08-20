@@ -107,32 +107,6 @@ class Collection:
 
 
 @dataclass
-class PerformanceAnalytics:
-    """Global performance analytics data."""
-
-    cache_hit_rate: float
-    avg_latency_ms: float
-    requests_per_second: float
-    active_regions: List[str]
-    region_performance: Dict[str, Dict[str, float]]
-    total_requests: Optional[int] = None
-    error_rate: Optional[float] = None
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "PerformanceAnalytics":
-        """Create PerformanceAnalytics from dictionary."""
-        return cls(
-            cache_hit_rate=data["cache_hit_rate"],
-            avg_latency_ms=data["avg_latency_ms"],
-            requests_per_second=data["requests_per_second"],
-            active_regions=data["active_regions"],
-            region_performance=data["region_performance"],
-            total_requests=data.get("total_requests"),
-            error_rate=data.get("error_rate"),
-        )
-
-
-@dataclass
 class UsageStats:
     """Current usage statistics against customer limits."""
 

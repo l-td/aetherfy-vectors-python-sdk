@@ -26,7 +26,6 @@ from .models import (
     SearchResult,
     Point,
     Collection,
-    PerformanceAnalytics,
     UsageStats,
 )
 from .schema import (
@@ -50,7 +49,6 @@ __all__ = [
     "SearchResult",
     "Point",
     "Collection",
-    "PerformanceAnalytics",
     "UsageStats",
     "Schema",
     "FieldDefinition",

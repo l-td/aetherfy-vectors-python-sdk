@@ -150,19 +150,14 @@ def demonstrate_migration():
         
         # These are ADDITIONAL features not available in qdrant-client:
         try:
-            # Global performance analytics
-            perf_analytics = client.get_performance_analytics()
-            print(f"✓ Global cache hit rate: {perf_analytics.cache_hit_rate:.1%}")
-            print(f"✓ Average latency: {perf_analytics.avg_latency_ms:.1f}ms")
-            print(f"✓ Active regions: {len(perf_analytics.active_regions)}")
-            
-            # Usage statistics
+            # Usage against your plan's limits
             usage_stats = client.get_usage_stats()
             print(f"✓ Plan: {usage_stats.plan_name}")
             print(f"✓ Collections used: {usage_stats.current_collections}/{usage_stats.max_collections}")
-            
+            print(f"✓ Points used: {usage_stats.current_points:,}/{usage_stats.max_points:,}")
+
         except Exception as e:
-            print(f"   Note: Analytics features require live API connection ({e})")
+            print(f"   Note: Usage stats require a live API connection ({e})")
         
         # 8. Context Manager - IDENTICAL USAGE
         print("\n8. Context manager usage...")

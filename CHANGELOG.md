@@ -34,7 +34,7 @@ is no earlier release for these changes to be "changes since".
 - Drop-in replacement for qdrant-client with API compatibility.
 - Global vector database operations with automatic replication, intelligent
   caching, and routing.
-- Built-in performance analytics, usage statistics and limit tracking.
+- Built-in usage statistics and limit tracking.
 - Comprehensive error handling with a detailed exception hierarchy.
 - Batch operations, complex filtering, context-manager support, and a
   thread-safe client.
@@ -106,7 +106,6 @@ is no earlier release for these changes to be "changes since".
 - Collection management (create, delete, list, info)
 - Point operations (upsert, retrieve, delete, count)
 - Vector search with filtering and pagination
-- Global performance analytics
 - Usage statistics and quota monitoring
 - API key authentication with environment variable support
 - Automatic request routing, failover and retry
@@ -116,7 +115,6 @@ is no earlier release for these changes to be "changes since".
 - `Point` - Vector point with ID, vector, and payload
 - `SearchResult` - Search result with score and metadata
 - `Collection` - Collection information and configuration
-- `PerformanceAnalytics` - Global performance metrics
 - `UsageStats` - Usage statistics and limits
 - `Filter` - Query filter for search operations
 - Comprehensive exception hierarchy for error handling

@@ -13,7 +13,6 @@ import requests
 from requests.adapters import HTTPAdapter
 
 from .auth import APIKeyManager
-from .analytics import AnalyticsClient
 from .models import (
     Point,
     SearchResult,
@@ -21,7 +20,6 @@ from .models import (
     VectorConfig,
     DistanceMetric,
     Filter,
-    PerformanceAnalytics,
     UsageStats,
 )
 from .exceptions import (
@@ -203,11 +201,6 @@ class AetherfyVectorsClient:
         self._payload_schema_cache: Dict[
             str, Dict[str, Any]
         ] = {}  # {collection_name: {schema: Schema, etag: str, enforcement_mode: str}}
-
-        # Initialize analytics client with shared session
-        self.analytics = AnalyticsClient(
-            self.endpoint, self.auth_headers, timeout, session=self.session
-        )
 
     def _resolve_region_endpoint(self, region: str) -> str:
         """Resolve a region code to its public URL via /api/v1/regions.
@@ -1771,28 +1764,41 @@ class AetherfyVectorsClient:
         self.get_schema(collection_name)  # get_schema will handle scoping internally
 
     # Analytics Methods (SDK-specific)
-
-    def get_performance_analytics(
-        self, time_range: str = "24h", region: Optional[str] = None
-    ) -> PerformanceAnalytics:
-        """Retrieve global performance analytics.
-
-        Args:
-            time_range: Time range for analytics (1h, 24h, 7d, 30d).
-            region: Specific region to filter by (optional).
-
-        Returns:
-            Performance analytics data.
-        """
-        return self.analytics.get_performance_analytics(time_range, region)
+    #
+    # One method, implemented here rather than behind an AnalyticsClient
+    # sub-client. GET /api/v1/analytics/usage is the only analytics endpoint
+    # that reports measured values (it reads Postgres); every other one was
+    # deleted for reporting invented or unreachable data. A sub-client holding
+    # a single method would also have been this SDK's only namespace-style
+    # sub-client -- auth_manager and the caches are infrastructure, and
+    # Namespace/Thread are factory-returned scopes, not client attributes.
 
     def get_usage_stats(self) -> UsageStats:
         """Retrieve current usage statistics against customer limits.
 
         Returns:
             Current usage statistics.
+
+        Raises:
+            AetherfyVectorsException: If request fails.
         """
-        return self.analytics.get_usage_stats()
+        url = build_api_url(self.endpoint, "analytics/usage")
+
+        try:
+            response = self.session.get(
+                url, headers=self.auth_headers, timeout=self.timeout
+            )
+
+            if response.status_code == 200:
+                return UsageStats.from_dict(response.json())
+
+            error_data = response.json() if response.content else {}
+            raise parse_error_response(error_data, response.status_code)
+
+        except requests.RequestException as e:
+            raise AetherfyVectorsException(
+                f"Failed to retrieve usage statistics: {str(e)}"
+            )
 
     # Utility Methods
 
