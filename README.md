@@ -5,17 +5,21 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Tests](https://github.com/l-td/aetherfy-vectors-python-sdk/workflows/Tests/badge.svg)](https://github.com/l-td/aetherfy-vectors-python-sdk/actions)
 
-A **drop-in replacement** for `qdrant-client` that provides **global vector database operations** with automatic replication, intelligent caching, and **low latency worldwide**.
+**Memory for AI agents** — conversations, knowledge bases, scrape logs, trading
+histories. Named scopes you create and search, replicated across regions, with
+no infrastructure to run.
 
 ## 🚀 Key Features
 
-- **🔄 Drop-in Replacement**: 100% compatible with `qdrant-client` API
+- **🧠 Memory Primitives**: `Namespace` for any named scope, `Thread` for conversations — not a raw collection API
 - **🌍 Global Performance**: Low latency from anywhere in the world
 - **⚡ Intelligent Caching**: High cache hit rates for optimal performance
 - **🛡️ Zero DevOps**: No infrastructure management or regional deployment needed
+- **🤝 Workspace Scoping**: Multi-agent tenancy, auto-detected inside deployed agents
 - **📊 Built-in Analytics**: Real-time performance metrics and usage insights
 - **🔧 Auto-Failover**: Intelligent routing and retry mechanisms
 - **🔐 Enterprise Security**: API key authentication and audit logging
+- **🪜 Escape Hatch**: `AetherfyVectorsClient` underneath, API-compatible with `qdrant-client`
 
 ## 📦 Installation
 
@@ -24,6 +28,51 @@ pip install aetherfy-vectors
 ```
 
 ## 🏃‍♂️ Quick Start
+
+Every memory lives in a scope you create by name. Two kinds: a **namespace** for
+anything with a name, a **thread** for a conversation. Bring your own embedding
+vectors — Aetherfy stores and searches them, it does not generate them.
+
+```python
+from aetherfy_memory import MemoryClient
+
+memory = MemoryClient()  # reads AETHERFY_API_KEY; workspace auto-detected
+
+# --- A namespace: any named scope ---------------------------------------
+memory.create_namespace("customer-42")
+customer = memory.namespace("customer-42")
+
+customer.add(text="Lives in NYC, prefers email", vector=embed("Lives in NYC, prefers email"))
+hits = customer.search(vector=embed("where is this customer based?"), limit=5)
+
+# --- A thread: a conversation -------------------------------------------
+memory.create_thread("conv-99")
+thread = memory.thread("conv-99")
+
+thread.add(role="user", content="hi", vector=embed("hi"))
+thread.add(role="assistant", content="hello", vector=embed("hello"))
+recent = thread.history(limit=20)   # in message order
+
+# Deleting a scope is atomic — it drops the whole backing collection.
+thread.clear()
+```
+
+Scopes must be created before you write to them, so a typo raises instead of
+silently creating a second store. `vector_size` defaults to 384; pass your
+model's dimension to `create_namespace` / `create_thread` if it differs
+(1536 for OpenAI small, 3072 for large, 1024 for Cohere v3).
+
+Deployed on Aetherfy, `MemoryClient()` takes no arguments at all: the control
+plane injects `AETHERFY_API_KEY` and the workspace at deploy time.
+
+Full memory API — iteration, bulk loading, metadata — under
+[Memory SDK](#-memory-sdk--iter-bulk-load-set_metadata) below.
+
+## 🧱 The Low-Level Client
+
+`AetherfyVectorsClient` is the layer `MemoryClient` is built on, exported and
+supported. Use it when you want raw collections and points rather than named
+scopes, or an operation the memory layer doesn't expose.
 
 The snippets below build on each other; each assumes the imports and client
 from the previous ones.
