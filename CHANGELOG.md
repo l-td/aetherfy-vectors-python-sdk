@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `UsageStats` now describes the response `GET /api/v1/analytics/usage`
+  actually serves: `storage_bytes_used`, `storage_limit_bytes` (`None` on an
+  unlimited tier), `collections_count`, `collections_limit` (also `None` on an
+  unlimited tier — one sentinel for both),
+  `tier`, `active_regions` and `usage_percentage`. The nine fields it declared
+  before (`current_collections`, `max_collections`, `current_points`,
+  `max_points`, `requests_this_month`, `max_requests_per_month`,
+  `storage_used_mb`, `max_storage_mb`, `plan_name`) were never served by
+  anything, so `client.get_usage_stats()` raised `KeyError` on every genuine
+  200 — the unit tests passed only because they mocked the invented payload.
+  The derived `*_usage_percent` properties are gone with the fields they
+  divided; the endpoint's own `usage_percentage` is the only percentage it
+  reports. A live e2e call now pins the shape
+  (aetherfy-e2e-tests `tests/sdk/test_usage_stats_sdk.py`).
+
 ### Planned Features
 - Additional distance metrics support
 - Streaming search results

@@ -1777,7 +1777,13 @@ class AetherfyVectorsClient:
         """Retrieve current usage statistics against customer limits.
 
         Returns:
-            Current usage statistics.
+            A :class:`UsageStats` carrying the endpoint's fields verbatim:
+            ``storage_bytes_used``, ``storage_limit_bytes``,
+            ``collections_count``, ``collections_limit``, ``tier``,
+            ``active_regions`` (the union of every active collection's
+            regions) and ``usage_percentage`` (``0`` when there is no storage
+            limit). Both limit fields are ``None`` on an unlimited tier —
+            one sentinel, the same for both.
 
         Raises:
             AetherfyVectorsException: If request fails.

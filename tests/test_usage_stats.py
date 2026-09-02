@@ -13,9 +13,17 @@ AetherfyVectorsClient and issues its request through the client's own pooled
 `self.session`, so the session is what gets patched. Patching the module-level
 `requests.get` here would pass while asserting nothing — the call would never
 go through it.
+
+WHAT THIS FILE IS NOT. Every payload here is mocked, so nothing below can tell
+you the endpoint still serves this shape — that is exactly how UsageStats spent
+its whole life describing nine fields the backend never sent. The authoritative
+pin is the live call in aetherfy-e2e-tests tests/sdk/test_usage_stats_sdk.py; the
+`sample_usage_stats` fixture is a copy of that truth and must only ever change
+together with it.
 """
 
 import pytest
+from dataclasses import fields
 from unittest.mock import Mock, patch
 import requests
 
@@ -41,11 +49,13 @@ class TestGetUsageStats:
             stats = client.get_usage_stats()
 
         assert isinstance(stats, UsageStats)
-        assert stats.current_collections == 5
-        assert stats.max_collections == 10
-        assert stats.plan_name == "Professional"
-        assert stats.collections_usage_percent == 50.0
-        assert stats.points_usage_percent == 50.0
+        assert stats.storage_bytes_used == 268_435_456
+        assert stats.storage_limit_bytes == 1_073_741_824
+        assert stats.collections_count == 5
+        assert stats.collections_limit == 10
+        assert stats.tier == "professional"
+        assert stats.active_regions == ["us-east-1", "eu-central-1"]
+        assert stats.usage_percentage == 25
 
         mock_get.assert_called_once()
         args, kwargs = mock_get.call_args
@@ -84,36 +94,74 @@ class TestGetUsageStats:
 
 
 class TestUsageStatsModel:
-    """UsageStats.from_dict and its derived percentages."""
+    """UsageStats.from_dict against the real wire body."""
 
     def test_from_dict(self, sample_usage_stats):
         stats = UsageStats.from_dict(sample_usage_stats)
 
-        assert stats.current_collections == 5
-        assert stats.max_collections == 10
-        assert stats.plan_name == "Professional"
+        assert stats.storage_bytes_used == 268_435_456
+        assert stats.storage_limit_bytes == 1_073_741_824
+        assert stats.collections_count == 5
+        assert stats.collections_limit == 10
+        assert stats.tier == "professional"
+        assert stats.active_regions == ["us-east-1", "eu-central-1"]
+        assert stats.usage_percentage == 25
 
-        assert stats.collections_usage_percent == 50.0
-        assert stats.points_usage_percent == 50.0
-        assert stats.requests_usage_percent == 25.0
-        assert stats.storage_usage_percent == 25.05
+    def test_unlimited_tier_nulls_BOTH_limits(self):
+        """An unlimited tier serves `null` for both limit fields.
 
-    def test_percentage_calculations(self):
+        One sentinel, not two. `customerStore` represents "no limit" as the
+        STRING 'unlimited' inside vectordb, but that is an internal
+        limits-vocabulary convention and the endpoint normalises both fields
+        to null before they reach the wire — pinned on the server side by
+        vectordb tests/unit/analyticsMetricsRead.test.js, "an unlimited tier
+        reports BOTH limits as null, in one vocabulary".
+
+        This case previously used `collections_limit: -1`, a payload the
+        backend has never sent. Inventing a sentinel to test against is the
+        exact defect this file exists to close.
+        """
         stats = UsageStats.from_dict(
             {
-                "current_collections": 3,
-                "max_collections": 10,
-                "current_points": 75000,
-                "max_points": 100000,
-                "requests_this_month": 30000,
-                "max_requests_per_month": 50000,
-                "storage_used_mb": 400.0,
-                "max_storage_mb": 800.0,
-                "plan_name": "Starter",
+                "storage_bytes_used": 42,
+                "storage_limit_bytes": None,
+                "collections_count": 3,
+                "collections_limit": None,
+                "tier": "enterprise",
+                "active_regions": [],
+                "usage_percentage": 0,
             }
         )
 
-        assert stats.collections_usage_percent == 30.0
-        assert stats.points_usage_percent == 75.0
-        assert stats.requests_usage_percent == 60.0
-        assert stats.storage_usage_percent == 50.0
+        assert stats.storage_limit_bytes is None
+        assert stats.collections_limit is None
+        assert stats.active_regions == []
+        assert stats.usage_percentage == 0
+
+    def test_no_request_count_is_required_or_exposed(self, sample_usage_stats):
+        """The removed hourly/monthly request counters must stay removed.
+
+        `requests_this_hour` was deleted from the endpoint in 2026-09 (it read
+        a Redis key nothing had ever written, so every customer was told 0),
+        and `requests_this_month` never existed at all — it was one of the nine
+        invented fields this model used to declare. Neither may come back as a
+        parse requirement or as an attribute: a body carrying only the seven
+        real fields must parse, and the parsed object must not answer to
+        either name.
+        """
+        assert "requests_this_hour" not in sample_usage_stats
+        assert "requests_this_month" not in sample_usage_stats
+
+        stats = UsageStats.from_dict(sample_usage_stats)
+
+        assert not hasattr(stats, "requests_this_hour")
+        assert not hasattr(stats, "requests_this_month")
+
+    def test_field_set_is_exactly_the_wire_body(self, sample_usage_stats):
+        """No field may exist that the endpoint does not serve.
+
+        This is the assertion that would have caught the original defect: the
+        model's fields and the wire body's keys are the same set, so an
+        invented field cannot be added without a wire body to justify it.
+        """
+        assert {f.name for f in fields(UsageStats)} == set(sample_usage_stats)

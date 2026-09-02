@@ -152,9 +152,10 @@ def demonstrate_migration():
         try:
             # Usage against your plan's limits
             usage_stats = client.get_usage_stats()
-            print(f"✓ Plan: {usage_stats.plan_name}")
-            print(f"✓ Collections used: {usage_stats.current_collections}/{usage_stats.max_collections}")
-            print(f"✓ Points used: {usage_stats.current_points:,}/{usage_stats.max_points:,}")
+            print(f"✓ Tier: {usage_stats.tier}")
+            print(f"✓ Collections used: {usage_stats.collections_count}/{usage_stats.collections_limit}")
+            print(f"✓ Storage used: {usage_stats.storage_bytes_used:,} bytes")
+            print(f"✓ Active regions: {', '.join(usage_stats.active_regions)}")
 
         except Exception as e:
             print(f"   Note: Usage stats require a live API connection ({e})")

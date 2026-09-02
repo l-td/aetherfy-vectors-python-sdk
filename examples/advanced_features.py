@@ -31,22 +31,27 @@ def usage_example():
     try:
         usage = client.get_usage_stats()
 
-        print(f"Plan: {usage.plan_name}")
-        print(f"Collections: {usage.current_collections:,}/{usage.max_collections:,} "
-              f"({usage.collections_usage_percent:.1f}%)")
-        print(f"Points: {usage.current_points:,}/{usage.max_points:,} "
-              f"({usage.points_usage_percent:.1f}%)")
-        print(f"Requests: {usage.requests_this_month:,}/{usage.max_requests_per_month:,} "
-              f"({usage.requests_usage_percent:.1f}%)")
-        print(f"Storage: {usage.storage_used_mb:.1f}/{usage.max_storage_mb:.1f} MB "
-              f"({usage.storage_usage_percent:.1f}%)")
+        print(f"Tier: {usage.tier}")
+        # Both limit fields are None on an unlimited plan — one sentinel, the
+        # same for each. The SDK passes them through as served.
+        if usage.collections_limit is None:
+            print(f"Collections: {usage.collections_count:,} (unlimited)")
+        else:
+            print(f"Collections: {usage.collections_count:,}/{usage.collections_limit:,}")
+        if usage.storage_limit_bytes is None:
+            print(f"Storage: {usage.storage_bytes_used:,} bytes (unlimited)")
+        else:
+            print(f"Storage: {usage.storage_bytes_used:,}/{usage.storage_limit_bytes:,} "
+                  f"bytes ({usage.usage_percentage}%)")
+        print(f"Replicating to: {', '.join(usage.active_regions) or '(no collections)'}")
 
-        if usage.collections_usage_percent > 80:
-            print("⚠️  Warning: Collection usage above 80%")
-        if usage.points_usage_percent > 80:
-            print("⚠️  Warning: Points usage above 80%")
-        if usage.requests_usage_percent > 80:
-            print("⚠️  Warning: Request usage above 80%")
+        # `is not None` before the arithmetic, not `> 0`: an unlimited tier
+        # sends None, and comparing that to an int raises TypeError.
+        if usage.collections_limit is not None and usage.collections_limit > 0:
+            if (usage.collections_count / usage.collections_limit) > 0.8:
+                print("⚠️  Warning: Collection usage above 80%")
+        if usage.usage_percentage > 80:
+            print("⚠️  Warning: Storage usage above 80%")
 
     except Exception as e:
         print(f"Usage stats unavailable: {e}")

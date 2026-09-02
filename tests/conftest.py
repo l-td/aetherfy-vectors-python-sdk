@@ -166,17 +166,23 @@ def mock_error_response():
 
 @pytest.fixture
 def sample_usage_stats():
-    """Sample usage statistics data."""
+    """A GET /api/v1/analytics/usage response body, copied from the wire.
+
+    THIS FIXTURE IS A COPY OF THE TRUTH, NOT THE TRUTH. The authoritative pin
+    is the live e2e call in aetherfy-e2e-tests tests/sdk/test_usage_stats_sdk.py,
+    which asserts the real endpoint's shape. Change this fixture only together
+    with that guard — the previous version of this file invented nine fields
+    the backend has never served, and the whole suite went green against them
+    for as long as nobody made a real call.
+    """
     return {
-        "current_collections": 5,
-        "max_collections": 10,
-        "current_points": 50000,
-        "max_points": 100000,
-        "requests_this_month": 25000,
-        "max_requests_per_month": 100000,
-        "storage_used_mb": 250.5,
-        "max_storage_mb": 1000.0,
-        "plan_name": "Professional",
+        "storage_bytes_used": 268_435_456,
+        "storage_limit_bytes": 1_073_741_824,
+        "collections_count": 5,
+        "collections_limit": 10,
+        "tier": "professional",
+        "active_regions": ["us-east-1", "eu-central-1"],
+        "usage_percentage": 25,
     }
 
 

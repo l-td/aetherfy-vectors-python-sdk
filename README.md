@@ -138,9 +138,10 @@ for result in results:
 
 ```python
 usage = client.get_usage_stats()
-print(f"Points used: {usage.current_points:,}/{usage.max_points:,}")
-print(f"Collections: {usage.current_collections}/{usage.max_collections}")
-print(f"Plan: {usage.plan_name}")
+print(f"Storage used: {usage.storage_bytes_used:,} bytes")
+print(f"Collections: {usage.collections_count}/{usage.collections_limit}")
+print(f"Tier: {usage.tier}")
+print(f"Replicating to: {', '.join(usage.active_regions)}")
 ```
 
 ### Intelligent Global Routing
@@ -677,6 +678,14 @@ client.clear_schema_cache(collection_name=None)       # None clears all
 
 ```python
 usage = client.get_usage_stats()
+
+usage.storage_bytes_used     # int  — bytes stored across every collection
+usage.storage_limit_bytes    # int | None — None on an unlimited tier
+usage.collections_count      # int  — active collections
+usage.collections_limit      # int | None — None on an unlimited tier
+usage.tier                   # str  — the plan's tier name
+usage.active_regions         # list[str] — union of your collections' regions
+usage.usage_percentage       # int  — storage %, 0 when there is no limit
 ```
 
 ## 🚨 Error Handling
@@ -736,13 +745,20 @@ client = AetherfyVectorsClient(
 usage = client.get_usage_stats()
 
 dashboard_data = {
-    "collections_percent": usage.collections_usage_percent,
-    "points_percent": usage.points_usage_percent,
-    "requests_percent": usage.requests_usage_percent,
-    "storage_percent": usage.storage_usage_percent,
-    "plan": usage.plan_name,
+    "storage_bytes": usage.storage_bytes_used,
+    "storage_limit_bytes": usage.storage_limit_bytes,   # None = unlimited
+    "storage_percent": usage.usage_percentage,
+    "collections": usage.collections_count,
+    "collections_limit": usage.collections_limit,       # None = unlimited
+    "tier": usage.tier,
+    "regions": usage.active_regions,
 }
 ```
+
+The fields are the endpoint's own, verbatim — no derived percentages beyond the
+one it serves, and no unit conversion. Anything else you want (a collections
+percentage, megabytes) is a calculation at your call site, where the "unlimited"
+sentinels are yours to handle.
 
 Aetherfy does not expose latency or cache-hit telemetry through this SDK. Measure
 request latency at your own call site — it is the only number that reflects what

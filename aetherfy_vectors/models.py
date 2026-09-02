@@ -108,52 +108,48 @@ class Collection:
 
 @dataclass
 class UsageStats:
-    """Current usage statistics against customer limits."""
+    """Current usage against the account's plan limits.
 
-    current_collections: int
-    max_collections: int
-    current_points: int
-    max_points: int
-    requests_this_month: int
-    max_requests_per_month: int
-    storage_used_mb: float
-    max_storage_mb: float
-    plan_name: str
+    The shape mirrors ``GET /api/v1/analytics/usage`` VERBATIM — same field
+    names, same units, no derived or renamed values. It is pinned live by the
+    e2e SDK guard (aetherfy-e2e-tests tests/sdk/test_usage_stats_sdk.py), which
+    calls the real endpoint and asserts every field below is present with the
+    right type. See aetherfy-dashboard docs/TELEMETRY.md for the endpoint's
+    contract history.
+
+    The nine invented fields this class used to declare (current_collections,
+    max_collections, current_points, max_points, requests_this_month,
+    max_requests_per_month, storage_used_mb, max_storage_mb, plan_name) were
+    never served by anything: ``from_dict`` raised KeyError on a genuine 200,
+    and the unit tests passed only because they mocked the invented payload.
+    """
+
+    storage_bytes_used: int
+    #: ``None`` on an unlimited tier.
+    storage_limit_bytes: Optional[int]
+    collections_count: int
+    #: The plan limit, ``None`` on an unlimited tier — the same sentinel
+    #: ``storage_limit_bytes`` uses, because the endpoint normalises both.
+    collections_limit: Optional[int]
+    tier: str
+    #: The replication footprint: the union of every active collection's
+    #: regions.
+    active_regions: List[str]
+    #: ``0`` when there is no storage limit to be a percentage of.
+    usage_percentage: int
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "UsageStats":
         """Create UsageStats from dictionary."""
         return cls(
-            current_collections=data["current_collections"],
-            max_collections=data["max_collections"],
-            current_points=data["current_points"],
-            max_points=data["max_points"],
-            requests_this_month=data["requests_this_month"],
-            max_requests_per_month=data["max_requests_per_month"],
-            storage_used_mb=data["storage_used_mb"],
-            max_storage_mb=data["max_storage_mb"],
-            plan_name=data["plan_name"],
+            storage_bytes_used=data["storage_bytes_used"],
+            storage_limit_bytes=data["storage_limit_bytes"],
+            collections_count=data["collections_count"],
+            collections_limit=data["collections_limit"],
+            tier=data["tier"],
+            active_regions=data["active_regions"],
+            usage_percentage=data["usage_percentage"],
         )
-
-    @property
-    def collections_usage_percent(self) -> float:
-        """Calculate collections usage percentage."""
-        return (self.current_collections / self.max_collections) * 100
-
-    @property
-    def points_usage_percent(self) -> float:
-        """Calculate points usage percentage."""
-        return (self.current_points / self.max_points) * 100
-
-    @property
-    def requests_usage_percent(self) -> float:
-        """Calculate requests usage percentage."""
-        return (self.requests_this_month / self.max_requests_per_month) * 100
-
-    @property
-    def storage_usage_percent(self) -> float:
-        """Calculate storage usage percentage."""
-        return (self.storage_used_mb / self.max_storage_mb) * 100
 
 
 @dataclass
