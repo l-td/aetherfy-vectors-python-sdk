@@ -219,6 +219,64 @@ def test_429_reads_the_limit_name_rather_than_assuming_it(transport):
     assert excinfo.value.limit == "max_agents"
 
 
+def test_a_413_carrying_another_code_is_a_plain_spawn_error(transport):
+    """THE PAIRING SELECTS THE TYPE. A status is a category the platform reuses;
+    the code is what it promises not to rename. A 413 grown for some new reason
+    must arrive reporting ITS code, not wearing RUN_PAYLOAD_TOO_LARGE's."""
+    transport.reply = (
+        413,
+        {
+            "detail": {
+                "code": "AGENT_IMAGE_TOO_LARGE",
+                "message": "The built image is larger than the runtime allows.",
+            }
+        },
+    )
+
+    with pytest.raises(SpawnError) as excinfo:
+        spawn("nightly-rollup")
+    error = excinfo.value
+    assert type(error) is SpawnError
+    assert not isinstance(error, PayloadTooLarge)
+    assert error.error_code == "AGENT_IMAGE_TOO_LARGE"
+    assert error.status_code == 413
+    assert "larger than the runtime allows" in str(error)
+
+
+def test_a_429_carrying_another_code_is_a_plain_spawn_error(transport):
+    transport.reply = (
+        429,
+        {
+            "detail": {
+                "code": "RATE_LIMIT_EXCEEDED",
+                "message": "Too many requests.",
+            }
+        },
+    )
+
+    with pytest.raises(SpawnError) as excinfo:
+        spawn("nightly-rollup")
+    error = excinfo.value
+    assert type(error) is SpawnError
+    assert not isinstance(error, TooManyRunsInFlight)
+    assert error.error_code == "RATE_LIMIT_EXCEEDED"
+    assert error.status_code == 429
+
+
+@pytest.mark.parametrize("status", [413, 429])
+def test_a_codeless_body_on_either_status_is_a_plain_spawn_error(transport, status):
+    """No code is not the expected code. Reporting one of the typed errors here
+    would attach a code the platform never sent."""
+    transport.reply = (status, {"detail": {"message": "no code here"}})
+
+    with pytest.raises(SpawnError) as excinfo:
+        spawn("nightly-rollup")
+    error = excinfo.value
+    assert type(error) is SpawnError
+    assert error.error_code is None
+    assert error.status_code == status
+
+
 def test_429_with_no_extras_still_maps(transport):
     transport.reply = (
         429,

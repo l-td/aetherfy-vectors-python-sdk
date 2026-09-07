@@ -33,6 +33,8 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, TypeVar
 
 from . import _http
 from .exceptions import (
+    AGENT_SPAWN_CONCURRENCY_LIMIT_EXCEEDED,
+    RUN_PAYLOAD_TOO_LARGE,
     AgentError,
     AgentTransportError,
     NotRunningOnAgent,
@@ -321,14 +323,21 @@ def spawn(child: str, payload: Optional[Dict[str, Any]] = None) -> Spawn:
     )
     code = detail.get("code")
 
-    if status == 413:
+    # THE CODE DECIDES, NOT THE STATUS ALONE. A status is a category the
+    # platform reuses; the code is the thing it promises not to rename. Mapping
+    # on 413 alone would stamp RUN_PAYLOAD_TOO_LARGE onto the next unrelated
+    # 413 the control plane grows, and the caller would branch on a lie it
+    # could not see through — the typed error carries the wrong code AND the
+    # right message. An unrecognised pairing falls through to SpawnError, which
+    # reports exactly what arrived.
+    if status == 413 and code == RUN_PAYLOAD_TOO_LARGE:
         raise PayloadTooLarge(
             message,
             payload_bytes=detail.get("payload_bytes"),
             max_bytes=detail.get("max_bytes"),
             details=detail,
         )
-    if status == 429:
+    if status == 429 and code == AGENT_SPAWN_CONCURRENCY_LIMIT_EXCEEDED:
         raise TooManyRunsInFlight(
             message,
             in_flight_count=detail.get("in_flight_count"),

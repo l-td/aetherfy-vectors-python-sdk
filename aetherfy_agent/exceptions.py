@@ -7,13 +7,26 @@ derives from ``AetherfyVectorsException`` so a single ``except`` around agent
 code catches vector-db errors and agent-runtime errors alike.
 
 Only three failures are worth telling apart when spawning, and they are the
-three the control plane distinguishes: the payload was too big (413), too many
-runs are already in flight (429), and everything else (any other status).
+three the control plane distinguishes: the payload was too big
+(413 RUN_PAYLOAD_TOO_LARGE), too many runs are already in flight
+(429 AGENT_SPAWN_CONCURRENCY_LIMIT_EXCEEDED), and everything else. "Everything
+else" is any other status AND any other code on those two statuses: the pairing
+is what selects a type, so a 413 the platform grows for some new reason arrives
+as a plain SpawnError reporting its own code rather than wearing this one's.
 """
 
 from typing import Any, Dict, Optional
 
 from aetherfy_vectors.exceptions import AetherfyVectorsException
+
+#: The two platform error codes this module gives a type of its own.
+#:
+#: ONE definition each, because they are used TWICE: to decide which type a
+#: refusal becomes, and to stamp that type's ``error_code``. Two literals would
+#: let the dispatch and the stamp disagree, which is the one way an error could
+#: report a code the platform never sent.
+RUN_PAYLOAD_TOO_LARGE = "RUN_PAYLOAD_TOO_LARGE"
+AGENT_SPAWN_CONCURRENCY_LIMIT_EXCEEDED = "AGENT_SPAWN_CONCURRENCY_LIMIT_EXCEEDED"
 
 
 class AgentError(AetherfyVectorsException):
@@ -95,7 +108,7 @@ class PayloadTooLarge(SpawnError):
         super().__init__(
             message,
             status_code=413,
-            error_code="RUN_PAYLOAD_TOO_LARGE",
+            error_code=RUN_PAYLOAD_TOO_LARGE,
             details=details,
         )
         self.payload_bytes = payload_bytes
@@ -133,7 +146,7 @@ class TooManyRunsInFlight(SpawnError):
         super().__init__(
             message,
             status_code=429,
-            error_code="AGENT_SPAWN_CONCURRENCY_LIMIT_EXCEEDED",
+            error_code=AGENT_SPAWN_CONCURRENCY_LIMIT_EXCEEDED,
             details=details,
         )
         self.in_flight_count = in_flight_count

@@ -37,10 +37,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     its pickling cost for CPU-bound work, so it defaults to `vcpus` — one
     worker per core. It prints one line to stdout before running, so a run's
     width is visible in its logs afterwards.
-  - `spawn(child, payload=None)` runs a different task agent. `413` becomes
-    `PayloadTooLarge` (carrying `payload_bytes` / `max_bytes`), `429` becomes
-    `TooManyRunsInFlight` — the one refusal worth retrying — and every other
-    status becomes `SpawnError` with the platform's stable `error_code`.
+  - `spawn(child, payload=None)` runs a different task agent.
+    `413 RUN_PAYLOAD_TOO_LARGE` becomes `PayloadTooLarge` (carrying
+    `payload_bytes` / `max_bytes`) and
+    `429 AGENT_SPAWN_CONCURRENCY_LIMIT_EXCEEDED` becomes
+    `TooManyRunsInFlight`, the one refusal worth retrying. THE STATUS AND
+    THE CODE TOGETHER select the type: a 413 or 429 carrying any other
+    code, or none, becomes a plain `SpawnError` reporting the code and
+    message that actually arrived, rather than wearing a code the platform
+    never sent. Every other status becomes `SpawnError` with the
+    platform's stable `error_code` too.
     `TooManyRunsInFlight` carries `in_flight_count`, `limit` (which plan
     limit was hit, `"max_in_flight_runs"` today) and `max_in_flight_runs`
     (its value, `None` on a plan that declares no cap). The cap is the
