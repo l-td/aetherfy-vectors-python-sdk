@@ -46,7 +46,7 @@ README = REPO_ROOT / "README.md"
 
 # Packages this guard is willing to resolve. An import from anywhere else
 # (qdrant_client, os) is a sample's own business.
-OUR_PACKAGES = ("aetherfy_vectors", "aetherfy_memory")
+OUR_PACKAGES = ("aetherfy_vectors", "aetherfy_agent", "aetherfy_memory")
 
 FENCE_RE = re.compile(r"^```(\w+)\n(.*?)^```", re.MULTILINE | re.DOTALL)
 
@@ -182,21 +182,30 @@ def check_sample(code: str, bindings: Dict[str, type]) -> List[str]:
                 continue
             problems.extend(_check_keywords(node, owner, name, method))
 
-        # ---- constructor keywords ----
+        # ---- constructor and module-level function keywords ----
+        # A CLASS bound to this name is a constructor call; a FUNCTION is
+        # one of the module-level helpers a reader imports by name.
+        # aetherfy_agent's entire public surface is the second kind, so a
+        # guard that only knew about classes would check that `fan_out`
+        # exists and nothing whatsoever about how the README calls it.
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-            cls = None
             for pkg in OUR_PACKAGES:
                 obj = resolve_symbol(pkg, node.func.id)
                 if inspect.isclass(obj):
-                    cls = obj
+                    problems.extend(_check_keywords(node, obj, "__init__", obj))
                     break
-            if cls is not None:
-                problems.extend(_check_keywords(node, cls, "__init__", cls))
+                if inspect.isfunction(obj):
+                    problems.extend(
+                        _check_keywords(node, obj, None, obj, display=node.func.id)
+                    )
+                    break
 
     return problems
 
 
-def _check_keywords(call: ast.Call, owner, name: str, target) -> List[str]:
+def _check_keywords(
+    call: ast.Call, owner, name: Optional[str], target, display: Optional[str] = None
+) -> List[str]:
     try:
         sig = inspect.signature(target)
     except (TypeError, ValueError):
@@ -210,8 +219,9 @@ def _check_keywords(call: ast.Call, owner, name: str, target) -> List[str]:
             continue
         if kw.arg not in params:
             allowed = ", ".join(k for k in params if k != "self")
+            called = display or f"{owner.__name__}.{name}"
             bad.append(
-                f"`{owner.__name__}.{name}({kw.arg}=...)` — no such parameter. "
+                f"`{called}({kw.arg}=...)` — no such parameter. "
                 f"Accepted: {allowed}"
             )
     return bad

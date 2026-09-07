@@ -484,6 +484,80 @@ client.create_collection("my-global-collection", VectorConfig(size=768, distance
 
 > **Tip:** Create workspaces explicitly in the Aetherfy control plane before use (`afy workspaces create invoice-pipeline`). Agents deployed to a workspace automatically receive the workspace name via `AETHERFY_WORKSPACE`.
 
+## 🤖 Running as an Agent
+
+Code deployed to Aetherfy as an agent gets four helpers in the same
+distribution, under `aetherfy_agent`. Nothing to add to your requirements: the
+standard runtime image preinstalls `aetherfy-vectors`, and a version you pin
+yourself wins over it. A custom container installs it like any other package.
+
+Each of these is a thin wrapper over a platform contract the docs already
+publish; the helper exists so the contract stops being copied into every task.
+
+```python
+from aetherfy_agent import payload, machine, fan_out, spawn
+
+# This run's input. A scheduled fire sends none, so {} is the normal case.
+data = payload()
+
+# The machine this run is on: whole numbers, not the strings the env carries.
+shape = machine()
+
+# An in-machine pool. Results come back in INPUT order and no failure is
+# swallowed: the lowest-indexed exception is re-raised once every worker has
+# finished. Width defaults to vcpus x 8 for threads, the default pool.
+answers = fan_out(summarise, data.get("items", []))
+
+# CPU-bound work wants processes. The default width follows the pool:
+# threads get vcpus x 8 (they mostly wait), processes get vcpus.
+digests = fan_out(hash_one, data.get("files", []), kind="processes")
+
+# Run a different task agent, on its own machine, with its own lifecycle.
+run = spawn("nightly-rollup", {"date": "2026-09-07"})
+print(run.spawn_id, run.region, run.status)
+```
+
+`fan_out` prints one line to the run's logs before it starts, so how wide a run
+went is visible after the fact:
+
+```text
+aetherfy: fanning out 32 wide on 4 vCPU / 8192 MB (120 tasks)
+```
+
+Spawning has three outcomes worth telling apart. The payload cap and the
+concurrent-run cap get their own types; everything else carries the platform's
+stable error code, which is the thing to branch on:
+
+```python
+from aetherfy_agent import spawn
+from aetherfy_agent.exceptions import (
+    PayloadTooLarge,
+    SpawnError,
+    TooManyRunsInFlight,
+)
+
+try:
+    spawn("nightly-rollup", {"date": "2026-09-07"})
+except PayloadTooLarge as exc:
+    # The payload is for parameters and references, not data. Write the data to
+    # a collection and pass its id.
+    print(exc.payload_bytes, "exceeds", exc.max_bytes)
+except TooManyRunsInFlight as exc:
+    # The one refusal here worth retrying: runs are finishing all the time.
+    # The cap is the ACCOUNT's and is set by your plan; `limit` names which
+    # plan limit was hit, and `max_in_flight_runs` is None on an uncapped plan.
+    print("waiting on", exc.in_flight_count, "of", exc.max_in_flight_runs)
+except SpawnError as exc:
+    print(exc.error_code)
+```
+
+There is deliberately no `result()` and no `wait()`. A run reports its outcome
+through its exit code, and a helper that pretended otherwise would be inventing
+protocol the platform does not have.
+
+Full contract, including the environment variables behind all four calls:
+[docs.aetherfy.com/agents/task-contract](https://docs.aetherfy.com/agents/task-contract).
+
 ## 🧩 Payload Schemas
 
 Collections can carry an optional payload schema that the SDK validates against **before** upsert — catching malformed payloads client-side without a round trip. Schemas are cached and automatically revalidated when they change server-side (via ETag).

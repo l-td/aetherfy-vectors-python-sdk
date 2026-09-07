@@ -134,6 +134,9 @@ setup(
         "aetherfy_memory": [
             "py.typed",  # Indicates this package has type hints
         ],
+        "aetherfy_agent": [
+            "py.typed",  # Indicates this package has type hints
+        ],
     },
     # Additional metadata for better discoverability
     platforms=["any"],

@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Planned Features
+- Additional distance metrics support
+- Streaming search results
+- Bulk export/import utilities
+- Enhanced analytics dashboards
+- Integration with popular ML frameworks
+- CLI tools for management operations
+
+## [1.1.0] - 2026-09-07
+
+### Added
+- **`aetherfy_agent` — the four things code running on an Aetherfy agent
+  does.** A new top-level module in this same distribution, beside
+  `aetherfy_vectors` and `aetherfy_memory`:
+
+  - `payload()` reads this run's input. The file named by
+    `AETHERFY_SPAWN_PAYLOAD_PATH` first, then the documented HTTP fallback
+    when the machine could not write it; `{}` for a run given no input, which
+    is the normal case for a scheduled fire.
+  - `machine()` returns the run's `MachineShape` — `vcpus`, `memory_mb`,
+    `region` — as whole numbers rather than the strings the environment
+    carries.
+  - `fan_out(fn, items, width=None, kind="threads")` runs an in-machine pool
+    and returns results in INPUT order, re-raising the lowest-indexed failure
+    rather than swallowing it. The default width follows the POOL, because
+    the pool already declares the shape of the work: `kind="threads"` mostly
+    waits, so it defaults to `vcpus * 8`; `kind="processes"` is only worth
+    its pickling cost for CPU-bound work, so it defaults to `vcpus` — one
+    worker per core. It prints one line to stdout before running, so a run's
+    width is visible in its logs afterwards.
+  - `spawn(child, payload=None)` runs a different task agent. `413` becomes
+    `PayloadTooLarge` (carrying `payload_bytes` / `max_bytes`), `429` becomes
+    `TooManyRunsInFlight` — the one refusal worth retrying — and every other
+    status becomes `SpawnError` with the platform's stable `error_code`.
+    `TooManyRunsInFlight` carries `in_flight_count`, `limit` (which plan
+    limit was hit, `"max_in_flight_runs"` today) and `max_in_flight_runs`
+    (its value, `None` on a plan that declares no cap). The cap is the
+    ACCOUNT's, set by the plan — not a per-agent spawn ceiling.
+
+  Each of these was already a documented platform contract that every task
+  hand-rolled; none of them is a new protocol. The module adds NO dependency:
+  its HTTP is `urllib` from the standard library. Both requests set an
+  explicit `User-Agent`, because urllib's default is blocked at the edge and
+  produces a 403 that reads exactly like an auth failure.
+
+  There is deliberately no `result()` and no `wait()`: a run reports its
+  outcome through its exit code, and the platform's result path does not
+  exist yet.
+
+  The standard runtime image preinstalls this distribution, so a plain agent
+  gets the helper with nothing in its requirements, and a version the customer
+  pins wins over it.
+
 ### Fixed
 - `UsageStats` now describes the response `GET /api/v1/analytics/usage`
   actually serves: `storage_bytes_used`, `storage_limit_bytes` (`None` on an
@@ -22,14 +75,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   divided; the endpoint's own `usage_percentage` is the only percentage it
   reports. A live e2e call now pins the shape
   (aetherfy-e2e-tests `tests/sdk/test_usage_stats_sdk.py`).
-
-### Planned Features
-- Additional distance metrics support
-- Streaming search results
-- Bulk export/import utilities
-- Enhanced analytics dashboards
-- Integration with popular ML frameworks
-- CLI tools for management operations
 
 ## [1.0.0] - 2026-08-17
 
