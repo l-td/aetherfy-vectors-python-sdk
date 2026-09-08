@@ -47,13 +47,26 @@ class NotRunningOnAgent(AgentError):
     This helper reads the run's environment; off a machine there is no run and
     nothing to read. Seeing this locally means the code is running somewhere
     Aetherfy did not start it.
+
+    ``remedy`` REPLACES THE SECOND SENTENCE, and exists because the default one
+    is not true of every variable. "The platform sets it before your entrypoint
+    starts" holds for the variables Aetherfy injects unconditionally; it is a
+    lie for ``AETHERFY_SPAWN_RESULT_PATH``, which a task machine is offered only
+    when it also carries a result cap, and which a ``service`` machine never
+    gets at all. A caller sent looking for a bug in their own code by a message
+    that confidently describes the wrong world is worse off than one told
+    nothing.
     """
 
-    def __init__(self, variable: str, purpose: str):
+    def __init__(self, variable: str, purpose: str, remedy: Optional[str] = None):
         super().__init__(
-            f"{variable} is not set, so {purpose} cannot be read. This helper "
-            f"is for code running on an Aetherfy agent machine; the platform "
-            f"sets {variable} before your entrypoint starts."
+            f"{variable} is not set, so {purpose} cannot be read. "
+            + (
+                remedy
+                or f"This helper is for code running on an Aetherfy agent "
+                f"machine; the platform sets {variable} before your "
+                f"entrypoint starts."
+            )
         )
         self.variable = variable
 

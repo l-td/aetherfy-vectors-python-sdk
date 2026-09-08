@@ -34,6 +34,7 @@ import json
 import os
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from typing import Any, Callable, Dict, Iterable, List, Optional, TypeVar
+from urllib.parse import quote
 
 from . import _http
 from .exceptions import (
@@ -72,6 +73,13 @@ __all__ = [
     "write_result",
     "result",
     "wait",
+    # PUBLIC IN BOTH LANGUAGES OR NEITHER. The JavaScript helper exports these
+    # three from its entry point, so a task ported between the two would find
+    # the bound readable in one and not the other. A caller sizing its own
+    # retry loop around wait() is the reason they are readable at all.
+    "WAIT_TIMEOUT_MIN_SECONDS",
+    "WAIT_TIMEOUT_MAX_SECONDS",
+    "WAIT_TIMEOUT_DEFAULT_SECONDS",
     "MachineShape",
     "Run",
     "Spawn",
@@ -125,11 +133,27 @@ WAIT_TIMEOUT_MAX_SECONDS = 60
 WAIT_TIMEOUT_DEFAULT_SECONDS = 30
 
 
-def _require(variable: str, purpose: str) -> str:
+def _require(variable: str, purpose: str, remedy: Optional[str] = None) -> str:
     value = os.environ.get(variable)
     if not value:
-        raise NotRunningOnAgent(variable, purpose)
+        raise NotRunningOnAgent(variable, purpose, remedy)
     return value
+
+
+#: What to say when the RESULT PATH is missing, instead of the default "the
+#: platform sets this before your entrypoint starts" — which is not true of
+#: this one variable. The task supervisor offers the path only when the machine
+#: also carries an inline cap (image_generator.py: `if _RESULT_MAX_BYTES > 0`,
+#: else it logs that this run cannot return a result), and a `service` machine
+#: has no runs to return anything from. A customer told the platform always
+#: sets it would go looking for a bug in their own code.
+_NO_RESULT_PATH_REMEDY = (
+    "Aetherfy offers it to a `type: job` machine before each run's entrypoint "
+    "starts, and only when that machine also carries an inline result cap "
+    "(AETHERFY_RUN_INLINE_MAX_BYTES) — without the cap the platform cannot "
+    "accept a result and does not offer the path. A `service` agent never gets "
+    "one: a result belongs to a run."
+)
 
 
 def _user_agent() -> str:
@@ -188,7 +212,14 @@ def payload() -> Dict[str, Any]:
             "on an agent machine."
         )
 
-    url = "{0}/deployments/{1}/payload".format(api_url.rstrip("/"), spawn_id)
+    # QUOTED, like every id this module puts in a path. Left raw, an id
+    # holding a slash or a `..` silently becomes a request to a DIFFERENT
+    # route — the client normalises the path before it leaves — and the
+    # answer is then parsed as though it were this one. A 404 is the
+    # honest outcome; a wrong object read as the right one is not.
+    url = "{0}/deployments/{1}/payload".format(
+        api_url.rstrip("/"), quote(spawn_id, safe="")
+    )
     status, body = _http.request_json("GET", url, api_key=api_key, ua=_user_agent())
     if status != 200:
         raise PayloadUnavailable(
@@ -428,7 +459,9 @@ def write_result(value: Any) -> None:
     # supervisor could not prepare the file — and in both cases a run that
     # thinks it answered did not.
     path = _require(
-        "AETHERFY_SPAWN_RESULT_PATH", "the file this run returns its answer in"
+        "AETHERFY_SPAWN_RESULT_PATH",
+        "the path this run writes its answer to",
+        _NO_RESULT_PATH_REMEDY,
     )
 
     # allow_nan=False ON PURPOSE. Python's json writes NaN, Infinity and
@@ -551,7 +584,7 @@ def _run_url(run_id: str) -> str:
     api_url = _require("AETHERFY_API_URL", "the control plane's base URL")
     if not run_id:
         raise ValueError("run_id must be a run's id, not an empty string.")
-    return "{0}/deployments/{1}".format(api_url.rstrip("/"), run_id)
+    return "{0}/deployments/{1}".format(api_url.rstrip("/"), quote(run_id, safe=""))
 
 
 def _read_run(

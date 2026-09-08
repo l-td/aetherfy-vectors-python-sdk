@@ -65,6 +65,41 @@ def test_no_result_path_names_the_variable_and_writes_nothing(monkeypatch, tmp_p
     assert list(tmp_path.iterdir()) == []
 
 
+def test_the_message_does_not_claim_the_platform_always_sets_the_path(monkeypatch):
+    # THE DEFAULT SENTENCE IS FALSE FOR THIS ONE VARIABLE, and this is the only
+    # variable in the module for which it is. image_generator.py offers the
+    # result path only inside `if _RESULT_MAX_BYTES > 0`; a task machine with no
+    # cap, and every service machine, reaches this error on a platform that
+    # deliberately did not set it. Telling that customer "the platform sets it
+    # before your entrypoint starts" sends them to debug their own code.
+    monkeypatch.delenv("AETHERFY_SPAWN_RESULT_PATH", raising=False)
+
+    with pytest.raises(NotRunningOnAgent) as exc:
+        write_result({"rows": 1})
+
+    message = str(exc.value)
+    assert "the platform sets" not in message
+    assert "AETHERFY_RUN_INLINE_MAX_BYTES" in message
+    assert "service" in message
+    # ...and it says WRITE, not read, because that is what this call does.
+    assert "writes its answer to" in message
+
+
+def test_every_other_variable_keeps_the_default_sentence(monkeypatch):
+    # A negative control on the override: widening it to every call site would
+    # make the message above unremarkable and would drop a true sentence from
+    # the variables Aetherfy really does always inject.
+    from aetherfy_agent import machine
+
+    monkeypatch.delenv("AETHERFY_VCPUS", raising=False)
+    with pytest.raises(NotRunningOnAgent) as exc:
+        machine()
+
+    assert "the platform sets AETHERFY_VCPUS before your entrypoint starts" in str(
+        exc.value
+    )
+
+
 # --- THE CAP -----------------------------------------------------------------
 
 

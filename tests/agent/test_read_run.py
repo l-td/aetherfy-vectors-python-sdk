@@ -373,3 +373,55 @@ def test_an_empty_run_id_is_refused_before_a_request(transport, call):
         call("")
 
     assert transport.calls == []
+
+
+# --- THE PUBLIC SURFACE ------------------------------------------------------
+
+
+def test_the_wait_bound_is_readable_in_both_languages():
+    # ONE API IN TWO LANGUAGES. The JavaScript helper exports these three from
+    # its entry point; a task ported between the two must not find the bound
+    # readable in one and missing from the other's declared surface.
+    import aetherfy_agent
+
+    for name in (
+        "WAIT_TIMEOUT_MIN_SECONDS",
+        "WAIT_TIMEOUT_MAX_SECONDS",
+        "WAIT_TIMEOUT_DEFAULT_SECONDS",
+    ):
+        assert name in aetherfy_agent.__all__, name
+        assert isinstance(getattr(aetherfy_agent, name), int)
+
+
+def test_the_default_the_signature_uses_is_the_one_it_publishes():
+    # Two numbers that could disagree: the constant a caller reads and the
+    # default wait() actually applies.
+    import inspect
+
+    import aetherfy_agent
+
+    signature = inspect.signature(aetherfy_agent.wait)
+    assert (
+        signature.parameters["timeout_seconds"].default
+        == aetherfy_agent.WAIT_TIMEOUT_DEFAULT_SECONDS
+    )
+
+
+def test_a_run_id_cannot_walk_out_of_its_route(transport):
+    # UNESCAPED, `../agents/x` normalises to a DIFFERENT route before the
+    # request leaves, and its answer is parsed as though it were a run: `id`
+    # becomes the agent's, `state` becomes the string "None". A wrong object
+    # read as the right one, silently. Quoted, the platform answers 404.
+    result("../agents/other")
+
+    url = transport.calls[0]["url"]
+    assert url == ("https://agents.aetherfy.com/api/v1/deployments/..%2Fagents%2Fother")
+    assert "/agents/" not in url
+
+
+def test_the_wait_route_quotes_the_id_too(transport):
+    wait("../agents/other", timeout_seconds=5)
+    assert transport.calls[0]["url"] == (
+        "https://agents.aetherfy.com/api/v1/deployments/..%2Fagents%2Fother"
+        "/wait?timeout_seconds=5"
+    )

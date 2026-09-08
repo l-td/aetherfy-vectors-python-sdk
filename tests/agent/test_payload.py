@@ -160,3 +160,27 @@ def test_nothing_reaches_the_network_on_the_file_path(tmp_path, monkeypatch):
 
     monkeypatch.setattr(aetherfy_agent._http, "request_json", explode)
     assert payload() == {"a": 1}
+
+
+def test_the_spawn_id_is_quoted_in_the_fallback_url(monkeypatch):
+    # Same rule as the run-reading calls: an id that carries a slash must not
+    # silently become a request to another route.
+    import aetherfy_agent
+
+    monkeypatch.delenv("AETHERFY_SPAWN_PAYLOAD_PATH", raising=False)
+    monkeypatch.setenv("AETHERFY_API_URL", "https://agents.aetherfy.com/api/v1")
+    monkeypatch.setenv("AETHERFY_SPAWN_ID", "../agents/other")
+    monkeypatch.setenv("AETHERFY_API_KEY", "afy_test_key")
+
+    seen = []
+
+    def transport(method, url, **kwargs):
+        seen.append(url)
+        return 200, {"payload": {}}
+
+    monkeypatch.setattr(aetherfy_agent._http, "request_json", transport)
+    aetherfy_agent.payload()
+
+    assert seen[0] == (
+        "https://agents.aetherfy.com/api/v1/deployments/" "..%2Fagents%2Fother/payload"
+    )
