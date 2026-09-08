@@ -80,9 +80,27 @@ def test_the_message_does_not_claim_the_platform_always_sets_the_path(monkeypatc
     message = str(exc.value)
     assert "the platform sets" not in message
     assert "AETHERFY_RUN_INLINE_MAX_BYTES" in message
-    assert "service" in message
     # ...and it says WRITE, not read, because that is what this call does.
     assert "writes its answer to" in message
+
+
+def test_the_message_says_this_is_a_task_only_call(monkeypatch):
+    # THE SERVICE CASE IS NOT A MISCONFIGURATION, it is the wrong call. A
+    # service machine has no runs, so it is never given a result path and this
+    # can never succeed there — no cap, no redeploy and no support ticket will
+    # change that. Saying only "the path is missing" would leave a service
+    # author hunting for the setting that turns it on.
+    monkeypatch.delenv("AETHERFY_SPAWN_RESULT_PATH", raising=False)
+
+    with pytest.raises(NotRunningOnAgent) as exc:
+        write_result({"rows": 1})
+
+    message = str(exc.value)
+    assert "TASK-ONLY" in message
+    assert "service" in message
+    assert "never" in message
+    # And it names the way out, rather than only the wall.
+    assert "HTTP" in message
 
 
 def test_every_other_variable_keeps_the_default_sentence(monkeypatch):
