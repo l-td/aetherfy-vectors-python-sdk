@@ -1,5 +1,5 @@
 """
-Aetherfy Agent — the four things code running on an Aetherfy machine does.
+Aetherfy Agent — what code running on an Aetherfy machine does.
 
 This is a THIN wrapper over contracts the platform already publishes. It
 invents no protocol: every call here has a hand-rolled equivalent in
@@ -7,23 +7,27 @@ https://docs.aetherfy.com/agents/task-contract, and the helper exists so that
 equivalent stops being copied into every task.
 
     from aetherfy_agent import payload, machine, fan_out, spawn
+    from aetherfy_agent import write_result, result, wait
 
     data = payload()                         # this run's input, {} when none
     shape = machine()                        # vcpus / memory_mb / region
     results = fan_out(work, data["items"])   # in-machine pool, input order
-    spawn("nightly-rollup", {"date": "2026-09-07"})
+    write_result({"rows": len(results)})     # this run's answer
+
+    run = spawn("nightly-rollup", {"date": "2026-09-07"})
+    finished = wait(run.spawn_id)            # or result(...) for a plain read
+    print(finished.result)
+
+TWO HALVES, and they are the same contract read from opposite ends. A task
+reads its payload and writes its result; whoever started it spawns and then
+reads that result back. ``payload``/``write_result`` are files on the machine
+and touch no network at all; ``spawn``/``result``/``wait`` are the control
+plane, and are the only calls here that do.
 
 It ships inside the ``aetherfy-vectors`` distribution beside
 ``aetherfy_vectors`` and ``aetherfy_memory``, and the standard runtime image
-preinstalls that distribution — so on a plain agent these four names import
-with nothing in your requirements. A custom container installs it itself.
-
-Nothing here reaches the network except :func:`spawn` and the fallback branch
-of :func:`payload`.
-
-There is deliberately no ``result()`` and no ``wait()``. A run reports its
-outcome through its exit code, and the platform's result path is not built
-yet; adding a method that pretended otherwise would be inventing protocol.
+preinstalls that distribution — so on a plain agent these names import with
+nothing in your requirements. A custom container installs it itself.
 """
 
 import json
@@ -34,16 +38,24 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, TypeVar
 from . import _http
 from .exceptions import (
     AGENT_SPAWN_CONCURRENCY_LIMIT_EXCEEDED,
+    DEPLOYMENT_ACCESS_DENIED,
+    DEPLOYMENT_NOT_FOUND,
+    DEPLOYMENT_WAIT_TIMEOUT_INVALID,
     RUN_PAYLOAD_TOO_LARGE,
     AgentError,
     AgentTransportError,
     NotRunningOnAgent,
     PayloadTooLarge,
     PayloadUnavailable,
+    ResultTooLarge,
+    RunAccessDenied,
+    RunNotFound,
+    RunReadError,
     SpawnError,
     TooManyRunsInFlight,
+    WaitTimeoutInvalid,
 )
-from .models import MachineShape, Spawn
+from .models import MachineShape, Run, Spawn
 
 # ONE distribution, ONE version. `aetherfy_vectors.__version__` is what
 # setup.py reads to stamp the wheel, so re-exporting it here means the
@@ -57,15 +69,24 @@ __all__ = [
     "machine",
     "fan_out",
     "spawn",
+    "write_result",
+    "result",
+    "wait",
     "MachineShape",
+    "Run",
     "Spawn",
     "AgentError",
     "AgentTransportError",
     "NotRunningOnAgent",
     "PayloadUnavailable",
     "PayloadTooLarge",
+    "ResultTooLarge",
+    "RunReadError",
+    "RunNotFound",
+    "RunAccessDenied",
     "SpawnError",
     "TooManyRunsInFlight",
+    "WaitTimeoutInvalid",
 ]
 
 T = TypeVar("T")
@@ -85,6 +106,23 @@ _FAN_OUT_LINE = (
 #: count is the right default for them. CPU-bound work should pass
 #: ``width=machine().vcpus`` and ``kind="processes"``.
 _IO_BOUND_WIDTH_PER_VCPU = 8
+
+#: How far past the server's own hold this helper lets a :func:`wait` request
+#: run before it gives up on the socket. THE CLIENT'S BOUND MUST EXCEED THE
+#: SERVER'S, or a wait that the control plane is about to answer at its
+#: deadline is cut off here first and reported as a transport failure — the one
+#: outcome a caller cannot tell from a real network fault. The margin covers
+#: the round trip and the serialization on either side.
+_WAIT_TRANSPORT_MARGIN_SECONDS = 15.0
+
+#: The bound the control plane enforces on ``?timeout_seconds``. Checked here
+#: too, so a caller learns about a bad argument without paying a round trip to
+#: be told. Waiting longer than the maximum is another call, not a bigger
+#: number: the request is held open and anything longer is cut by the network
+#: in front of Aetherfy.
+WAIT_TIMEOUT_MIN_SECONDS = 1
+WAIT_TIMEOUT_MAX_SECONDS = 60
+WAIT_TIMEOUT_DEFAULT_SECONDS = 30
 
 
 def _require(variable: str, purpose: str) -> str:
@@ -346,6 +384,236 @@ def spawn(child: str, payload: Optional[Dict[str, Any]] = None) -> Spawn:
             details=detail,
         )
     raise SpawnError(message, status_code=status, error_code=code, details=detail)
+
+
+def write_result(value: Any) -> None:
+    """
+    Return ``value`` to whoever started this run.
+
+    The mirror of :func:`payload`: Aetherfy puts the path of a file in
+    ``AETHERFY_SPAWN_RESULT_PATH`` before the entrypoint starts, and stores
+    what was written there once the process ends. Nothing crosses the network,
+    and there is no call to make — a parent reads it back from the run itself
+    with :func:`result` or :func:`wait`.
+
+    RETURNING NOTHING IS THE NORMAL CASE, so most tasks never call this. A run
+    that writes no file is recorded as returning nothing, which is not the same
+    as failing to return something. Passing ``None`` records the same thing:
+    the platform reads a literal ``null`` as "returned nothing", and an empty
+    column already says that.
+
+    The result is for answers and references, not data — it shares the payload's
+    inline cap, one number bounding both directions. Anything larger belongs in
+    a collection in your Aetherfy vector database, with its id in the result.
+
+    THE LAST CALL WINS. The file is overwritten, so calling this twice returns
+    the second value; there is no accumulation and no merge.
+
+    :raises ResultTooLarge: the encoded result crosses this machine's cap. The
+        platform would have dropped it and recorded ``result_error`` instead —
+        this refuses at the write so the caller can shrink it.
+    :raises NotRunningOnAgent: ``AETHERFY_SPAWN_RESULT_PATH`` is not set, so
+        there is nowhere to put an answer.
+    :raises ValueError: ``value`` is not JSON — including a ``NaN`` or an
+        infinity, which Python would otherwise happily write as tokens no
+        other JSON reader accepts.
+    :raises TypeError: ``value`` holds an object json cannot encode.
+    """
+    # DELIBERATELY NOT THE DOCS' HAND-ROLLED VERSION, which no-ops when the
+    # variable is missing. That is the right shape inline in a customer's own
+    # script, where the author can see the fallback; it is the wrong shape for
+    # a library, which would be silently discarding the one value it was
+    # called to deliver. The variable is absent only on a machine that has no
+    # result path to offer — off Aetherfy entirely, or a task machine whose
+    # supervisor could not prepare the file — and in both cases a run that
+    # thinks it answered did not.
+    path = _require(
+        "AETHERFY_SPAWN_RESULT_PATH", "the file this run returns its answer in"
+    )
+
+    # allow_nan=False ON PURPOSE. Python's json writes NaN, Infinity and
+    # -Infinity as bare tokens, which are not JSON: the platform's own reader
+    # accepts them (it is Python too) but the value would then reach a
+    # dashboard or a JavaScript caller as a parse error on a field nobody
+    # touched. Refusing here is the same answer the JavaScript helper gives for
+    # free, since JSON.stringify has no such extension.
+    encoded = json.dumps(value, allow_nan=False).encode("utf-8")
+
+    max_bytes = _inline_max_bytes()
+    # ONE encode, measured and written. Encoding twice is how a size check ends
+    # up describing bytes other than the ones that land on disk.
+    if max_bytes is not None and len(encoded) > max_bytes:
+        raise ResultTooLarge(
+            "This run's result is {0} bytes and the inline cap is {1}. The "
+            "result is for answers and references, not data: write the data to "
+            "a collection and return its id.".format(len(encoded), max_bytes),
+            result_bytes=len(encoded),
+            max_bytes=max_bytes,
+        )
+
+    with open(path, "wb") as handle:
+        handle.write(encoded)
+
+
+def result(run_id: str) -> Run:
+    """
+    Read one run back, with whatever it returned.
+
+    Answers immediately with the run as it stands. A run that is still going
+    has ``state == "active"`` and no result yet; :func:`wait` is the same read
+    with the waiting done server-side, and is what to use when the answer is
+    the point.
+
+    ``run_id`` is a run's id — ``Spawn.spawn_id`` from a :func:`spawn`, or the
+    id of this run itself in ``AETHERFY_SPAWN_ID``.
+
+    :raises RunNotFound: 404, no run has that id.
+    :raises RunAccessDenied: 403, the run belongs to another account.
+    :raises RunReadError: any other refusal — read ``error_code``, not the prose.
+    :raises AgentTransportError: the request never reached the control plane.
+    """
+    return _read_run(_run_url(run_id))
+
+
+def wait(run_id: str, timeout_seconds: int = WAIT_TIMEOUT_DEFAULT_SECONDS) -> Run:
+    """
+    Hold one request open until the run finishes, then return it.
+
+    The read side of the result path, and the reason a parent does not poll:
+    without it every caller writes the same loop with its own interval, and all
+    of them pay for the privilege of not knowing yet.
+
+    A TIMEOUT IS NOT AN ERROR. If the run has not finished in ``timeout_seconds``
+    this returns it exactly as it stands — read ``Run.state``, which is
+    ``active`` while a run is executing and ``completed`` or ``failed`` when it
+    is over, and call again. Waiting longer than the maximum is a second call,
+    not a bigger number: the request is held open, and anything longer is cut
+    by the network in front of Aetherfy.
+
+    ONE CONNECTION FAILURE IS NOT RETRIED HERE, unlike every other call in this
+    module. A retry would silently hold a second full timeout and hand back a
+    run up to twice as late as the number the caller passed; the bound this
+    function's argument promises is worth more than the blip it would paper
+    over. Call again.
+
+    :raises ValueError: ``timeout_seconds`` is outside the server's bound. The
+        argument is wrong, and no request is sent.
+    :raises WaitTimeoutInvalid: 422, the server rejected the timeout anyway —
+        its bound moved and this helper's copy is stale.
+    :raises RunNotFound: 404, no run has that id.
+    :raises RunAccessDenied: 403, the run belongs to another account.
+    :raises RunReadError: any other refusal.
+    :raises AgentTransportError: the request never reached the control plane.
+    """
+    timeout_seconds = int(timeout_seconds)
+    if not WAIT_TIMEOUT_MIN_SECONDS <= timeout_seconds <= WAIT_TIMEOUT_MAX_SECONDS:
+        raise ValueError(
+            "timeout_seconds must be between {0} and {1}, not {2}. Waiting "
+            "longer is another call to wait(), not a bigger number.".format(
+                WAIT_TIMEOUT_MIN_SECONDS, WAIT_TIMEOUT_MAX_SECONDS, timeout_seconds
+            )
+        )
+    return _read_run(
+        "{0}/wait?timeout_seconds={1}".format(_run_url(run_id), timeout_seconds),
+        timeout=timeout_seconds + _WAIT_TRANSPORT_MARGIN_SECONDS,
+        retry_connection_errors=False,
+    )
+
+
+def _inline_max_bytes() -> Optional[int]:
+    """
+    This machine's inline cap, or ``None`` when it cannot be read.
+
+    NOT A REFUSAL WHEN ABSENT. The cap is the platform's to enforce and it does
+    — an oversized result is dropped and recorded as ``too_large`` — so the
+    check here is a courtesy that turns a silent drop into something the caller
+    can act on. Declining to write because the courtesy is unavailable would
+    lose a result the platform would have accepted, which is strictly worse
+    than not checking.
+    """
+    raw = os.environ.get("AETHERFY_RUN_INLINE_MAX_BYTES")
+    if not raw:
+        return None
+    try:
+        parsed = int(raw)
+    except ValueError:
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _run_url(run_id: str) -> str:
+    """The control plane's URL for one run.
+
+    A run is a deployment row — the ephemeral kind — so it is read from
+    ``/deployments/{id}``, the same route and the same object a deploy is read
+    from. That is the platform's shape, not a convenience: one row, one reader.
+    """
+    api_url = _require("AETHERFY_API_URL", "the control plane's base URL")
+    if not run_id:
+        raise ValueError("run_id must be a run's id, not an empty string.")
+    return "{0}/deployments/{1}".format(api_url.rstrip("/"), run_id)
+
+
+def _read_run(
+    url: str,
+    *,
+    timeout: float = _http.DEFAULT_TIMEOUT,
+    retry_connection_errors: bool = True,
+) -> Run:
+    """One GET, one Run — shared by :func:`result` and :func:`wait`.
+
+    ONE implementation because the two routes return the SAME object and refuse
+    in the SAME words; the control plane loads both through one function for
+    exactly that reason. Two readers here is how one of them ends up mapping a
+    403 the other maps as a 404.
+    """
+    api_key = _require("AETHERFY_API_KEY", "the key a run is read with")
+    status, body = _http.request_json(
+        "GET",
+        url,
+        api_key=api_key,
+        ua=_user_agent(),
+        timeout=timeout,
+        retry_connection_errors=retry_connection_errors,
+    )
+
+    if status == 200:
+        if not isinstance(body, dict):
+            raise RunReadError(
+                "Reading the run answered 200 with a body that is not an "
+                "object, so there is no run to return.",
+                status_code=status,
+            )
+        return Run(
+            id=str(body.get("id")),
+            agent_id=str(body.get("agent_id")),
+            state=str(body.get("state")),
+            result=body.get("result"),
+            result_error=body.get("result_error"),
+            has_result=bool(body.get("has_result")),
+            is_ephemeral=bool(body.get("is_ephemeral")),
+            error_message=body.get("error_message"),
+            raw=body,
+        )
+
+    detail = _detail_of(body)
+    message = detail.get("message") or "Reading the run failed with status {0}.".format(
+        status
+    )
+    code = detail.get("code")
+
+    # THE CODE DECIDES, NOT THE STATUS ALONE — the same rule spawn() follows,
+    # for the same reason. 404 and 403 are categories the control plane reuses
+    # across every route; DEPLOYMENT_NOT_FOUND and DEPLOYMENT_ACCESS_DENIED are
+    # what it publishes and promises not to rename. An unrecognised pairing
+    # falls through to RunReadError, which reports exactly what arrived.
+    if status == 404 and code == DEPLOYMENT_NOT_FOUND:
+        raise RunNotFound(message, details=detail)
+    if status == 403 and code == DEPLOYMENT_ACCESS_DENIED:
+        raise RunAccessDenied(message, details=detail)
+    if status == 422 and code == DEPLOYMENT_WAIT_TIMEOUT_INVALID:
+        raise WaitTimeoutInvalid(message, details=detail)
+    raise RunReadError(message, status_code=status, error_code=code, details=detail)
 
 
 def _spawn_url() -> str:

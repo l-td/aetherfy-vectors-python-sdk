@@ -486,7 +486,7 @@ client.create_collection("my-global-collection", VectorConfig(size=768, distance
 
 ## 🤖 Running as an Agent
 
-Code deployed to Aetherfy as an agent gets four helpers in the same
+Code deployed to Aetherfy as an agent gets a set of helpers in the same
 distribution, under `aetherfy_agent`. Nothing to add to your requirements: the
 standard runtime image preinstalls `aetherfy-vectors`, and a version you pin
 yourself wins over it. A custom container installs it like any other package.
@@ -551,11 +551,72 @@ except SpawnError as exc:
     print(exc.error_code)
 ```
 
-There is deliberately no `result()` and no `wait()`. A run reports its outcome
-through its exit code, and a helper that pretended otherwise would be inventing
-protocol the platform does not have.
+### Returning a result, and reading one back
 
-Full contract, including the environment variables behind all four calls:
+Output on Aetherfy mirrors input. A task writes its answer with `write_result`;
+whoever started the run reads it back off the run itself, so a parent hears
+from a child in another region with no side channel between them.
+
+```python
+from aetherfy_agent import write_result
+
+# In the child task. The mirror of payload(): a file on the machine, nothing
+# over the network. Returning nothing is the normal case, so most tasks never
+# call this at all.
+write_result({"rows": 128, "date": "2026-09-08"})
+```
+
+```python
+from aetherfy_agent import spawn, wait, result
+
+# In the parent. wait() holds one request open instead of polling; a run that
+# has not finished in time comes back exactly as it stands, which is not an
+# error — read `state` and call again.
+run = spawn("nightly-rollup", {"date": "2026-09-08"})
+finished = wait(run.spawn_id, timeout_seconds=45)
+
+if finished.state == "completed":
+    print(finished.result)
+
+# result() is the same read without the waiting.
+now = result(run.spawn_id)
+print(now.state, now.has_result, now.result_error)
+```
+
+The result shares the payload's inline cap — one number bounding both
+directions — and it is for answers and references, not data. Anything larger
+belongs in a collection, with its id in the result:
+
+```python
+from aetherfy_agent import write_result
+from aetherfy_agent.exceptions import ResultTooLarge
+
+try:
+    write_result(everything)
+except ResultTooLarge as exc:
+    print(exc.result_bytes, "exceeds", exc.max_bytes)
+    write_result({"collection": "nightly-rollup", "rows": len(everything)})
+```
+
+Reading a run has the same shape as spawning it: the two refusals worth telling
+apart get their own types, and everything else carries the platform's stable
+error code.
+
+```python
+from aetherfy_agent import result
+from aetherfy_agent.exceptions import RunAccessDenied, RunNotFound, RunReadError
+
+try:
+    result(run_id)
+except RunNotFound:
+    print("no run has that id")
+except RunAccessDenied:
+    print("that run belongs to another account")
+except RunReadError as exc:
+    print(exc.error_code)
+```
+
+Full contract, including the environment variables behind every call:
 [docs.aetherfy.com/agents/task-contract](https://docs.aetherfy.com/agents/task-contract).
 
 ## 🧩 Payload Schemas

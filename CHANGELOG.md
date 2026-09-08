@@ -18,9 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.1.0] - 2026-09-07
 
 ### Added
-- **`aetherfy_agent` — the four things code running on an Aetherfy agent
-  does.** A new top-level module in this same distribution, beside
-  `aetherfy_vectors` and `aetherfy_memory`:
+- **`aetherfy_agent` — what code running on an Aetherfy agent does.** A new
+  top-level module in this same distribution, beside `aetherfy_vectors` and
+  `aetherfy_memory`:
 
   - `payload()` reads this run's input. The file named by
     `AETHERFY_SPAWN_PAYLOAD_PATH` first, then the documented HTTP fallback
@@ -51,16 +51,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     limit was hit, `"max_in_flight_runs"` today) and `max_in_flight_runs`
     (its value, `None` on a plan that declares no cap). The cap is the
     ACCOUNT's, set by the plan — not a per-agent spawn ceiling.
+  - `write_result(value)` returns this run's answer to whoever started it.
+    The mirror of `payload()`: a file named by `AETHERFY_SPAWN_RESULT_PATH`,
+    nothing over the network. It refuses over the machine's inline cap
+    (`AETHERFY_RUN_INLINE_MAX_BYTES`, one number bounding the payload and the
+    result alike) with `ResultTooLarge` carrying `result_bytes` /
+    `max_bytes` — the platform would have dropped the value and recorded
+    `result_error` instead, and a value discarded silently is a value the
+    caller never learns to shrink. It refuses `NaN` and the infinities, which
+    Python's `json` would otherwise write as tokens no other JSON reader
+    accepts. When `AETHERFY_SPAWN_RESULT_PATH` is absent there is nowhere to
+    put an answer, and that raises `NotRunningOnAgent` rather than no-opping:
+    a library that silently discards the one value it was called to deliver
+    is worse than one that says so.
+  - `result(run_id)` reads one run back — `state`, `result`, `result_error`,
+    `has_result`, and the rest of the object verbatim in `Run.raw`.
+  - `wait(run_id, timeout_seconds=30)` is the same read with the waiting done
+    server-side, holding ONE request open instead of polling. `1..60`,
+    checked here before anything is sent, so a bad argument costs no round
+    trip. A TIMEOUT IS NOT AN ERROR: the run comes back exactly as it stands
+    and `state` is what tells the two apart. Unlike every other call in this
+    module it does not retry a dropped connection — a retry would hold a
+    second full timeout and hand back a run up to twice as late as the number
+    the caller passed.
+
+  Reading a run maps its refusals the way `spawn()` does, on the status AND
+  the code together: `404 DEPLOYMENT_NOT_FOUND` is `RunNotFound`,
+  `403 DEPLOYMENT_ACCESS_DENIED` is `RunAccessDenied`,
+  `422 DEPLOYMENT_WAIT_TIMEOUT_INVALID` is `WaitTimeoutInvalid`, and anything
+  else — including those statuses carrying another code — is `RunReadError`
+  reporting what actually arrived. The plain read and the waiting read refuse
+  identically, because upstream they are one loader behind two routes.
 
   Each of these was already a documented platform contract that every task
   hand-rolled; none of them is a new protocol. The module adds NO dependency:
-  its HTTP is `urllib` from the standard library. Both requests set an
+  its HTTP is `urllib` from the standard library. Every request sets an
   explicit `User-Agent`, because urllib's default is blocked at the edge and
   produces a 403 that reads exactly like an auth failure.
-
-  There is deliberately no `result()` and no `wait()`: a run reports its
-  outcome through its exit code, and the platform's result path does not
-  exist yet.
 
   The standard runtime image preinstalls this distribution, so a plain agent
   gets the helper with nothing in its requirements, and a version the customer

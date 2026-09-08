@@ -13,6 +13,13 @@ three the control plane distinguishes: the payload was too big
 else" is any other status AND any other code on those two statuses: the pairing
 is what selects a type, so a 413 the platform grows for some new reason arrives
 as a plain SpawnError reporting its own code rather than wearing this one's.
+
+READING A RUN BACK has its own small family below, under ``RunReadError``, and
+it follows exactly the same rule. It is a SEPARATE family from ``SpawnError``
+rather than a widening of it, because the two calls fail at different things:
+a spawn is refused for what you asked to start, a read for what you asked to
+see. ``ResultTooLarge`` sits outside both — it is raised before anything leaves
+the machine.
 """
 
 from typing import Any, Dict, Optional
@@ -156,3 +163,154 @@ class TooManyRunsInFlight(SpawnError):
 
 class AgentTransportError(AgentError):
     """Raised when a request never reached the control plane at all."""
+
+
+#: The three control-plane error codes the run-reading calls give a type of
+#: their own. ONE definition each, for the same reason as the two above: the
+#: code both SELECTS the type and is STAMPED on it, and two literals could
+#: disagree.
+#:
+#: The first two are the deployment read's existing contract, and the /wait
+#: route answers with them identically by construction — one loader serves both
+#: routes upstream, so a caller need not know which one it called.
+DEPLOYMENT_NOT_FOUND = "DEPLOYMENT_NOT_FOUND"
+DEPLOYMENT_ACCESS_DENIED = "DEPLOYMENT_ACCESS_DENIED"
+DEPLOYMENT_WAIT_TIMEOUT_INVALID = "DEPLOYMENT_WAIT_TIMEOUT_INVALID"
+
+
+class ResultTooLarge(AgentError):
+    """
+    Raised by :func:`~aetherfy_agent.write_result` when the encoded result
+    crosses this machine's inline cap.
+
+    THE PLATFORM WOULD NOT HAVE FAILED THE RUN. A result over the cap is
+    dropped and the run records ``result_error = "too_large"`` beside an empty
+    result — the exit code is still the run's outcome. This helper refuses at
+    the write instead, because a value discarded silently is a value the caller
+    never learns to shrink: whoever spawned the run finds out, and the code
+    that could have written the data to a collection and returned its id does
+    not.
+
+    Mirrors :class:`PayloadTooLarge`, which is the same cap in the other
+    direction — one number bounds both. It is NOT a subclass of it, and not of
+    :class:`SpawnError` either: nothing here crossed the network, so there is
+    no status and no platform code to carry.
+
+    ``max_bytes`` is read from ``AETHERFY_RUN_INLINE_MAX_BYTES``, which the
+    platform injects on every task machine.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        result_bytes: Optional[int] = None,
+        max_bytes: Optional[int] = None,
+    ):
+        super().__init__(message)
+        self.result_bytes = result_bytes
+        self.max_bytes = max_bytes
+
+
+class RunReadError(AgentError):
+    """
+    Raised when the control plane refuses to hand over a run.
+
+    ``error_code`` is the platform's stable code (``detail.code`` in the
+    control-plane envelope) and is the thing to branch on; ``message`` is prose
+    that may be reworded at any time.
+
+    Same discipline as :class:`SpawnError`: the STATUS AND THE CODE together
+    select a subclass, and an unrecognised pairing arrives as this class
+    reporting exactly what came back rather than wearing a type whose code the
+    platform never sent.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: Optional[int] = None,
+        error_code: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__(
+            message,
+            status_code=status_code,
+            details=details,
+            error_code=error_code,
+        )
+
+
+class RunNotFound(RunReadError):
+    """
+    Raised on ``404 DEPLOYMENT_NOT_FOUND`` — no run has that id.
+
+    A spawn returns the child run's id in ``Spawn.spawn_id``; anything else is
+    a guess. Note that a run row is not immortal: an archived agent takes its
+    runs with it.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        details: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__(
+            message,
+            status_code=404,
+            error_code=DEPLOYMENT_NOT_FOUND,
+            details=details,
+        )
+
+
+class RunAccessDenied(RunReadError):
+    """
+    Raised on ``403 DEPLOYMENT_ACCESS_DENIED`` — the run belongs to another
+    account.
+
+    Distinct from :class:`RunNotFound` because the platform distinguishes them,
+    and the two are different problems: an id that does not exist is a bug in
+    what you passed, an id you may not read is a bug in whose key you used.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        details: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__(
+            message,
+            status_code=403,
+            error_code=DEPLOYMENT_ACCESS_DENIED,
+            details=details,
+        )
+
+
+class WaitTimeoutInvalid(RunReadError):
+    """
+    Raised on ``422 DEPLOYMENT_WAIT_TIMEOUT_INVALID`` — the server rejected the
+    ``timeout_seconds`` it was sent.
+
+    :func:`~aetherfy_agent.wait` checks the same bound before it sends
+    anything, and raises ``ValueError`` when the CALLER is out of range — that
+    is a bad argument, not a refusal, and it costs no round trip. This type is
+    for the case that check did not catch: the server's bound moved. Kept as a
+    named type so that day arrives as something to read rather than as a bare
+    422 the helper had no shape for.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        details: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__(
+            message,
+            status_code=422,
+            error_code=DEPLOYMENT_WAIT_TIMEOUT_INVALID,
+            details=details,
+        )
