@@ -872,7 +872,7 @@ class AetherfyVectorsClient:
                         "etag": None,
                     }
                 payload_schema_data = self._payload_schema_cache.get(scoped_name)
-            except:
+            except Exception:
                 # Error fetching schema - cache None to avoid retrying
                 self._payload_schema_cache[scoped_name] = {
                     "schema": None,
@@ -1029,7 +1029,7 @@ class AetherfyVectorsClient:
                 except SchemaValidationError:
                     # Re-raise schema validation errors
                     raise
-                except:
+                except Exception:
                     # Ignore other errors during schema refresh
                     updated_schema = self._payload_schema_cache.get(
                         original_collection_name
@@ -1053,7 +1053,7 @@ class AetherfyVectorsClient:
                         evict_caches_on_404=scoped_name,
                     )
                     return True
-                except:
+                except Exception:
                     # If retry also fails, raise the original 412 error
                     raise ValidationError(
                         f"Schema changed for collection '{original_collection_name}'. Please retry your request.",
