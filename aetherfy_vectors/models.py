@@ -112,10 +112,8 @@ class UsageStats:
 
     The shape mirrors ``GET /api/v1/analytics/usage`` VERBATIM — same field
     names, same units, no derived or renamed values. It is pinned live by the
-    e2e SDK guard (aetherfy-e2e-tests tests/sdk/test_usage_stats_sdk.py), which
-    calls the real endpoint and asserts every field below is present with the
-    right type. See aetherfy-dashboard docs/TELEMETRY.md for the endpoint's
-    contract history.
+    e2e SDK guard, which calls the real endpoint and asserts every field below
+    is present with the right type.
 
     The nine invented fields this class used to declare (current_collections,
     max_collections, current_points, max_points, requests_this_month,

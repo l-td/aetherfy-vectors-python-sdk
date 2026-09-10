@@ -112,8 +112,6 @@ class AetherfyVectorsClient:
                 vectordb usage, local development, and debugging, where it
                 selects the regional endpoint. Distinct from a collection's
                 placement ``regions`` (``create_collection(regions=...)``).
-                See REVIEW_FAQ §67 (api_region routing rationale) and §66
-                (per-collection placement).
             timeout: Request timeout in seconds (default: 30.0).
             workspace: Workspace name for multi-agent coordination.
                 - Set to 'auto' to auto-detect from ``AETHERFY_WORKSPACE`` environment variable
@@ -337,9 +335,9 @@ class AetherfyVectorsClient:
         return collection_name
 
     def _build_collection_path(self, collection_name: str, suffix: str = "") -> str:
-        """Build the canonical vectordb URL path for a collection.
+        """Build the canonical URL path for a collection.
 
-        Post-A/B (PR 1 of vectordb), workspaced operations use the nested
+        Workspaced operations use the nested
         form `workspaces/{ws}/collections/{name}` instead of the old
         slash-in-name encoding. Workspaceless calls continue to use the
         flat form.
@@ -560,15 +558,15 @@ class AetherfyVectorsClient:
             vectors_config: Vector configuration or dict with size/distance.
             distance: Distance metric (deprecated, use vectors_config).
             description: Optional collection description (max 500 characters).
-            regions: Optional explicit placement regions for this collection
-                (§66 per-collection scoping). Omit to default to your full
+            regions: Optional explicit placement regions for this collection.
+                Omit to default to your full
                 scope — the server resolves it and the returned Collection
                 echoes the explicit list. Pass a subset of your scope to pin
                 the collection to those regions. The list must be a subset of
                 your account/workspace scope; an empty list is rejected by the
                 server (422). Subset/empty validation is server-side. Distinct
-                from the client constructor's ``api_region`` (which endpoint to
-                connect to — §67) — see REVIEW_FAQ §66.
+                from the client constructor's ``api_region``, which selects the
+                endpoint to connect to rather than where the collection lives.
 
         Returns:
             The created Collection, including its resolved ``regions`` list.
