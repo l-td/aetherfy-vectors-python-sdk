@@ -30,9 +30,9 @@ class Spawn:
     """
     An accepted spawn: the control plane recorded the run and queued its deploy.
 
-    Acceptance is not execution. ``status`` is the run's INITIAL status, and a
-    spawned run that lands on an agent already busy fails as busy rather than
-    queueing — Aetherfy never queues a run behind another.
+    Acceptance is not execution. ``status`` is the run's INITIAL status.
+    Aetherfy never queues a run behind another: a spawned run that finds every
+    machine of the child busy gets a machine of its own and runs at once.
     """
 
     spawn_id: str
