@@ -38,7 +38,7 @@ from urllib.parse import quote
 
 from . import _http
 from .exceptions import (
-    AGENT_SPAWN_CONCURRENCY_LIMIT_EXCEEDED,
+    AGENT_RUN_CONCURRENCY_LIMIT_EXCEEDED,
     DEPLOYMENT_ACCESS_DENIED,
     DEPLOYMENT_NOT_FOUND,
     DEPLOYMENT_WAIT_TIMEOUT_INVALID,
@@ -339,18 +339,21 @@ def fan_out(
 
 def spawn(child: str, payload: Optional[Dict[str, Any]] = None) -> Spawn:
     """
-    Ask the control plane to run another task agent, and return once recorded.
+    Ask the control plane to run another agent, and return once recorded.
 
-    ``child`` is the id or name of a ``type: job`` agent you own; the parent is
-    this machine's own agent. The child runs in this agent's region, and the
+    ``child`` is the id or name of an agent you own, of either type: a task's
+    run forks its command, a service's run is a request to its own
+    ``POST /aetherfy/run``. The parent is this machine's own agent, recorded on
+    the run and never on the child. The child runs in this agent's region, and the
     two must be connected by ``spawn.workers`` in ``aetherfy.yaml`` for the
     call to be allowed.
 
     ACCEPTANCE IS NOT EXECUTION. The returned :class:`~.models.Spawn` says the
     run was recorded and its deploy queued. Aetherfy never queues a run behind
-    another: a spawn aimed at a child whose machines are all busy gets a machine
-    of its own and runs at once, and a spawn over the account's runs-in-flight
-    limit is refused (:class:`TooManyRunsInFlight`). Wait for the run and read
+    another: a spawn aimed at a task whose machines are all busy gets a machine
+    of its own and runs at once, and a task spawn over the account's
+    runs-in-flight limit is refused (:class:`TooManyRunsInFlight`) — the same
+    limit, and the same code, a manual or scheduled run meets. Wait for the run and read
     its state.
 
     Keep the payload small: it is for parameters and references, not data. Pass
@@ -410,7 +413,7 @@ def spawn(child: str, payload: Optional[Dict[str, Any]] = None) -> Spawn:
             max_bytes=detail.get("max_bytes"),
             details=detail,
         )
-    if status == 429 and code == AGENT_SPAWN_CONCURRENCY_LIMIT_EXCEEDED:
+    if status == 429 and code == AGENT_RUN_CONCURRENCY_LIMIT_EXCEEDED:
         raise TooManyRunsInFlight(
             message,
             in_flight_count=detail.get("in_flight_count"),

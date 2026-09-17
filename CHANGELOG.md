@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **`TooManyRunsInFlight` is raised on `429 AGENT_RUN_CONCURRENCY_LIMIT_EXCEEDED`.**
+  The platform renamed the code (it was `AGENT_SPAWN_CONCURRENCY_LIMIT_EXCEEDED`)
+  because the account's runs-in-flight limit answers a manual and a scheduled
+  run too. The exported constant is renamed with it; there is no alias.
+- **`spawn(child)` accepts a child of either type.** A service child's run is a
+  request to its own `POST /aetherfy/run`; the parent is recorded on the run,
+  never on the child.
+
 ### Planned Features
 - Additional distance metrics support
 - Streaming search results

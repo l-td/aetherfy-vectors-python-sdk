@@ -9,7 +9,7 @@ code catches vector-db errors and agent-runtime errors alike.
 Only three failures are worth telling apart when spawning, and they are the
 three the control plane distinguishes: the payload was too big
 (413 RUN_PAYLOAD_TOO_LARGE), too many runs are already in flight
-(429 AGENT_SPAWN_CONCURRENCY_LIMIT_EXCEEDED), and everything else. "Everything
+(429 AGENT_RUN_CONCURRENCY_LIMIT_EXCEEDED), and everything else. "Everything
 else" is any other status AND any other code on those two statuses: the pairing
 is what selects a type, so a 413 the platform grows for some new reason arrives
 as a plain SpawnError reporting its own code rather than wearing this one's.
@@ -33,7 +33,7 @@ from aetherfy_vectors.exceptions import AetherfyVectorsException
 #: let the dispatch and the stamp disagree, which is the one way an error could
 #: report a code the platform never sent.
 RUN_PAYLOAD_TOO_LARGE = "RUN_PAYLOAD_TOO_LARGE"
-AGENT_SPAWN_CONCURRENCY_LIMIT_EXCEEDED = "AGENT_SPAWN_CONCURRENCY_LIMIT_EXCEEDED"
+AGENT_RUN_CONCURRENCY_LIMIT_EXCEEDED = "AGENT_RUN_CONCURRENCY_LIMIT_EXCEEDED"
 
 
 class AgentError(AetherfyVectorsException):
@@ -137,7 +137,7 @@ class PayloadTooLarge(SpawnError):
 
 class TooManyRunsInFlight(SpawnError):
     """
-    Raised on ``429 AGENT_SPAWN_CONCURRENCY_LIMIT_EXCEEDED`` — the account's
+    Raised on ``429 AGENT_RUN_CONCURRENCY_LIMIT_EXCEEDED`` — the account's
     runs-in-flight cap is full.
 
     Retryable, unlike the other two: wait for runs to finish and spawn again.
@@ -166,7 +166,7 @@ class TooManyRunsInFlight(SpawnError):
         super().__init__(
             message,
             status_code=429,
-            error_code=AGENT_SPAWN_CONCURRENCY_LIMIT_EXCEEDED,
+            error_code=AGENT_RUN_CONCURRENCY_LIMIT_EXCEEDED,
             details=details,
         )
         self.in_flight_count = in_flight_count

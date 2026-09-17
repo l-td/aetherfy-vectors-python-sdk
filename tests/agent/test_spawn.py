@@ -155,7 +155,7 @@ def test_429_is_too_many_runs_in_flight(transport):
         429,
         {
             "detail": {
-                "code": "AGENT_SPAWN_CONCURRENCY_LIMIT_EXCEEDED",
+                "code": "AGENT_RUN_CONCURRENCY_LIMIT_EXCEEDED",
                 "message": (
                     "Too many runs in flight on this account (25/25); wait for "
                     "some to finish. The limit is set by your plan."
@@ -173,7 +173,7 @@ def test_429_is_too_many_runs_in_flight(transport):
     assert error.in_flight_count == 25
     assert error.limit == "max_in_flight_runs"
     assert error.max_in_flight_runs == 25
-    assert error.error_code == "AGENT_SPAWN_CONCURRENCY_LIMIT_EXCEEDED"
+    assert error.error_code == "AGENT_RUN_CONCURRENCY_LIMIT_EXCEEDED"
 
 
 def test_429_survives_an_uncapped_plan(transport):
@@ -183,7 +183,7 @@ def test_429_survives_an_uncapped_plan(transport):
         429,
         {
             "detail": {
-                "code": "AGENT_SPAWN_CONCURRENCY_LIMIT_EXCEEDED",
+                "code": "AGENT_RUN_CONCURRENCY_LIMIT_EXCEEDED",
                 "message": "Too many runs in flight on this account.",
                 "limit": "max_in_flight_runs",
                 "in_flight_count": 400,
@@ -205,7 +205,7 @@ def test_429_reads_the_limit_name_rather_than_assuming_it(transport):
         429,
         {
             "detail": {
-                "code": "AGENT_SPAWN_CONCURRENCY_LIMIT_EXCEEDED",
+                "code": "AGENT_RUN_CONCURRENCY_LIMIT_EXCEEDED",
                 "message": "Some other cap.",
                 "limit": "max_agents",
                 "in_flight_count": 3,
@@ -282,7 +282,7 @@ def test_429_with_no_extras_still_maps(transport):
         429,
         {
             "detail": {
-                "code": "AGENT_SPAWN_CONCURRENCY_LIMIT_EXCEEDED",
+                "code": "AGENT_RUN_CONCURRENCY_LIMIT_EXCEEDED",
                 "message": "busy",
             }
         },
@@ -308,7 +308,7 @@ def test_the_two_refusals_are_distinguishable(transport):
 @pytest.mark.parametrize(
     "status,code",
     [
-        (400, "AGENT_CHILD_NOT_JOB_TYPE"),
+        (400, "AGENT_SPAWN_DEPTH_INVALID"),
         (403, "AGENT_NOT_SPAWN_ENABLED"),
         (403, "AGENT_WORKER_NOT_ALLOWED"),
         (409, "AGENT_PARENT_NOT_SPAWNABLE"),
