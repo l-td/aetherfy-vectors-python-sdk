@@ -16,6 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   request to its own `POST /aetherfy/run`; the parent is recorded on the run,
   never on the child.
 
+### Release needed
+- **The published 1.1.0 does not recognise `AGENT_RUN_CONCURRENCY_LIMIT_EXCEEDED`.**
+  It still matches the old code, so against the current platform a full
+  runs-in-flight limit reaches 1.1.0 callers as a plain `SpawnError` instead of
+  `TooManyRunsInFlight`, the one spawn refusal worth retrying. Publish this
+  version before anyone relies on that retry.
+
 ### Planned Features
 - Additional distance metrics support
 - Streaming search results
