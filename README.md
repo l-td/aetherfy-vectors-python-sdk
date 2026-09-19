@@ -464,21 +464,24 @@ results = classifier.search("raw-invoices", query_vector=embedding, limit=20)
 
 ### Workspace auto-detection from environment
 
-Agents deployed by Aetherfy automatically have `AETHERFY_WORKSPACE` set. The client picks this up if no `workspace` is passed explicitly:
+`workspace` defaults to `"auto"`: the client reads `AETHERFY_WORKSPACE` from the environment, and uses no workspace when it is unset. The control plane sets that variable only on an agent that was deployed into a workspace, so an agent without one stays workspaceless:
 
 ```python
 import os
 
-# In a deployed agent, AETHERFY_WORKSPACE is injected automatically
+# In an agent deployed into a workspace, AETHERFY_WORKSPACE is injected
 client = AetherfyVectorsClient(api_key=os.environ["AETHERFY_API_KEY"])
 # → workspace is auto-detected from AETHERFY_WORKSPACE env var
+# → in an agent with no workspace, the variable is absent and the client
+#   is workspaceless
 ```
 
-### No workspace (backward-compatible)
+### No workspace
 
 ```python
-# No workspace — collections are stored as-is, not scoped
-client = AetherfyVectorsClient(api_key="afy_live_your_key")
+# No workspace — collections are stored as-is, not scoped.
+# Pass None explicitly to ignore AETHERFY_WORKSPACE inside a workspaced agent.
+client = AetherfyVectorsClient(api_key="afy_live_your_key", workspace=None)
 client.create_collection("my-global-collection", VectorConfig(size=768, distance=DistanceMetric.COSINE))
 ```
 

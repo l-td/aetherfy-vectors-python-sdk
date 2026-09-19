@@ -88,7 +88,7 @@ class AetherfyVectorsClient:
         endpoint: Optional[str] = None,
         api_region: Optional[str] = None,
         timeout: float = DEFAULT_TIMEOUT,
-        workspace: Optional[str] = None,
+        workspace: Optional[str] = "auto",
         **kwargs,
     ):
         """Initialize Aetherfy Vectors client.
@@ -114,9 +114,14 @@ class AetherfyVectorsClient:
                 placement ``regions`` (``create_collection(regions=...)``).
             timeout: Request timeout in seconds (default: 30.0).
             workspace: Workspace name for multi-agent coordination.
-                - Set to 'auto' to auto-detect from ``AETHERFY_WORKSPACE`` environment variable
+                Defaults to ``'auto'``: read ``AETHERFY_WORKSPACE`` from the
+                environment, and fall back to no workspace when it is unset.
+                The control plane sets that variable only on an agent that
+                really has a workspace, so 'auto' can only ever resolve to a
+                name the workspaces table holds.
                 - Set to a string to use a specific workspace
-                - Leave None for no workspace (collections are not namespaced)
+                - Pass None to force no workspace (collections are not
+                  namespaced) even inside a workspaced agent
             **kwargs: Additional parameters for compatibility.
 
         Raises:

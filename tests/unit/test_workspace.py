@@ -40,11 +40,40 @@ class TestWorkspaceInitialization:
 
             assert client.workspace is None
 
-    def test_no_workspace(self):
-        """Test client without workspace."""
-        client = AetherfyVectorsClient(api_key="afy_test_1234567890123456")
+    def test_default_reads_the_environment(self):
+        """The default is 'auto': an injected workspace is picked up unasked.
 
-        assert client.workspace is None
+        This matches the JS SDK and what the README promises. It is only safe
+        because the control plane injects AETHERFY_WORKSPACE solely for an
+        agent that really has a workspace — it used to fabricate
+        `default-<user_id>`, a name no workspaces row holds, and every default
+        client in a deployed agent then took the workspaced path and got
+        404 WORKSPACE_NOT_FOUND.
+        """
+        with patch.dict(os.environ, {"AETHERFY_WORKSPACE": "env-workspace"}):
+            client = AetherfyVectorsClient(api_key="afy_test_1234567890123456")
+
+            assert client.workspace == "env-workspace"
+            assert client._build_collections_list_path() == (
+                "workspaces/env-workspace/collections"
+            )
+
+    def test_default_with_env_unset_is_workspaceless(self):
+        """No AETHERFY_WORKSPACE → no workspace, and the flat path."""
+        with patch.dict(os.environ, {}, clear=True):
+            client = AetherfyVectorsClient(api_key="afy_test_1234567890123456")
+
+            assert client.workspace is None
+            assert client._build_collections_list_path() == "collections"
+
+    def test_no_workspace(self):
+        """Explicit None forces workspaceless even when the env var is set."""
+        with patch.dict(os.environ, {"AETHERFY_WORKSPACE": "env-workspace"}):
+            client = AetherfyVectorsClient(
+                api_key="afy_test_1234567890123456", workspace=None
+            )
+
+            assert client.workspace is None
 
 
 class TestCollectionScoping:
@@ -61,7 +90,9 @@ class TestCollectionScoping:
 
     def test_scope_collection_without_workspace(self):
         """Test scoping collection name without workspace."""
-        client = AetherfyVectorsClient(api_key="afy_test_1234567890123456")
+        client = AetherfyVectorsClient(
+            api_key="afy_test_1234567890123456", workspace=None
+        )
 
         scoped = client._scope_collection("documents")
         assert scoped == "documents"
@@ -370,7 +401,9 @@ class TestBackwardCompatibility:
     @pytest.fixture
     def mock_client(self):
         """Create a client without workspace."""
-        client = AetherfyVectorsClient(api_key="afy_test_1234567890123456")
+        client = AetherfyVectorsClient(
+            api_key="afy_test_1234567890123456", workspace=None
+        )
         client._make_request = Mock()
         yield client
 

@@ -67,10 +67,11 @@ def _validate_user_name(name: str, kind: str) -> None:
 class MemoryClient:
     """Agent memory client — opinionated wrapper over AetherfyVectorsClient.
 
-    Construction mirrors AetherfyVectorsClient but defaults `workspace="auto"`
-    (which picks up `AETHERFY_WORKSPACE`, injected by the control plane at
-    deploy time). Override with `workspace=None` for a shared-namespace dev
-    flow, or pass an explicit name.
+    Construction mirrors AetherfyVectorsClient, `workspace="auto"` included
+    (it picks up `AETHERFY_WORKSPACE`, which the control plane injects on an
+    agent that has a workspace, and resolves to no workspace when unset).
+    Override with `workspace=None` for a shared-namespace dev flow, or pass an
+    explicit name.
     """
 
     DEFAULT_ENDPOINT = AetherfyVectorsClient.DEFAULT_ENDPOINT
