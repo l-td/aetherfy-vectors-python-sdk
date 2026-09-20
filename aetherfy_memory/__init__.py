@@ -39,6 +39,7 @@ from .exceptions import (
     NamespaceNotFoundError,
     ThreadAlreadyExistsError,
     ThreadNotFoundError,
+    ThreadVectorSizeMismatchError,
 )
 from .models import DEFAULT_VECTOR_SIZE, Message
 from .namespace import Namespace
@@ -57,4 +58,5 @@ __all__ = [
     "NamespaceNotFoundError",
     "ThreadAlreadyExistsError",
     "ThreadNotFoundError",
+    "ThreadVectorSizeMismatchError",
 ]

@@ -1208,6 +1208,77 @@ class AetherfyVectorsClient:
         )
         return response.get("result", response) if response else {}
 
+    # ------------------------------------------------------------------
+    # Payload field indexes
+    #
+    # An unindexed payload filter is SCANNED, not looked up. A tenant key
+    # you filter on for every read (e.g. a per-conversation id) wants an
+    # index the moment the collection holds more than one tenant's rows.
+    # ------------------------------------------------------------------
+
+    def create_field_index(
+        self,
+        collection_name: str,
+        field_name: str,
+        field_schema: Union[str, Dict[str, Any]] = "keyword",
+    ) -> bool:
+        """Create a payload index on one field.
+
+        PUT /collections/{name}/index with ``{field_name, field_schema}``.
+        The call is idempotent server-side: re-creating an existing index
+        with the same schema succeeds.
+
+        Args:
+            collection_name: Name of the collection.
+            field_name: The payload key to index. Dotted paths address a
+                nested key (``"metadata.tag"``).
+            field_schema: Index type. A string for the simple types
+                (``"keyword"``, ``"integer"``, ``"float"``, ``"bool"``,
+                ``"geo"``, ``"datetime"``, ``"uuid"``, ``"text"``), or a
+                dict for the parameterised forms. Forwarded verbatim.
+
+        Returns:
+            True when the index was accepted.
+        """
+        validate_collection_name(collection_name)
+        if not isinstance(field_name, str) or not field_name:
+            raise ValidationError("field_name must be a non-empty string")
+        scoped_name = self._scope_collection(collection_name)
+        self._make_request(
+            "PUT",
+            self._build_collection_path(collection_name, "/index"),
+            {"field_name": field_name, "field_schema": field_schema},
+            evict_caches_on_404=scoped_name,
+        )
+        return True
+
+    def delete_field_index(self, collection_name: str, field_name: str) -> bool:
+        """Drop the payload index on one field.
+
+        DELETE /collections/{name}/index/{field_name}. Returns False when
+        the collection (or the index) is already gone, mirroring
+        ``delete_schema``'s idempotent shape.
+        """
+        validate_collection_name(collection_name)
+        if not isinstance(field_name, str) or not field_name:
+            raise ValidationError("field_name must be a non-empty string")
+        from urllib.parse import quote
+
+        scoped_name = self._scope_collection(collection_name)
+        try:
+            self._make_request(
+                "DELETE",
+                self._build_collection_path(
+                    collection_name, f"/index/{quote(field_name, safe='')}"
+                ),
+                evict_caches_on_404=scoped_name,
+            )
+            return True
+        except AetherfyVectorsException as e:
+            if getattr(e, "status_code", None) == 404:
+                return False
+            raise
+
     def merge_metadata(
         self,
         collection_name: str,

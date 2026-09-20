@@ -2,13 +2,16 @@
 _Scope — the shared base for Namespace and Thread.
 
 Holds every operation that behaves identically for both scope shapes:
-read (search / retrieve / count / iter), delete / clear, schema management,
-analytics, and the payload-metadata helpers. The two *write* APIs differ by
-shape — a Namespace stores a generic memory (`{text?, metadata?}`), a Thread
-stores a conversation message (`{role, content, ts, metadata?}`) — so `add`
-(and the batch writers) live on the subclasses, not here. That is why
-`Thread` is NOT a subclass of `Namespace`: it is not add-substitutable for
-one. Both are `_Scope`s that share the substitutable surface.
+read (search / retrieve / count / iter), delete / clear, and the
+payload-metadata helpers. Schema management is NOT here: a schema belongs to a
+collection, and a Thread no longer has one to itself (see Namespace).
+
+The two *write* APIs differ by shape — a Namespace stores a generic memory
+(`{text?, metadata?}`), a Thread stores a conversation message
+(`{role, content, ts, metadata?}`) — so `add` (and the batch writers) live on
+the subclasses, not here. That is why `Thread` is NOT a subclass of
+`Namespace`: it is not add-substitutable for one. Both are `_Scope`s that
+share the substitutable surface.
 """
 
 from typing import Any, Dict, Iterator, List, Optional, Union
@@ -20,7 +23,6 @@ from aetherfy_vectors.exceptions import (
     PointNotFoundError,
 )
 from aetherfy_vectors.models import Filter, SearchResult
-from aetherfy_vectors.schema import AnalysisResult, Schema
 
 
 class _Scope:
@@ -42,6 +44,41 @@ class _Scope:
     def name(self) -> str:
         """The user-facing scope name (without workspace or thread prefixes)."""
         return self._name
+
+    # ---------------------------------------------------------------------
+    # Scoping hooks
+    #
+    # A Namespace IS its collection, so all four hooks are identities. A
+    # Thread shares one collection with every other thread in the workspace
+    # and overrides them to carry its own clause. They exist so that every
+    # read and write below goes through ONE place that can narrow it — a
+    # scope clause bolted onto each call site individually is a scope clause
+    # that gets forgotten at the next call site added.
+    # ---------------------------------------------------------------------
+
+    def _combine_filter(
+        self, filter: Optional[Union[Filter, Dict[str, Any]]]
+    ) -> Optional[Union[Filter, Dict[str, Any]]]:
+        """Narrow a caller's filter to this scope. Identity for a Namespace."""
+        return filter
+
+    def _assert_owns(self, ids: List[Union[str, int]]) -> None:
+        """Refuse point ids that do not belong to this scope. No-op here."""
+        return None
+
+    def _owned_ids(self, ids: List[Union[str, int]]) -> List[Union[str, int]]:
+        """Narrow an id list to the ids this scope owns. Identity here."""
+        return ids
+
+    def _reads_payload_to_scope(self) -> bool:
+        """True when this scope needs payloads to identify its own points."""
+        return False
+
+    def _retain_owned(
+        self, points: List[Dict[str, Any]], *, with_payload: bool
+    ) -> List[Dict[str, Any]]:
+        """Drop points belonging to another scope. Identity for a Namespace."""
+        return points
 
     # ---------------------------------------------------------------------
     # Payload metadata
@@ -77,6 +114,7 @@ class _Scope:
         Returns:
             Server response from the underlying set_payload call.
         """
+        self._assert_owns([id])
         return self._client.set_payload(
             self._collection,
             payload={"metadata": metadata},
@@ -108,6 +146,7 @@ class _Scope:
             raise ValueError(
                 f"Reserved keys cannot appear in metadata partial: {sorted(bad)}"
             )
+        self._assert_owns([id])
         try:
             return self._client.set_payload(
                 self._collection,
@@ -143,6 +182,7 @@ class _Scope:
             raise ValueError(
                 f"Reserved keys cannot appear in delete keys list: {sorted(bad)}"
             )
+        self._assert_owns([id])
         dotted = [f"metadata.{k}" for k in keys]
         try:
             return self._client.delete_payload(
@@ -208,7 +248,7 @@ class _Scope:
             query_vector=vector,
             limit=limit,
             offset=offset,
-            query_filter=filter,
+            query_filter=self._combine_filter(filter),
             with_payload=with_payload,
             with_vectors=with_vectors,
             score_threshold=score_threshold,
@@ -222,16 +262,37 @@ class _Scope:
         with_payload: bool = True,
         with_vectors: bool = False,
     ) -> List[Dict[str, Any]]:
-        """Fetch specific points by ID."""
-        return self._client.retrieve(
-            self._collection, ids, with_payload=with_payload, with_vectors=with_vectors
+        """Fetch specific points by ID.
+
+        Ids that exist in the underlying collection but belong to another
+        scope are not returned: a Thread's point ids are unique within the
+        shared threads collection, not within the thread.
+        """
+        points = self._client.retrieve(
+            self._collection,
+            ids,
+            # A Thread has to read payloads to tell its own points from a
+            # sibling's. The caller's with_payload choice is still honoured:
+            # _retain_owned strips what the caller did not ask for.
+            with_payload=with_payload or self._reads_payload_to_scope(),
+            with_vectors=with_vectors,
         )
+        return self._retain_owned(points, with_payload=with_payload)
 
     def count(
-        self, *, filter: Optional[Dict[str, Any]] = None, exact: bool = True
+        self,
+        *,
+        filter: Optional[Union[Filter, Dict[str, Any]]] = None,
+        exact: bool = True,
     ) -> int:
-        """Count points in this scope, optionally filtered."""
-        return self._client.count(self._collection, count_filter=filter, exact=exact)
+        """Count points in this scope, optionally filtered.
+
+        ``filter`` takes a ``Filter`` or a plain dict, the same as
+        ``search`` and ``iter``.
+        """
+        return self._client.count(
+            self._collection, count_filter=self._combine_filter(filter), exact=exact
+        )
 
     def iter(
         self,
@@ -261,7 +322,7 @@ class _Scope:
         yield from self._client.scroll_iter(
             self._collection,
             batch_size=batch_size,
-            scroll_filter=filter,
+            scroll_filter=self._combine_filter(filter),
             with_payload=with_payload,
             with_vectors=with_vectors,
         )
@@ -274,8 +335,21 @@ class _Scope:
         self,
         selector: Union[List[Union[str, int]], Dict[str, Any]],
     ) -> bool:
-        """Delete points — by ID list or by filter — without dropping the scope."""
-        return self._client.delete(self._collection, selector)
+        """Delete points — by ID list or by filter — without dropping the scope.
+
+        An id list is narrowed to the ids this scope owns before the
+        request is sent, so a Thread cannot delete a sibling thread's
+        point by naming its id.
+        """
+        if isinstance(selector, list):
+            owned = self._owned_ids(selector)
+            if not owned:
+                # Nothing in this scope to delete. Deleting is idempotent,
+                # so a no-op is the honest answer; sending the request
+                # anyway would delete another scope's points by id.
+                return True
+            return self._client.delete(self._collection, owned)
+        return self._client.delete(self._collection, self._combine_filter(selector))
 
     def clear(self) -> bool:
         """Atomically drop this scope (destroys the underlying collection).
@@ -284,42 +358,3 @@ class _Scope:
         `memory.create_namespace(name)` / `memory.create_thread(id)`.
         """
         return self._client.delete_collection(self._collection)
-
-    # ---------------------------------------------------------------------
-    # Schema
-    # ---------------------------------------------------------------------
-
-    def get_schema(self) -> Optional[Schema]:
-        """Return the payload schema for this scope, or None if unset."""
-        return self._client.get_schema(self._collection)
-
-    def set_schema(
-        self,
-        schema: Schema,
-        *,
-        enforcement: str = "strict",
-        description: Optional[str] = None,
-    ) -> str:
-        """Set or update the payload schema. `enforcement` is 'strict', 'warn', or 'off'.
-
-        Returns the new schema ETag.
-        """
-        return self._client.set_schema(
-            self._collection, schema, enforcement=enforcement, description=description
-        )
-
-    def delete_schema(self) -> bool:
-        """Remove the payload schema from this scope."""
-        return self._client.delete_schema(self._collection)
-
-    def analyze_schema(self, sample_size: int = 1000) -> AnalysisResult:
-        """Infer a suggested schema from a sample of existing points."""
-        return self._client.analyze_schema(self._collection, sample_size=sample_size)
-
-    def refresh_schema(self) -> None:
-        """Bust the local schema cache for this scope."""
-        self._client.refresh_schema(self._collection)
-
-    def clear_schema_cache(self) -> None:
-        """Clear the client-side schema cache for this scope."""
-        self._client.clear_schema_cache(self._collection)

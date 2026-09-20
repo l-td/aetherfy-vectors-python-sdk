@@ -52,6 +52,30 @@ class ThreadAlreadyExistsError(AetherfyMemoryException):
         self.thread_id = thread_id
 
 
+class ThreadVectorSizeMismatchError(AetherfyMemoryException):
+    """Raised when the threads collection already exists at another dimension.
+
+    Every thread shares ONE collection, so they share one vector size and one
+    distance metric — fixed when that collection is first created. Asking for
+    a different size later cannot be honoured, and letting it through would
+    surface three layers down as a bare dimension ValueError on the first
+    ``add``. Raised at create time instead, naming the dimension that is
+    actually there.
+    """
+
+    def __init__(self, existing: int, requested: int):
+        super().__init__(
+            f"The threads collection already exists with vector size "
+            f"{existing}, but this MemoryClient is configured for "
+            f"{requested}. Every thread shares one collection and therefore "
+            f"one dimension. Construct MemoryClient(thread_vector_size="
+            f"{existing}) to use it, or delete every thread to re-create the "
+            f"collection at another size."
+        )
+        self.existing = existing
+        self.requested = requested
+
+
 class EmbeddingNotSupportedError(AetherfyMemoryException):
     """
     Raised when a caller omits `vector` expecting server-side embedding.

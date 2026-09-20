@@ -8,8 +8,8 @@ the correct calls and enforces its own contracts:
 - Namespace/thread lifecycle (create, list, exists, delete)
 - Required-scope rule (no root-level add/search)
 - Required-create rule (add/search before create → error)
-- Reserved prefix rule (namespace names can't start with __thread__)
-- Collection naming convention (__thread__<id> for threads)
+- Reserved-name rule (a namespace can never be named `__threads__`)
+- Threads as payload rows in one shared `__threads__` collection
 - Forward-compat error when vector is omitted
 - Operations parity with AetherfyVectorsClient
 - Thread.history() ordering
@@ -19,6 +19,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from aetherfy_memory.models import THREAD_ID_KEY, THREAD_MARKER_KEY, THREADS_COLLECTION
 from aetherfy_memory import (
     MemoryClient,
     Message,
@@ -28,6 +29,7 @@ from aetherfy_memory import (
 )
 from aetherfy_memory.exceptions import (
     EmbeddingNotSupportedError,
+    ThreadVectorSizeMismatchError,
     InvalidNameError,
     NamespaceAlreadyExistsError,
     NamespaceNotFoundError,
@@ -73,6 +75,13 @@ def fake_vectors_client():
     client.collection_exists.return_value = False
     # get_collections defaults to empty.
     client.get_collections.return_value = []
+    # A thread now exists when its MARKER point does, and existence is a
+    # filtered count. Default it to 1 so that `collection_exists = True`
+    # still reads as "this thread is there" the way it did when a thread
+    # WAS a collection; tests that want an absent thread say so.
+    client.count.return_value = 1
+    # The shared threads collection, at the client's default dimension.
+    client.get_collection.return_value = _fake_collection(THREADS_COLLECTION)
     # _scope_collection passes through without workspace prefix for assertion
     # simplicity. The real client's workspace prefixing is tested separately
     # in test_workspace.py; here we verify MemoryClient's own naming layer.
@@ -157,20 +166,28 @@ class TestNameValidation:
 # Thread-prefix isolation
 # =============================================================================
 #
-# The internal thread collection prefix starts with `__`, and the user-name
-# regex forbids leading `_`. So user-facing APIs can never accept a name
-# that collides with the thread prefix — it's rejected at the regex gate
-# with InvalidNameError. This test pins that contract so a future relaxation
-# of the regex doesn't silently open the collision.
+# The shared threads collection is named `__threads__`, and the user-name
+# regex forbids a leading `_`. So user-facing APIs can never accept a name
+# that collides with it — it's rejected at the regex gate with
+# InvalidNameError. This test pins that contract so a future relaxation of
+# the regex doesn't silently open the collision.
 
 
-class TestThreadPrefixIsolation:
+class TestThreadsCollectionNameIsolation:
     @pytest.mark.parametrize(
         "op", ["create_namespace", "namespace", "delete_namespace"]
     )
-    def test_user_apis_reject_thread_prefix_via_regex(self, memory, op):
+    def test_user_apis_reject_the_threads_collection_name(self, memory, op):
         with pytest.raises(InvalidNameError):
-            getattr(memory, op)("__thread__foo")
+            getattr(memory, op)(THREADS_COLLECTION)
+
+    def test_threads_collection_name_is_legal_server_side(self):
+        # vectordb's scoping layer accepts [a-zA-Z0-9_-]{1,100} and nothing
+        # else (no dots), so a name the memory layer picks has to clear THAT
+        # rule, not just the SDK's looser one.
+        import re
+
+        assert re.match(r"^[a-zA-Z0-9_-]{1,100}$", THREADS_COLLECTION)
 
 
 # =============================================================================
@@ -223,22 +240,52 @@ class TestNamespaceLifecycle:
         assert isinstance(ns, Namespace)
         assert ns.name == "customer-42"
 
-    def test_list_namespaces_excludes_threads(self, memory, fake_vectors_client):
+    def test_list_namespaces_excludes_the_shared_threads_collection(
+        self, memory, fake_vectors_client
+    ):
         fake_vectors_client.get_collections.return_value = [
             _fake_collection("customer-42"),
             _fake_collection("scrape-log"),
-            _fake_collection("__thread__conv-99"),
-            _fake_collection("__thread__conv-100"),
+            _fake_collection(THREADS_COLLECTION),
         ]
         assert memory.list_namespaces() == ["customer-42", "scrape-log"]
 
-    def test_list_threads_returns_stripped_ids(self, memory, fake_vectors_client):
-        fake_vectors_client.get_collections.return_value = [
-            _fake_collection("customer-42"),
-            _fake_collection("__thread__conv-99"),
-            _fake_collection("__thread__conv-100"),
-        ]
+    def test_list_threads_reads_marker_payloads_not_collections(
+        self, memory, fake_vectors_client
+    ):
+        fake_vectors_client.collection_exists.return_value = True
+        fake_vectors_client.scroll_iter.return_value = iter(
+            [
+                {
+                    "id": "00000000-0000-4000-8000-0000000000a1",
+                    "payload": {
+                        THREAD_ID_KEY: "conv-99",
+                        THREAD_MARKER_KEY: True,
+                    },
+                },
+                {
+                    "id": "00000000-0000-4000-8000-0000000000a2",
+                    "payload": {
+                        THREAD_ID_KEY: "conv-100",
+                        THREAD_MARKER_KEY: True,
+                    },
+                },
+            ]
+        )
         assert memory.list_threads() == ["conv-99", "conv-100"]
+        # Bounded by the number of THREADS, not the number of messages:
+        # the scroll is filtered to marker points.
+        kwargs = fake_vectors_client.scroll_iter.call_args.kwargs
+        assert kwargs["scroll_filter"] == {
+            "must": [{"key": THREAD_MARKER_KEY, "match": {"value": True}}]
+        }
+
+    def test_list_threads_is_empty_before_any_thread_exists(
+        self, memory, fake_vectors_client
+    ):
+        fake_vectors_client.collection_exists.return_value = False
+        assert memory.list_threads() == []
+        fake_vectors_client.scroll_iter.assert_not_called()
 
     def test_delete_namespace_is_idempotent(self, memory, fake_vectors_client):
         fake_vectors_client.collection_exists.return_value = False
@@ -274,11 +321,57 @@ class TestNamespaceLifecycle:
 
 
 class TestThreadLifecycle:
-    def test_create_thread_uses_reserved_prefix(self, memory, fake_vectors_client):
+    def test_create_thread_does_not_create_a_collection_per_thread(
+        self, memory, fake_vectors_client
+    ):
+        # The whole point of the model: the FIRST thread creates the one
+        # shared collection, and no thread after it creates anything.
         fake_vectors_client.collection_exists.return_value = False
         memory.create_thread("conv-99")
-        call = fake_vectors_client.create_collection.call_args
-        assert call.args[0] == "__thread__conv-99"
+        assert (
+            fake_vectors_client.create_collection.call_args.args[0]
+            == THREADS_COLLECTION
+        )
+
+        fake_vectors_client.collection_exists.return_value = True
+        fake_vectors_client.count.return_value = 0
+        fake_vectors_client.create_collection.reset_mock()
+        memory.create_thread("conv-100")
+        fake_vectors_client.create_collection.assert_not_called()
+
+    def test_create_thread_writes_one_marker_point(
+        self, memory, fake_vectors_client
+    ):
+        fake_vectors_client.collection_exists.return_value = True
+        fake_vectors_client.count.return_value = 0
+        memory.create_thread("conv-99")
+        args = fake_vectors_client.upsert.call_args
+        assert args.args[0] == THREADS_COLLECTION
+        (point,) = args.args[1]
+        assert point["payload"] == {
+            THREAD_ID_KEY: "conv-99",
+            THREAD_MARKER_KEY: True,
+        }
+        # A zero vector has no defined normalisation under cosine; the
+        # marker carries a real unit vector instead.
+        assert len(point["vector"]) == DEFAULT_VECTOR_SIZE
+        assert sum(v * v for v in point["vector"]) == pytest.approx(1.0)
+
+    def test_create_thread_indexes_both_filtered_keys(
+        self, memory, fake_vectors_client
+    ):
+        # An unindexed payload filter is scanned, not looked up, and every
+        # read on this collection carries one.
+        fake_vectors_client.collection_exists.return_value = False
+        memory.create_thread("conv-99")
+        indexed = [
+            (c.args[0], c.args[1], c.args[2])
+            for c in fake_vectors_client.create_field_index.call_args_list
+        ]
+        assert indexed == [
+            (THREADS_COLLECTION, THREAD_ID_KEY, "keyword"),
+            (THREADS_COLLECTION, THREAD_MARKER_KEY, "bool"),
+        ]
 
     def test_create_thread_raises_when_already_exists(
         self, memory, fake_vectors_client
@@ -286,6 +379,29 @@ class TestThreadLifecycle:
         fake_vectors_client.collection_exists.return_value = True
         with pytest.raises(ThreadAlreadyExistsError):
             memory.create_thread("conv-99")
+
+    def test_create_thread_refuses_a_collection_at_another_dimension(
+        self, memory, fake_vectors_client
+    ):
+        # Never let this surface as a bare dimension ValueError from three
+        # layers down on the first add: name the dimension that is there.
+        fake_vectors_client.collection_exists.return_value = True
+        other = Collection(
+            name=THREADS_COLLECTION,
+            config=VectorConfig(size=1536, distance=DistanceMetric.COSINE),
+        )
+        fake_vectors_client.get_collection.return_value = other
+        with pytest.raises(ThreadVectorSizeMismatchError) as excinfo:
+            memory.create_thread("conv-99")
+        assert excinfo.value.existing == 1536
+        assert excinfo.value.requested == DEFAULT_VECTOR_SIZE
+        assert "1536" in str(excinfo.value)
+
+    def test_create_thread_takes_no_per_thread_vector_size(self, memory):
+        # One collection, one dimension. The parameter is gone, not
+        # deprecated: a caller still passing it gets a TypeError.
+        with pytest.raises(TypeError):
+            memory.create_thread("conv-99", vector_size=4)  # type: ignore[call-arg]
 
     def test_thread_requires_prior_create(self, memory, fake_vectors_client):
         fake_vectors_client.collection_exists.return_value = False
@@ -302,27 +418,31 @@ class TestThreadLifecycle:
         fake_vectors_client.collection_exists.return_value = False
         assert memory.delete_thread("conv-99") is False
 
-    def test_delete_thread_drops_prefixed_collection(self, memory, fake_vectors_client):
-        fake_vectors_client.collection_exists.return_value = True
-        fake_vectors_client.delete_collection.return_value = True
-        memory.delete_thread("conv-99")
-        fake_vectors_client.delete_collection.assert_called_once_with(
-            "__thread__conv-99"
-        )
-
-    def test_get_thread_strips_prefix_from_returned_name(
+    def test_delete_thread_deletes_only_its_own_rows(
         self, memory, fake_vectors_client
     ):
         fake_vectors_client.collection_exists.return_value = True
-        info = _fake_collection("__thread__conv-99")
-        info.points_count = 42
+        fake_vectors_client.delete.return_value = True
+        memory.delete_thread("conv-99")
+        fake_vectors_client.delete_collection.assert_not_called()
+        fake_vectors_client.delete.assert_called_once_with(
+            THREADS_COLLECTION,
+            {"must": [{"key": THREAD_ID_KEY, "match": {"value": "conv-99"}}]},
+        )
+
+    def test_get_thread_names_the_thread_and_counts_its_own_messages(
+        self, memory, fake_vectors_client
+    ):
+        fake_vectors_client.collection_exists.return_value = True
+        info = _fake_collection(THREADS_COLLECTION)
+        info.points_count = 5000  # the whole collection, every thread
         fake_vectors_client.get_collection.return_value = info
+        fake_vectors_client.count.return_value = 42
 
         returned = memory.get_thread("conv-99")
-        # User-facing id, not the internal prefix
         assert returned.name == "conv-99"
+        # This thread's messages, not the shared collection's point count.
         assert returned.points_count == 42
-        fake_vectors_client.get_collection.assert_called_once_with("__thread__conv-99")
 
     def test_get_thread_missing_raises(self, memory, fake_vectors_client):
         fake_vectors_client.collection_exists.return_value = False
@@ -637,7 +757,9 @@ class TestThreadOperations:
 
         fake_vectors_client.upsert.assert_called_once()
         args = fake_vectors_client.upsert.call_args
-        assert args.args[0] == "__thread__conv-99"
+        assert args.args[0] == THREADS_COLLECTION
+        # Every message carries the thread clause's key.
+        assert args.args[1][0]["payload"][THREAD_ID_KEY] == "conv-99"
         point = args.args[1][0]
         assert point["id"] == pid
         assert point["vector"] == [0.1, 0.2]
@@ -696,8 +818,10 @@ class TestThreadOperations:
         assert ids[1] == "33333333-3333-4333-8333-333333333333"
         fake_vectors_client.upsert.assert_called_once()
         coll, points = fake_vectors_client.upsert.call_args.args
-        assert coll == "__thread__conv-99"
+        assert coll == THREADS_COLLECTION
         assert len(points) == 2
+        assert points[0]["payload"][THREAD_ID_KEY] == "conv-99"
+        assert points[1]["payload"][THREAD_ID_KEY] == "conv-99"
         assert points[0]["payload"]["role"] == "user"
         assert points[0]["payload"]["content"] == "hi"
         assert points[0]["payload"]["ts"] == 1000.0
@@ -863,11 +987,17 @@ class TestThreadOperations:
         with pytest.raises(ValueError):
             t.history(limit=0)
 
-    def test_thread_clear_drops_prefixed_collection(self, memory, fake_vectors_client):
+    def test_thread_clear_deletes_by_filter_not_by_dropping_the_collection(
+        self, memory, fake_vectors_client
+    ):
+        # The most dangerous method in the model change: the collection now
+        # holds every OTHER thread too, so a drop here would destroy them.
         t = self._open_thread(memory, fake_vectors_client)
         t.clear()
-        fake_vectors_client.delete_collection.assert_called_once_with(
-            "__thread__conv-99"
+        fake_vectors_client.delete_collection.assert_not_called()
+        fake_vectors_client.delete.assert_called_once_with(
+            THREADS_COLLECTION,
+            {"must": [{"key": THREAD_ID_KEY, "match": {"value": "conv-99"}}]},
         )
 
 

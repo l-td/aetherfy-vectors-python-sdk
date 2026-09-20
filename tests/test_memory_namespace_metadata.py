@@ -9,6 +9,7 @@ reserved-field guard for the merge/delete-keys helpers.
 import pytest
 from unittest.mock import MagicMock
 
+from aetherfy_memory.models import THREAD_ID_KEY, THREADS_COLLECTION
 from aetherfy_memory.namespace import Namespace
 from aetherfy_memory.thread import Thread
 from aetherfy_vectors.exceptions import (
@@ -30,7 +31,13 @@ def _make_ns():
 
 def _make_thread():
     client = MagicMock()
-    return Thread("conv-1", "user_X___thread__conv-1", client), client
+    # A Thread shares its collection with every other thread, so a metadata
+    # write first proves the point belongs to THIS thread. Give the double
+    # a payload that says so.
+    client.retrieve.return_value = [
+        {"id": P1, "payload": {THREAD_ID_KEY: "conv-1", "role": "user"}}
+    ]
+    return Thread("conv-1", THREADS_COLLECTION, client), client
 
 
 # ---------- set_metadata ---------------------------------------------------

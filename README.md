@@ -53,14 +53,25 @@ thread.add(role="user", content="hi", vector=embed("hi"))
 thread.add(role="assistant", content="hello", vector=embed("hello"))
 recent = thread.history(limit=20)   # in message order
 
-# Deleting a scope is atomic — it drops the whole backing collection.
+# Clearing a scope is atomic. After it, the scope no longer exists.
 thread.clear()
 ```
 
 Scopes must be created before you write to them, so a typo raises instead of
-silently creating a second store. `vector_size` defaults to 384; pass your
-model's dimension to `create_namespace` / `create_thread` if it differs
-(1536 for OpenAI small, 3072 for large, 1024 for Cohere v3).
+silently creating a second store.
+
+A **namespace** is one collection, and takes its own `vector_size` (default
+384; pass 1536 for OpenAI small, 3072 for large, 1024 for Cohere v3).
+
+**Threads do not work that way.** Every thread in a workspace lives in one
+shared collection with the thread id as a payload key, so a conversation costs
+no collection slot and a plan's collection limit does not cap how many
+conversations you can have. One collection means one dimension for all of
+them, so `create_thread` takes no `vector_size`: it comes from the client.
+
+```python
+memory = MemoryClient(thread_vector_size=1536)   # threads, for OpenAI small
+```
 
 Deployed on Aetherfy, `MemoryClient()` takes no arguments at all: the control
 plane injects `AETHERFY_API_KEY` and the workspace at deploy time.
@@ -749,6 +760,21 @@ exists = client.collection_exists(name)
 
 # Delete collection
 client.delete_collection(name)
+```
+
+### Payload Indexes
+
+A payload filter on an UNINDEXED key is scanned, not looked up. Index any key
+you filter on for every read — a tenant id, a status, a timestamp you range
+over.
+
+```python
+# field_schema: "keyword" | "integer" | "float" | "bool" | "geo" |
+#               "datetime" | "uuid" | "text", or a parameterised object.
+client.create_field_index(collection_name, "tenant_id", "keyword")
+
+# Idempotent: returns False when the index (or the collection) is already gone.
+client.delete_field_index(collection_name, "tenant_id")
 ```
 
 ### Point Operations

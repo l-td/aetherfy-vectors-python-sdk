@@ -20,7 +20,8 @@ superset in functionality via delegation.
 """
 
 import re
-from typing import List, Optional
+import uuid
+from typing import Any, Dict, List, Optional
 
 from aetherfy_vectors.client import AetherfyVectorsClient
 from aetherfy_vectors.models import (
@@ -36,20 +37,22 @@ from .exceptions import (
     NamespaceNotFoundError,
     ThreadAlreadyExistsError,
     ThreadNotFoundError,
+    ThreadVectorSizeMismatchError,
 )
-from .models import DEFAULT_VECTOR_SIZE
+from .models import (
+    DEFAULT_VECTOR_SIZE,
+    THREAD_ID_KEY,
+    THREAD_MARKER_KEY,
+    THREADS_COLLECTION,
+)
 from .namespace import Namespace
 from .thread import Thread
 
 
-# Internal collection-name prefix for threads. Chosen to be an invalid
-# user-facing name (starts with `_`), so it can't collide with user
-# namespaces under the name validation rule below.
-_THREAD_PREFIX = "__thread__"
-
 # User-facing names must start with letter/digit and contain only letters,
 # digits, hyphens, underscores, and dots. No leading special chars — the
-# reserved `__thread__` prefix is therefore unreachable from this regex.
+# `__threads__` collection name is therefore unreachable from this regex,
+# so no namespace can collide with it.
 _NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,254}$")
 
 
@@ -86,6 +89,8 @@ class MemoryClient:
         timeout: float = DEFAULT_TIMEOUT,
         workspace: Optional[str] = "auto",
         client: Optional[AetherfyVectorsClient] = None,
+        thread_vector_size: int = DEFAULT_VECTOR_SIZE,
+        thread_distance: DistanceMetric = DistanceMetric.COSINE,
     ):
         """Initialize a MemoryClient.
 
@@ -125,12 +130,23 @@ class MemoryClient:
                 AETHERFY_WORKSPACE). Pass None to disable workspace scoping
                 (collections land in a shared namespace — not recommended
                 outside local dev). Ignored if `client` is provided.
+            thread_vector_size: Embedding dimension for THREADS. Every thread
+                in a workspace lives in one collection and therefore shares
+                one dimension, fixed when that collection is first created;
+                this is where it comes from. Defaults to 384
+                (all-MiniLM-L6-v2). Namespaces are unaffected — each still
+                takes its own `vector_size` at `create_namespace`.
+            thread_distance: Distance metric for the threads collection,
+                fixed the same way. Default cosine.
             client: Bring-your-own AetherfyVectorsClient. When supplied, all
                 other parameters (api_key, endpoint, api_region, timeout,
                 workspace) are ignored and this client is used as-is. Useful when sharing
                 a single vectors client across MemoryClient and other code,
                 or when you need a custom session / retry strategy.
         """
+        self._thread_vector_size = thread_vector_size
+        self._thread_distance = thread_distance
+
         if client is not None:
             self._client = client
         else:
@@ -239,11 +255,17 @@ class MemoryClient:
         return self._client.get_collection(name)
 
     def list_namespaces(self) -> List[str]:
-        """All namespace names in this workspace (excludes threads)."""
+        """All namespace names in this workspace.
+
+        Threads are no longer collections, so there is nothing thread-shaped
+        left to filter out of the collection list — except the single
+        `__threads__` collection they all share, which is an implementation
+        detail and not a namespace.
+        """
         return [
             col.name
             for col in self._client.get_collections()
-            if not col.name.startswith(_THREAD_PREFIX)
+            if col.name != THREADS_COLLECTION
         ]
 
     def delete_namespace(self, name: str) -> bool:
@@ -257,80 +279,193 @@ class MemoryClient:
     # Thread lifecycle
     # ---------------------------------------------------------------------
 
-    def create_thread(
-        self,
-        thread_id: str,
-        *,
-        vector_size: int = DEFAULT_VECTOR_SIZE,
-        distance: DistanceMetric = DistanceMetric.COSINE,
-    ) -> Thread:
+    def _threads_marker_filter(self, thread_id: str) -> Dict[str, Any]:
+        """Matches exactly the marker point of one thread."""
+        return {
+            "must": [
+                {"key": THREAD_ID_KEY, "match": {"value": thread_id}},
+                {"key": THREAD_MARKER_KEY, "match": {"value": True}},
+            ]
+        }
+
+    def _marker_vector(self, size: int) -> List[float]:
+        """A valid unit vector of `size` dimensions for a marker point.
+
+        NOT the zero vector. Under cosine distance Qdrant normalises every
+        stored vector by its length, and a zero-length vector has no
+        defined normalisation — whether the engine rejects it or stores
+        something whose similarity is undefined, neither is a thing to
+        build the existence of a thread on. `[1, 0, ...]` has length 1 and
+        is well defined under cosine, dot and euclid alike.
+        """
+        return [1.0] + [0.0] * (size - 1)
+
+    def _ensure_threads_collection(self) -> None:
+        """Create the shared threads collection on first use.
+
+        Indexes both keys the thread clause filters on. An unindexed
+        payload filter is SCANNED rather than looked up, and this is the
+        one collection whose every read carries a tenant filter.
+        """
+        if self._client.collection_exists(THREADS_COLLECTION):
+            existing = self._client.get_collection(THREADS_COLLECTION)
+            size = existing.config.size
+            if size and size != self._thread_vector_size:
+                raise ThreadVectorSizeMismatchError(size, self._thread_vector_size)
+            return
+
+        self._client.create_collection(
+            THREADS_COLLECTION,
+            VectorConfig(
+                size=self._thread_vector_size, distance=self._thread_distance
+            ),
+        )
+        self._client.create_field_index(THREADS_COLLECTION, THREAD_ID_KEY, "keyword")
+        self._client.create_field_index(
+            THREADS_COLLECTION, THREAD_MARKER_KEY, "bool"
+        )
+
+    def create_thread(self, thread_id: str) -> Thread:
         """Create a new thread.
+
+        Threads are rows, not collections: every thread in the workspace
+        lives in one shared collection with `thread_id` as a payload key,
+        so creating one does NOT consume a slot against the account's
+        collection limit and a Free account is not capped at three
+        conversations.
+
+        That is also why there is no `vector_size` / `distance` here any
+        more: one collection has one of each. Both come from the
+        MemoryClient (`thread_vector_size` / `thread_distance`) and are
+        fixed when the collection is first created.
+        `create_namespace` keeps both — a namespace is still one
+        collection.
+
+        Creating a thread writes ONE marker point. That is what makes an
+        empty thread exist: without it, a thread with no messages would be
+        indistinguishable from a thread that was never created.
 
         Args:
             thread_id: Thread id. Must match [a-zA-Z0-9][a-zA-Z0-9._-]*.
-            vector_size: Embedding dimension (same defaults as namespaces).
-            distance: Distance metric. Default cosine.
 
         Returns:
             A Thread handle ready for add/history/search.
+
+        Raises:
+            InvalidNameError: if the id doesn't match the allowed pattern.
+            ThreadAlreadyExistsError: if a thread by that id exists.
+            ThreadVectorSizeMismatchError: if the threads collection
+                already exists at a different dimension.
         """
         _validate_user_name(thread_id, "thread id")
-        collection = _THREAD_PREFIX + thread_id
+        self._ensure_threads_collection()
 
-        if self._client.collection_exists(collection):
+        if self._thread_marker_exists(thread_id):
             raise ThreadAlreadyExistsError(thread_id)
 
-        self._client.create_collection(
-            collection,
-            VectorConfig(size=vector_size, distance=distance),
+        self._client.upsert(
+            THREADS_COLLECTION,
+            [
+                {
+                    "id": str(uuid.uuid4()),
+                    "vector": self._marker_vector(self._thread_vector_size),
+                    "payload": {
+                        THREAD_ID_KEY: thread_id,
+                        THREAD_MARKER_KEY: True,
+                    },
+                }
+            ],
         )
-        return Thread(thread_id, collection, self._client)
+        return Thread(thread_id, THREADS_COLLECTION, self._client)
+
+    def _thread_marker_exists(self, thread_id: str) -> bool:
+        """True iff this thread's marker point is present."""
+        if not self._client.collection_exists(THREADS_COLLECTION):
+            return False
+        return (
+            self._client.count(
+                THREADS_COLLECTION,
+                count_filter=self._threads_marker_filter(thread_id),
+                exact=True,
+            )
+            > 0
+        )
 
     def thread(self, thread_id: str) -> Thread:
         """Open an existing thread. Raises if it doesn't exist."""
         _validate_user_name(thread_id, "thread id")
-        collection = _THREAD_PREFIX + thread_id
-        if not self._client.collection_exists(collection):
+        if not self._thread_marker_exists(thread_id):
             raise ThreadNotFoundError(thread_id)
-        return Thread(thread_id, collection, self._client)
+        return Thread(thread_id, THREADS_COLLECTION, self._client)
 
     def thread_exists(self, thread_id: str) -> bool:
-        """True if the thread exists in this workspace."""
+        """True if the thread exists in this workspace.
+
+        A filtered count over the marker points, so an EMPTY thread still
+        reads as existing — the property a payload-keyed model would have
+        lost without them.
+        """
         _validate_user_name(thread_id, "thread id")
-        return self._client.collection_exists(_THREAD_PREFIX + thread_id)
+        return self._thread_marker_exists(thread_id)
 
     def get_thread(self, thread_id: str) -> Collection:
         """Return metadata for a thread (name, config, points_count, status).
 
-        The returned Collection's `.name` is remapped to the thread id
-        (stripping the internal `__thread__` prefix).
+        `name` is the thread id and `points_count` is THIS thread's message
+        count (the marker is not a message); `config` and `status` describe
+        the shared threads collection, which is where a thread's vector
+        size and distance actually live now.
 
         Distinct from `thread(id)`, which returns an operation handle.
         Raises ThreadNotFoundError if it doesn't exist.
         """
         _validate_user_name(thread_id, "thread id")
-        collection_name = _THREAD_PREFIX + thread_id
-        if not self._client.collection_exists(collection_name):
+        if not self._thread_marker_exists(thread_id):
             raise ThreadNotFoundError(thread_id)
-        info = self._client.get_collection(collection_name)
-        info.name = thread_id  # present the user-facing id, not the internal prefix
+        info = self._client.get_collection(THREADS_COLLECTION)
+        info.name = thread_id
+        info.points_count = Thread(
+            thread_id, THREADS_COLLECTION, self._client
+        ).count()
         return info
 
     def list_threads(self) -> List[str]:
-        """All thread ids in this workspace."""
-        return [
-            col.name[len(_THREAD_PREFIX) :]
-            for col in self._client.get_collections()
-            if col.name.startswith(_THREAD_PREFIX)
-        ]
+        """All thread ids in this workspace.
+
+        A scroll over the MARKER points, so the work is bounded by the
+        number of threads rather than the number of messages, and an empty
+        thread is listed like any other.
+        """
+        if not self._client.collection_exists(THREADS_COLLECTION):
+            return []
+        ids: List[str] = []
+        for point in self._client.scroll_iter(
+            THREADS_COLLECTION,
+            scroll_filter={
+                "must": [{"key": THREAD_MARKER_KEY, "match": {"value": True}}]
+            },
+            with_payload=True,
+            with_vectors=False,
+        ):
+            thread_id = (point.get("payload") or {}).get(THREAD_ID_KEY)
+            if isinstance(thread_id, str):
+                ids.append(thread_id)
+        return ids
 
     def delete_thread(self, thread_id: str) -> bool:
-        """Drop the thread atomically. Idempotent."""
+        """Drop the thread and every message in it. Idempotent.
+
+        A delete-by-filter on this thread's rows, marker included. It
+        cannot touch a sibling thread, and it no longer drops a
+        collection.
+        """
         _validate_user_name(thread_id, "thread id")
-        collection = _THREAD_PREFIX + thread_id
-        if not self._client.collection_exists(collection):
+        if not self._thread_marker_exists(thread_id):
             return False
-        return self._client.delete_collection(collection)
+        return self._client.delete(
+            THREADS_COLLECTION,
+            {"must": [{"key": THREAD_ID_KEY, "match": {"value": thread_id}}]},
+        )
 
     # ---------------------------------------------------------------------
     # Usage stats (parity with AetherfyVectorsClient)

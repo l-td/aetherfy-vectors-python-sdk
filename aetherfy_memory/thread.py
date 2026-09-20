@@ -12,6 +12,19 @@ Every add from a Thread writes the three reserved fields on the point payload:
 requires `role`/`content`; a memory uses `text`), so a Thread is not
 add-substitutable for a Namespace. Both share the read/scope surface via
 `_Scope`.
+
+EVERY THREAD IN A WORKSPACE SHARES ONE COLLECTION (`__threads__`), and a
+thread is a FILTER over it: `thread_id` is stamped on every point and every
+read and write this class issues carries the matching clause. The clause is
+assembled here, never from a caller-supplied string, because the proxy
+forwards filters verbatim and a misspelled key fails OPEN -- a successful
+response with every thread's points in it. A caller's own filter is
+COMBINED with the thread clause, never substituted for it.
+
+One MARKER point per thread (written by `create_thread`) is what makes an
+empty thread exist. It is not a message and must never read as one, so
+`history`, `iter_history`, `search`, `count`, `iter` and the filtered
+`delete` all exclude it explicitly.
 """
 
 import time
@@ -19,9 +32,12 @@ import uuid
 from typing import Any, Dict, Iterator, List, Optional, Union
 
 from aetherfy_vectors.client import AetherfyVectorsClient
+from aetherfy_vectors.exceptions import PointNotFoundError
+from aetherfy_vectors.models import Filter
+from aetherfy_vectors.utils import serialize_filter
 
 from .exceptions import EmbeddingNotSupportedError
-from .models import Message
+from .models import THREAD_ID_KEY, THREAD_MARKER_KEY, Message
 from .scope import _Scope
 
 
@@ -29,9 +45,16 @@ class Thread(_Scope):
     """A conversation. Obtain via `memory.thread(id)`."""
 
     # Thread payload top-level reserved fields — a Thread payload is
-    # `{role, content, ts, metadata}`, so role/content/ts are the names that
+    # `{role, content, ts, thread_id, metadata}`, so those are the names that
     # shouldn't appear in a user metadata partial. See `_Scope.merge_metadata`.
-    _RESERVED_KEYS: frozenset = frozenset({"role", "content", "ts"})
+    # `thread_id` and the marker key are in here for the same reason the
+    # other three are: user metadata must not be able to shadow a key the
+    # scope itself depends on. They are ordinary customer payload keys, NOT
+    # members of vectordb's reserved/attested tier — the server has no source
+    # of truth to re-stamp a client-chosen thread id from.
+    _RESERVED_KEYS: frozenset = frozenset(
+        {"role", "content", "ts", THREAD_ID_KEY, THREAD_MARKER_KEY}
+    )
 
     def __init__(
         self, thread_id: str, collection_name: str, client: AetherfyVectorsClient
@@ -42,6 +65,103 @@ class Thread(_Scope):
     def id(self) -> str:
         """The thread id (same as `name`; provided for API parity)."""
         return self._name
+
+    # ---------------------------------------------------------------------
+    # Scoping — the thread clause
+    # ---------------------------------------------------------------------
+
+    def _thread_clause(self) -> Dict[str, Any]:
+        """The one condition that scopes an operation to this thread."""
+        return {"key": THREAD_ID_KEY, "match": {"value": self._name}}
+
+    @staticmethod
+    def _marker_clause() -> Dict[str, Any]:
+        """Matches the thread's marker point and nothing else."""
+        return {"key": THREAD_MARKER_KEY, "match": {"value": True}}
+
+    def _combine_filter(
+        self, filter: Optional[Union[Filter, Dict[str, Any]]]
+    ) -> Dict[str, Any]:
+        """Combine a caller filter with the thread clause. Never replaces it.
+
+        The thread clause always lands in `must`, and the marker exclusion
+        always lands in `must_not`; a caller's clauses are APPENDED to those
+        arrays. Since Aetherfy composes the three clause arrays as a
+        conjunction (everything in `must` holds AND at least one `should`
+        holds AND nothing in `must_not` holds), no caller clause — `should`
+        included — can widen the result past this thread.
+
+        `serialize_filter` does the `Filter` → dict normalisation and
+        rejects a clause name outside must / must_not / should, so a caller
+        typo at the clause level still fails loudly rather than being
+        merged in as an unknown key.
+        """
+        combined: Dict[str, Any] = {
+            "must": [self._thread_clause()],
+            "must_not": [self._marker_clause()],
+        }
+        caller = serialize_filter(filter, "Thread filter")
+        if caller:
+            combined["must"].extend(caller.get("must") or [])
+            combined["must_not"].extend(caller.get("must_not") or [])
+            if caller.get("should"):
+                combined["should"] = list(caller["should"])
+        return combined
+
+    def _own_filter(self) -> Dict[str, Any]:
+        """Every row of this thread, marker included. Used by `clear`."""
+        return {"must": [self._thread_clause()]}
+
+    def _reads_payload_to_scope(self) -> bool:
+        # A thread's point ids are unique within the shared collection, not
+        # within the thread, so identifying our own points means reading
+        # `thread_id` off the payload.
+        return True
+
+    @staticmethod
+    def _is_marker(point: Dict[str, Any]) -> bool:
+        """True iff `point` is a thread's marker rather than a message.
+
+        The filter already excludes markers server-side. This is the second,
+        independent guard, and it earns its place because the FIRST one fails
+        open: the proxy forwards a filter verbatim and never validates it, so
+        a mistyped clause returns a successful response with unfiltered
+        results. A marker reading as a message would put an empty `role` and
+        an empty `content` into a caller's conversation.
+        """
+        return (point.get("payload") or {}).get(THREAD_MARKER_KEY) is True
+
+    def _owns(self, point: Dict[str, Any]) -> bool:
+        """True iff `point` is one of THIS thread's messages."""
+        payload = point.get("payload") or {}
+        return (
+            payload.get(THREAD_ID_KEY) == self._name
+            and payload.get(THREAD_MARKER_KEY) is not True
+        )
+
+    def _retain_owned(
+        self, points: List[Dict[str, Any]], *, with_payload: bool
+    ) -> List[Dict[str, Any]]:
+        kept = [p for p in points if self._owns(p)]
+        if with_payload:
+            return kept
+        # The payload was fetched only to scope the read; the caller asked
+        # not to see it.
+        return [{k: v for k, v in p.items() if k != "payload"} for p in kept]
+
+    def _owned_ids(self, ids: List[Union[str, int]]) -> List[Union[str, int]]:
+        if not ids:
+            return []
+        points = self._client.retrieve(
+            self._collection, ids, with_payload=True, with_vectors=False
+        )
+        return [p["id"] for p in points if self._owns(p)]
+
+    def _assert_owns(self, ids: List[Union[str, int]]) -> None:
+        owned = set(self._owned_ids(ids))
+        for point_id in ids:
+            if point_id not in owned:
+                raise PointNotFoundError(str(point_id), self._collection)
 
     # ---------------------------------------------------------------------
     # Write
@@ -92,9 +212,14 @@ class Thread(_Scope):
             metadata=metadata or {},
         )
 
+        # The thread clause is stamped LAST so nothing a caller supplied can
+        # displace it — `metadata` is nested a level down and cannot reach
+        # this key, but stamping last is what makes that structural rather
+        # than incidental.
+        payload = {**msg.to_payload(), THREAD_ID_KEY: self._name}
         self._client.upsert(
             self._collection,
-            [{"id": point_id, "vector": vector, "payload": msg.to_payload()}],
+            [{"id": point_id, "vector": vector, "payload": payload}],
         )
         return point_id
 
@@ -150,7 +275,8 @@ class Thread(_Scope):
                 ts=m["ts"] if m.get("ts") is not None else time.time(),
                 metadata=m.get("metadata") or {},
             )
-            points.append({"id": msg.id, "vector": vector, "payload": msg.to_payload()})
+            payload = {**msg.to_payload(), THREAD_ID_KEY: self._name}
+            points.append({"id": msg.id, "vector": vector, "payload": payload})
 
         self._client.upsert(self._collection, points)
         return [p["id"] for p in points]
@@ -180,12 +306,26 @@ class Thread(_Scope):
         # without an index; for the MVP we pull up to a bounded cap and sort
         # client-side by `ts`. Longer histories can paginate via `offset` in a
         # future iteration.
+        #
+        # The cap SURVIVES the move to a shared collection. It was never
+        # doing the filter's job: even when a thread had a collection to
+        # itself this scroll was already thread-scoped, and the cap was what
+        # bounded the client-side sort of an arbitrarily long thread. The
+        # filter narrows the same scroll to the same rows it used to see, so
+        # removing the cap now would make `history(limit=50)` pull an
+        # unbounded thread into memory. It still truncates silently past
+        # 5000 messages — that is `iter_history`'s job, which is why that
+        # method exists.
         cap = min(max(limit * 20, 100), 5000)
 
         result = self._client.scroll(
-            self._collection, limit=cap, with_payload=True, with_vectors=False
+            self._collection,
+            limit=cap,
+            with_payload=True,
+            with_vectors=False,
+            scroll_filter=self._combine_filter(None),
         )
-        points = result["points"]
+        points = [p for p in result["points"] if not self._is_marker(p)]
         messages = [Message.from_point(p) for p in points if p.get("payload")]
 
         # Drop messages without a ts (shouldn't happen for SDK-written points
@@ -220,12 +360,28 @@ class Thread(_Scope):
         messages = [
             Message.from_point(p)
             for p in self.iter(with_payload=True, with_vectors=False)
-            if p.get("payload")
+            if p.get("payload") and not self._is_marker(p)
         ]
         messages = [m for m in messages if m.ts is not None]
         messages.sort(key=lambda m: m.ts or 0.0, reverse=(order == "desc"))
         for m in messages:
             yield m
+
+    # ---------------------------------------------------------------------
+    # Delete
+    # ---------------------------------------------------------------------
+
+    def clear(self) -> bool:
+        """Atomically drop this thread, leaving every sibling thread intact.
+
+        Keeps the meaning it has always had — after `clear()` the thread no
+        longer exists and `memory.create_thread(id)` re-creates it — but it
+        can no longer be a collection drop: the collection now holds every
+        OTHER thread in the workspace too. It is a delete-by-filter on this
+        thread's rows, marker included (dropping the marker is what makes
+        the thread stop existing).
+        """
+        return self._client.delete(self._collection, self._own_filter())
 
     def __repr__(self) -> str:
         return f"Thread(id={self._name!r})"
