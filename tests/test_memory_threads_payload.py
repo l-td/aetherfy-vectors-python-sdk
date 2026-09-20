@@ -102,6 +102,46 @@ def test_a_thread_that_was_never_created_does_not_exist(memory):
     assert memory.delete_thread("never") is False
 
 
+def test_a_second_marker_does_not_list_the_thread_twice(memory, store):
+    """Creating a thread is a check-then-write, so it can lose a race.
+
+    Two callers that both pass the exists-check before either marker lands
+    both write one. Every other read tolerates that — `thread_exists` counts,
+    `count` and `history` exclude markers, `delete_thread` removes every row
+    with the id — but `list_threads` reads the id off each marker, so without
+    de-duplication it reported the thread twice. Replays the losing caller's
+    write directly, since the race itself is not reproducible in-process.
+    """
+    import uuid
+
+    memory.create_thread("a")
+    store.upsert(
+        THREADS_COLLECTION,
+        [
+            {
+                "id": str(uuid.uuid4()),
+                "vector": _v(),
+                "payload": {THREAD_ID_KEY: "a", THREAD_MARKER_KEY: True},
+            }
+        ],
+    )
+
+    assert memory.list_threads() == ["a"]
+    # ...and nothing else was disturbed.
+    assert memory.thread_exists("a") is True
+    assert memory.thread("a").count() == 0
+    assert memory.delete_thread("a") is True
+    assert memory.list_threads() == []
+
+
+def test_list_threads_keeps_first_seen_order(memory):
+    """Order is first-seen, not hash order: a set would have made this
+    assertion depend on Python's string hashing."""
+    for name in ("zeta", "alpha", "mid"):
+        memory.create_thread(name)
+    assert memory.list_threads() == ["zeta", "alpha", "mid"]
+
+
 def test_marker_vector_is_a_unit_vector_not_a_zero_vector(memory, store):
     memory.create_thread("conv-1")
     (marker,) = list(store.collections[THREADS_COLLECTION]["points"].values())

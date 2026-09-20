@@ -435,6 +435,15 @@ class MemoryClient:
         A scroll over the MARKER points, so the work is bounded by the
         number of threads rather than the number of messages, and an empty
         thread is listed like any other.
+
+        DE-DUPLICATED, because a thread can end up with two markers. Creating
+        one is a check-then-write, so two callers that both pass the check
+        before either marker lands both write one. Nothing else notices --
+        `thread_exists` is a count > 0, `count` and `history` exclude markers,
+        and `delete_thread` removes every row with the id -- but this method
+        read the id off each marker and would have listed the thread twice.
+        A `dict` keeps first-seen order; a `set` would have made the order of
+        this list depend on hashing.
         """
         if not self._client.collection_exists(THREADS_COLLECTION):
             return []
@@ -450,7 +459,7 @@ class MemoryClient:
             thread_id = (point.get("payload") or {}).get(THREAD_ID_KEY)
             if isinstance(thread_id, str):
                 ids.append(thread_id)
-        return ids
+        return list(dict.fromkeys(ids))
 
     def delete_thread(self, thread_id: str) -> bool:
         """Drop the thread and every message in it. Idempotent.
