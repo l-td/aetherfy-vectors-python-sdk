@@ -30,7 +30,14 @@ def _lookup(payload: Dict[str, Any], key: str) -> Any:
     return cur
 
 
-def _match_condition(payload: Dict[str, Any], cond: Dict[str, Any]) -> bool:
+def _match_condition(
+    payload: Dict[str, Any], cond: Dict[str, Any], point_id: Any = None
+) -> bool:
+    if "has_id" in cond:
+        # A first-class Qdrant condition (HasIdCondition in the pinned
+        # 1.15.0 schema), so the double supports it rather than treating it
+        # as an unknown shape.
+        return point_id in cond["has_id"]
     if "key" not in cond:
         raise AssertionError(f"unsupported filter condition: {cond!r}")
     value = _lookup(payload, cond["key"])
@@ -57,6 +64,7 @@ def matches(
     flt: Optional[Dict[str, Any]],
     *,
     fail_open_on_must_not: bool = False,
+    point_id: Any = None,
 ) -> bool:
     """Evaluate a filter the way Aetherfy documents it: the three clause
     arrays compose as a conjunction — everything in ``must`` holds AND at
@@ -74,14 +82,16 @@ def matches(
     unknown = set(flt) - {"must", "must_not", "should"}
     if unknown:
         raise AssertionError(f"unknown filter clause(s): {sorted(unknown)}")
-    if not all(_match_condition(payload, c) for c in flt.get("must") or []):
+    if not all(
+        _match_condition(payload, c, point_id) for c in flt.get("must") or []
+    ):
         return False
     if not fail_open_on_must_not and any(
-        _match_condition(payload, c) for c in flt.get("must_not") or []
+        _match_condition(payload, c, point_id) for c in flt.get("must_not") or []
     ):
         return False
     should = flt.get("should") or []
-    if should and not any(_match_condition(payload, c) for c in should):
+    if should and not any(_match_condition(payload, c, point_id) for c in should):
         return False
     return True
 
@@ -156,7 +166,9 @@ class FakeVectorsClient:
                 store.pop(pid, None)
             return True
         doomed = [
-            pid for pid, p in store.items() if matches(p["payload"], points_selector)
+            pid
+            for pid, p in store.items()
+            if matches(p["payload"], points_selector, point_id=pid)
         ]
         for pid in doomed:
             store.pop(pid)
@@ -178,6 +190,7 @@ class FakeVectorsClient:
                 p["payload"],
                 flt,
                 fail_open_on_must_not=self.fail_open_on_must_not,
+                point_id=p["id"],
             )
         ]
 

@@ -70,6 +70,18 @@ class _Scope:
         """Narrow an id list to the ids this scope owns. Identity here."""
         return ids
 
+    def _point_selector(
+        self, ids: List[Union[str, int]]
+    ) -> Union[List[Union[str, int]], Dict[str, Any]]:
+        """How this scope addresses a list of its own point ids on the wire.
+
+        A Namespace owns its whole collection, so a bare id list is already
+        exact. A Thread shares its collection, so it returns a FILTER that
+        pins the ids AND the thread — the engine enforces the scope, rather
+        than the SDK checking it first and trusting itself afterwards.
+        """
+        return ids
+
     def _reads_payload_to_scope(self) -> bool:
         """True when this scope needs payloads to identify its own points."""
         return False
@@ -114,6 +126,7 @@ class _Scope:
         Returns:
             Server response from the underlying set_payload call.
         """
+        # Read-then-check, NOT a scoped filter — see _assert_owns.
         self._assert_owns([id])
         return self._client.set_payload(
             self._collection,
@@ -342,13 +355,16 @@ class _Scope:
         point by naming its id.
         """
         if isinstance(selector, list):
-            owned = self._owned_ids(selector)
-            if not owned:
-                # Nothing in this scope to delete. Deleting is idempotent,
-                # so a no-op is the honest answer; sending the request
-                # anyway would delete another scope's points by id.
+            if not selector:
+                # An empty id list is a no-op, and NOT a request. This is a
+                # safety property, not a micro-optimisation: a Thread turns
+                # an id list into a `has_id` filter, and a request carrying
+                # an empty `has_id` is one engine-side semantic away from
+                # matching the whole thread. Never send it.
                 return True
-            return self._client.delete(self._collection, owned)
+            return self._client.delete(
+                self._collection, self._point_selector(selector)
+            )
         return self._client.delete(self._collection, self._combine_filter(selector))
 
     def clear(self) -> bool:

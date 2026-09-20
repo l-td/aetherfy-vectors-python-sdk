@@ -17,6 +17,7 @@ from aetherfy_memory import MemoryClient
 from aetherfy_memory.exceptions import (
     ThreadAlreadyExistsError,
     ThreadNotFoundError,
+    ThreadVectorSizeMismatchError,
 )
 from aetherfy_memory.models import (
     DEFAULT_VECTOR_SIZE,
@@ -50,6 +51,23 @@ def _msgs(thread, n, prefix="m", axis=0):
         thread.add(role="user", content=f"{prefix}{i}", vector=_v(axis), ts=float(i))
         for i in range(n)
     ]
+
+
+# ===========================================================================
+# The cross-repo pin
+# ===========================================================================
+
+
+def test_the_threads_collection_name_is_the_pinned_literal():
+    """The e2e suite hard-codes "__threads__" on purpose: a cross-repo
+    literal should be a literal there, so a rename is caught rather than
+    followed. This is the other half of that pin. Without it a rename goes
+    green here and reds in a repo that cannot explain why — so the gate
+    lives where the rename would happen.
+    """
+    assert THREADS_COLLECTION == "__threads__"
+    assert THREAD_ID_KEY == "thread_id"
+    assert THREAD_MARKER_KEY == "thread_marker"
 
 
 # ===========================================================================
@@ -223,6 +241,84 @@ def test_delete_by_id_will_not_reach_into_a_sibling_thread(memory):
 
     a.delete([b_id])
     assert b.count() == 1
+
+
+def test_delete_by_id_scopes_server_side_in_one_request(memory, store):
+    """The thread clause travels WITH the ids, so the engine enforces the
+    boundary. A client-side check first would be a second round trip and a
+    rule the next caller could step around.
+    """
+    a = memory.create_thread("a")
+    (keep, drop) = _msgs(a, 2, "a")
+
+    sent = []
+    real_delete = store.delete
+    store.delete = lambda name, sel, **kw: (
+        sent.append(sel) or real_delete(name, sel, **kw)
+    )
+    a.delete([drop])
+
+    (selector,) = sent
+    assert selector["must"][0] == {
+        "key": THREAD_ID_KEY,
+        "match": {"value": "a"},
+    }
+    assert selector["must"][1] == {"has_id": [drop]}
+    assert [p["id"] for p in a.iter()] == [keep]
+
+
+def test_delete_with_an_empty_id_list_sends_no_request(memory, store):
+    """A behaviour change, pinned because it is one.
+
+    It used to send a delete carrying an empty points list. It now returns
+    True without a request, and for a Thread that is a SAFETY property
+    rather than a saved round trip: an id list becomes a `has_id` clause,
+    and a request carrying an empty `has_id` is one engine-side semantic
+    away from matching the whole thread.
+    """
+    a = memory.create_thread("a")
+    _msgs(a, 3, "a")
+
+    sent = []
+    real_delete = store.delete
+    store.delete = lambda name, sel, **kw: (
+        sent.append(sel) or real_delete(name, sel, **kw)
+    )
+
+    assert a.delete([]) is True
+    assert sent == []
+    assert a.count() == 3
+
+
+def test_namespace_delete_with_an_empty_id_list_sends_no_request(memory, store):
+    ns = memory.create_namespace("kb", vector_size=DIM)
+    ns.add(text="x", vector=_v())
+
+    sent = []
+    real_delete = store.delete
+    store.delete = lambda name, sel, **kw: (
+        sent.append(sel) or real_delete(name, sel, **kw)
+    )
+
+    assert ns.delete([]) is True
+    assert sent == []
+    assert ns.count() == 1
+
+
+def test_metadata_writes_still_raise_rather_than_silently_no_op(memory):
+    """Why the metadata writers keep their read.
+
+    The payload endpoints accept a filter, so these could scope themselves
+    the way delete() does. They do not, because a filter that matches
+    nothing is a SUCCESS, and these are documented to raise
+    PointNotFoundError when the point is not there. Scoping them by filter
+    would turn a write to a missing id into a silent no-op reported as
+    success. delete() has no such contract to lose.
+    """
+    a = memory.create_thread("a")
+    missing = "00000000-0000-4000-8000-0000000000aa"
+    with pytest.raises(PointNotFoundError):
+        a.merge_metadata(missing, {"x": 1})
 
 
 def test_metadata_writes_will_not_reach_into_a_sibling_thread(memory):
@@ -470,6 +566,41 @@ def test_the_threads_collection_indexes_both_filtered_keys(memory, store):
         (THREADS_COLLECTION, THREAD_ID_KEY, "keyword"),
         (THREADS_COLLECTION, THREAD_MARKER_KEY, "bool"),
     ]
+
+
+def test_an_unreadable_dimension_is_not_treated_as_a_mismatch(memory, store):
+    """0 means UNKNOWN, not "a zero-dimension collection".
+
+    Collection.from_dict defaults size to 0 when the response carried no
+    vectors config, so comparing it against the client's size would report a
+    mismatch that is really "we could not read it". The skip is explicit in
+    the code for exactly this reason; this pins that it stays a skip and not a
+    silently-passing check.
+    """
+    from aetherfy_vectors.models import Collection, DistanceMetric, VectorConfig
+
+    memory.create_thread("first")
+
+    store.get_collection = lambda name, **kw: Collection(
+        name=name,
+        config=VectorConfig(size=0, distance=DistanceMetric.COSINE),
+    )
+    # No ThreadVectorSizeMismatchError: there is nothing to compare against.
+    memory.create_thread("second")
+    assert sorted(memory.list_threads()) == ["first", "second"]
+
+
+def test_a_readable_mismatch_still_raises(memory, store):
+    from aetherfy_vectors.models import Collection, DistanceMetric, VectorConfig
+
+    memory.create_thread("first")
+    store.get_collection = lambda name, **kw: Collection(
+        name=name,
+        config=VectorConfig(size=1536, distance=DistanceMetric.COSINE),
+    )
+    with pytest.raises(ThreadVectorSizeMismatchError) as excinfo:
+        memory.create_thread("second")
+    assert excinfo.value.existing == 1536
 
 
 def test_the_client_default_dimension_is_still_384(store):

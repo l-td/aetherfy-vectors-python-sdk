@@ -149,6 +149,29 @@ class Thread(_Scope):
         # not to see it.
         return [{k: v for k, v in p.items() if k != "payload"} for p in kept]
 
+    def _point_selector(
+        self, ids: List[Union[str, int]]
+    ) -> Dict[str, Any]:
+        """Address these ids AND this thread, in one request.
+
+        `has_id` is a first-class Qdrant condition — it is in the pinned
+        client's generated schema (@qdrant/js-client-rest 1.15.0, the
+        version the fleet runs) alongside FieldCondition in the Condition
+        union. That matters because the proxy forwards a filter verbatim
+        and an unrecognised key would quietly do nothing: here, silently
+        dropping the `has_id` clause would widen a single-point delete to
+        the whole thread. It is not an unverified guess.
+
+        Scoping this way rather than checking ids client-side first means
+        the ENGINE enforces the boundary, so a later caller who reaches
+        past the SDK cannot bypass it, and the round trip that the check
+        used to cost is gone.
+        """
+        return {
+            "must": [self._thread_clause(), {"has_id": list(ids)}],
+            "must_not": [self._marker_clause()],
+        }
+
     def _owned_ids(self, ids: List[Union[str, int]]) -> List[Union[str, int]]:
         if not ids:
             return []
@@ -158,6 +181,18 @@ class Thread(_Scope):
         return [p["id"] for p in points if self._owns(p)]
 
     def _assert_owns(self, ids: List[Union[str, int]]) -> None:
+        """Refuse a point id belonging to another thread.
+
+        This one DOES cost a read, and deliberately. The payload endpoints
+        accept a filter, so the metadata writers could scope themselves the
+        way `delete` now does — but a filter that matches nothing is a
+        SUCCESS, and `merge_metadata` / `delete_metadata_keys` are
+        documented to raise PointNotFoundError when the point is not there.
+        Scoping them by filter would turn a write to a foreign or missing
+        id into a silent no-op reported as success. The round trip buys the
+        error. `delete` has no such contract to lose: deleting an id that
+        is not there was always a no-op that returns True.
+        """
         owned = set(self._owned_ids(ids))
         for point_id in ids:
             if point_id not in owned:

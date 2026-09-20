@@ -310,7 +310,16 @@ class MemoryClient:
         if self._client.collection_exists(THREADS_COLLECTION):
             existing = self._client.get_collection(THREADS_COLLECTION)
             size = existing.config.size
-            if size and size != self._thread_vector_size:
+            if not size:
+                # Collection.from_dict defaults size to 0 when the response
+                # carried no vectors config, so 0 means UNKNOWN here, never
+                # a zero-dimension collection. There is nothing to compare
+                # against, so the check is skipped — explicitly, because a
+                # silent skip of a mismatch check reads as a passing check.
+                # A genuinely wrong dimension then surfaces on the first
+                # write, from the vectors client's own dimension guard.
+                return
+            if size != self._thread_vector_size:
                 raise ThreadVectorSizeMismatchError(size, self._thread_vector_size)
             return
 
