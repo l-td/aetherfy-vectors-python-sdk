@@ -7,6 +7,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **BREAKING: `AetherfyVectorsClient(...)` raises `TypeError` for an argument
+  it does not name.** The constructor ended in a `**kwargs` that nothing read,
+  so any unknown argument was accepted and dropped. `region=` was renamed to
+  `api_region=` on 2026-06-29, and a caller still passing
+  `region="eu-central-1"` got no error and no warning, just a client routed to
+  the default endpoint instead of the region they asked for. That call now
+  fails at construction. Rename `region=` to `api_region=`. There is
+  deliberately no deprecated alias: it would keep alive the name that caused
+  the misrouting. A typo (`api_regoin=`) fails the same way, and so does a
+  `QdrantClient` constructor argument (`host=`, `port=`), which the migration
+  replaces rather than carries over.
+- **BREAKING: the vectors client's methods accept only their own parameters
+  and the qdrant-client parameters of the same method.** `create_collection`,
+  `upsert`, `delete`, `retrieve`, `scroll`, `count`, `delete_collection`,
+  `get_collection`, `get_collections` and `collection_exists` also swallowed
+  unknown keywords. A name that qdrant-client 1.15.1 does not have for that
+  method now raises `TypeError`. A name it does have is handled as the
+  README's new compatibility table says, and the table is the contract:
+  - **accepted, no effect** where our behaviour already gives the caller what
+    they asked for: `wait` on point writes (every write is committed before the
+    call returns) and `close(grpc_grace=...)`.
+  - **refused** (a `TypeError` naming the argument and the reason) where
+    ignoring it would change what the caller gets: `ordering` other than
+    `'weak'`, `shard_key_selector`, `consistency`, `search(append_payload=False)`,
+    and every storage, index, sharding and replication setting of
+    `create_collection`. Passing the value that already describes our
+    behaviour (qdrant's own default) is accepted.
+  - **honoured**: `timeout=` on `create_collection`, `delete_collection`,
+    `retrieve`, `scroll`, `search` and `count` is a deadline for the WHOLE
+    call, as qdrant-client's is: each attempt gets only the remaining budget,
+    a backoff sleep that would overrun it is not taken, and no attempt starts
+    after it. (Counting it per attempt would have let `timeout=5` take ~18 s
+    across three retries and their backoff.) The constructor's `timeout`
+    keeps its meaning, a per-attempt bound with writes retried up to 3
+    times. `scroll(order_by=...)` orders by a payload key.
+  `set_payload`, `overwrite_payload`, `delete_payload`, `search` and `close`,
+  which had no `**kwargs`, now also accept their qdrant-client arguments on
+  the same terms. `get_collections`, `get_collection`, `collection_exists` and
+  `delete_collection` lost `**kwargs` entirely: qdrant-client gives them no
+  argument beyond the ones they name.
+
+  The classification lives in `aetherfy_vectors/qdrant_compat.py` and is
+  derived, not trusted: a test reads every parameter from qdrant-client's real
+  signatures at the version pinned in `requirements-dev.txt` and fails if one
+  is neither named by our method nor classified.
+- **BREAKING: parameters past the order qdrant-client shares are
+  keyword-only.** Five methods took positional arguments in a different order
+  from qdrant-client 1.15.1, so a migrated positional call bound its values to
+  the wrong parameters without any error:
+  `search` (third positional: our `limit`, qdrant's `query_filter`),
+  `scroll` (second: `limit` / `scroll_filter`), `create_collection` (third:
+  `distance` / `sparse_vectors_config`), `retrieve` (fifth: `timeout` /
+  `consistency`) and `count` (fourth: `timeout` / `shard_key_selector`).
+  Everything after the prefix the two orders share is now keyword-only, so
+  such a call raises `TypeError`. Pass those arguments by keyword:
+  `client.search("c", vec, limit=5)`, not `client.search("c", vec, 5)`. A test
+  derives the rule from qdrant-client's real signatures: every method's
+  positional parameters must be a prefix of qdrant-client's.
+
 ### Removed
 - **`Thread` has no payload-schema methods.** `get_schema`, `set_schema`,
   `delete_schema`, `analyze_schema`, `refresh_schema` and `clear_schema_cache`

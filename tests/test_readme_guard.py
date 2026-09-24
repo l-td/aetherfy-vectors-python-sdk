@@ -27,7 +27,11 @@ SCOPE, stated honestly (same spirit as the CLI's suggested-commands guard):
   * Rebinding to a foreign class (the qdrant-client "before" samples) unbinds
     the name, so we never check qdrant methods against our own classes.
   * Keyword names are checked against inspect.signature; a method with a
-    **kwargs sink accepts anything, so its keywords are not checked.
+    **kwargs sink accepts anything, so its keywords are not checked. The
+    vectors client's **kwargs is NOT a sink: it accepts the qdrant-client
+    arguments classified in aetherfy_vectors.qdrant_compat, so those methods
+    are checked against their signature plus that table, and a sample
+    passing a REFUSED argument is flagged.
 """
 
 from __future__ import annotations
@@ -40,6 +44,9 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 import pytest
+
+from aetherfy_vectors import AetherfyVectorsClient
+from aetherfy_vectors.qdrant_compat import QDRANT_COMPAT, REFUSE, QdrantArgRule
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 README = REPO_ROOT / "README.md"
@@ -211,13 +218,25 @@ def _check_keywords(
     except (TypeError, ValueError):
         return []
     params = sig.parameters
-    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
+    # The vectors client's **kwargs is not a sink: it accepts exactly the
+    # qdrant-client arguments classified in qdrant_compat, and REFUSED ones
+    # raise, so a sample passing one would raise too.
+    compat: Dict[str, QdrantArgRule] = {}
+    if owner is AetherfyVectorsClient and name in QDRANT_COMPAT:
+        compat = QDRANT_COMPAT[name]
+    elif any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
         return []  # a **kwargs sink accepts anything
     bad = []
     for kw in call.keywords:
         if kw.arg is None:  # **spread
             continue
-        if kw.arg not in params:
+        rule = compat.get(kw.arg)
+        if rule is not None and rule.kind == REFUSE:
+            bad.append(
+                f"`{owner.__name__}.{name}({kw.arg}=...)` — a qdrant-client "
+                f"argument this SDK refuses: {rule.reason}"
+            )
+        elif rule is None and kw.arg not in params:
             allowed = ", ".join(k for k in params if k != "self")
             called = display or f"{owner.__name__}.{name}"
             bad.append(
@@ -282,6 +301,25 @@ def test_the_sample_checker_actually_fires():
             "client = AetherfyVectorsClient(api_key='k'\n",
             "does not parse",
         ),
+        (
+            # The stale constructor name that the constructor's old **kwargs
+            # sink hid from this guard as well as from callers.
+            "from aetherfy_vectors import AetherfyVectorsClient\n"
+            "client = AetherfyVectorsClient(api_key='k', region='us-east-1')\n",
+            "no such parameter",
+        ),
+        (
+            "from aetherfy_vectors import AetherfyVectorsClient\n"
+            "client = AetherfyVectorsClient(api_key='k')\n"
+            "client.upsert('c', [], ordering='strong')\n",
+            "a qdrant-client argument this SDK refuses",
+        ),
+        (
+            "from aetherfy_vectors import AetherfyVectorsClient\n"
+            "client = AetherfyVectorsClient(api_key='k')\n"
+            "client.upsert('c', [], wiat=True)\n",
+            "no such parameter",
+        ),
     ]
     for code, expected in cases:
         found = check_sample(code, {})
@@ -293,7 +331,9 @@ def test_the_sample_checker_actually_fires():
     ok = check_sample(
         "from aetherfy_vectors import AetherfyVectorsClient\n"
         "client = AetherfyVectorsClient(api_key='k')\n"
-        "client.search(collection_name='c', query_vector=[0.1], limit=5)\n",
+        "client.search(collection_name='c', query_vector=[0.1], limit=5)\n"
+        # An IGNORE-classified qdrant-client argument is a legal call.
+        "client.upsert('c', [], wait=True)\n",
         {},
     )
     assert ok == [], f"checker flagged a correct sample: {ok}"
@@ -475,6 +515,80 @@ def test_perf_claim_patterns_actually_fire():
         assert not any(p.search(fine) for p, _ in PERF_CLAIM_PATTERNS), (
             f"false positive on: {fine}"
         )
+
+
+# Unscoped qdrant-client compatibility claims. The README used to say "2 lines
+# changed", "All your existing code works unchanged!" and "should work
+# unchanged!" while refusing qdrant arguments, diverging in positional order
+# and lacking query_points entirely. The claim is scoped now (qdrant-client
+# <= 1.15.1, the listed methods, keyword arguments, named refusals) and these
+# are the shapes of the old one coming back. Checked over the WHOLE file, code
+# fences included: the worst of them was a comment inside a sample.
+COMPAT_OVERCLAIM_PATTERNS = [
+    re.compile(r"\bworks?\s+unchanged\b", re.I),
+    re.compile(r"\bwork\s+unchanged\b", re.I),
+    re.compile(r"\b(?:just\s+|only\s+)?\d+\s+lines?\s+changed\b", re.I),
+    re.compile(r"\bonly\s+\d+\s+changes?\b", re.I),
+    re.compile(r"\bdrop-in\b", re.I),
+    re.compile(r"\bidentical\s+API\b", re.I),
+    re.compile(r"\b100\s*%\s*(?:compatib|\|)", re.I),
+    re.compile(r"\|\s*100\s*%\s*\|"),
+]
+
+# What the Migration section must say for the scoped claim to be the claim.
+MIGRATION_MUST_STATE = [
+    ("1.15.1", "the qdrant-client version the promise covers"),
+    ("query_points", "that qdrant-client >= 1.16 code does not migrate"),
+    ("does not migrate", "that qdrant-client >= 1.16 code does not migrate"),
+    ("by keyword", "that qdrant-client arguments must be passed by keyword"),
+    ("refused", "that some qdrant-client arguments are refused"),
+    ("shard_key_selector", "which arguments are refused"),
+]
+
+
+def test_no_unscoped_qdrant_compatibility_claims():
+    hits = []
+    for line_no, line in enumerate(read_readme().split("\n"), 1):
+        for pattern in COMPAT_OVERCLAIM_PATTERNS:
+            m = pattern.search(line)
+            if m:
+                hits.append(f"line {line_no}: {m.group(0)!r}")
+    assert not hits, (
+        "README makes an unscoped qdrant-client compatibility claim. The "
+        "promise holds only for qdrant-client <= 1.15.1 code using the listed "
+        "methods with keyword arguments; say that instead.\n  " + "\n  ".join(hits)
+    )
+
+
+def test_the_migration_section_states_its_scope():
+    text = read_readme()
+    start = text.index("### Migration from qdrant-client")
+    section = text[start : text.index("\n### ", start + 1)]
+    missing = [f"{needle!r} ({why})" for needle, why in MIGRATION_MUST_STATE
+               if needle not in section]
+    assert not missing, (
+        "The Migration from qdrant-client section no longer states:\n  "
+        + "\n  ".join(missing)
+    )
+
+
+def test_compat_overclaim_patterns_actually_fire():
+    for bad in [
+        "# All your existing code works unchanged! 🎉",
+        "5. **Test existing functionality** (should work unchanged!)",
+        "Replace your existing qdrant-client code with just **2 lines changed**:",
+        "# After (aetherfy-vectors) - Only 2 changes needed!",
+        "A drop-in replacement for qdrant-client",
+        "| `upsert()` | ✅ | 100% |",
+        "100% compatible with `qdrant-client` API",
+    ]:
+        assert any(p.search(bad) for p in COMPAT_OVERCLAIM_PATTERNS), f"missed: {bad}"
+    for fine in [
+        "Calls to the listed methods stay as they are",
+        "migrating means changing the import and the constructor call",
+        "Keys not in the list are left untouched.",
+    ]:
+        assert not any(p.search(fine) for p in COMPAT_OVERCLAIM_PATTERNS), fine
 
 
 def test_ci_actually_runs_this_guard_on_readme_changes():

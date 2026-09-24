@@ -512,6 +512,7 @@ def retry_with_backoff(
     base_delay: float = 1.0,
     max_delay: float = 30.0,
     retry_condition: Optional[Callable[[Exception], bool]] = None,
+    deadline: Optional[float] = None,
 ):
     """Retry function with exponential backoff.
 
@@ -521,6 +522,10 @@ def retry_with_backoff(
         base_delay: Base delay between retries in seconds.
         max_delay: Maximum delay cap in seconds.
         retry_condition: Optional function to determine if error is retryable.
+        deadline: Optional ``time.monotonic()`` instant after which no retry
+            may start. A backoff sleep that would end at or past it is not
+            taken: the last error is raised instead. ``func`` owns bounding
+            its own attempt by the same deadline.
 
     Returns:
         Function result.
@@ -547,6 +552,8 @@ def retry_with_backoff(
                 delay = min(base_delay * (2**attempt), max_delay)
                 # Add jitter (50-100% of delay)
                 delay = delay * (0.5 + 0.5 * random.random())
+                if deadline is not None and time.monotonic() + delay >= deadline:
+                    break
                 time.sleep(delay)
             else:
                 break

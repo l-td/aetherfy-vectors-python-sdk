@@ -1,13 +1,15 @@
 """
 Main client implementation for Aetherfy Vectors SDK.
 
-Provides a drop-in replacement for qdrant-client with identical API
-that routes requests through the global vector database service.
+Compatible with qdrant-client 1.15.1's core methods, on the terms in
+aetherfy_vectors.qdrant_compat, and routes requests through the global vector
+database service.
 """
 
 import json
 import math
 import os
+import time
 from typing import List, Dict, Any, Iterator, Optional, Sequence, Union
 import requests
 from requests.adapters import HTTPAdapter
@@ -33,6 +35,7 @@ from .exceptions import (
     SchemaNotFoundError,
     PartialUpsertError,
 )
+from .qdrant_compat import check_qdrant_kwargs
 from .chunking import chunk_points_by_bytes, MAX_REQUEST_BYTES, point_wire_bytes
 from .schema import (
     Schema,
@@ -54,9 +57,10 @@ from .utils import (
 
 class AetherfyVectorsClient:
     """
-    Aetherfy Vectors client - a drop-in replacement for qdrant-client.
+    Aetherfy Vectors client, compatible with qdrant-client 1.15.1's core methods.
 
-    Provides identical API to qdrant-client but routes requests through
+    The exact contract (which qdrant-client arguments are accepted, refused or
+    honoured, per method) is aetherfy_vectors.qdrant_compat. Requests go through
     the global vector database service for enhanced performance, automatic
     global replication, and zero DevOps complexity.
     """
@@ -89,7 +93,6 @@ class AetherfyVectorsClient:
         api_region: Optional[str] = None,
         timeout: float = DEFAULT_TIMEOUT,
         workspace: Optional[str] = "auto",
-        **kwargs,
     ):
         """Initialize Aetherfy Vectors client.
 
@@ -112,7 +115,11 @@ class AetherfyVectorsClient:
                 vectordb usage, local development, and debugging, where it
                 selects the regional endpoint. Distinct from a collection's
                 placement ``regions`` (``create_collection(regions=...)``).
-            timeout: Request timeout in seconds (default: 30.0).
+            timeout: Per-ATTEMPT request timeout in seconds (default: 30.0).
+                Writes (POST/PUT) scale it up with body size above 5 MB and are
+                retried up to 3 times with exponential backoff, so one call
+                can take several times this long. A method's own ``timeout=``
+                is different: a deadline for that whole call.
             workspace: Workspace name for multi-agent coordination.
                 Defaults to ``'auto'``: read ``AETHERFY_WORKSPACE`` from the
                 environment, and fall back to no workspace when it is unset.
@@ -122,7 +129,13 @@ class AetherfyVectorsClient:
                 - Set to a string to use a specific workspace
                 - Pass None to force no workspace (collections are not
                   namespaced) even inside a workspaced agent
-            **kwargs: Additional parameters for compatibility.
+
+        There is deliberately no ``**kwargs``: an argument this constructor
+        does not name raises TypeError. It used to be accepted and dropped, so
+        the pre-rename ``region=`` silently routed a caller to the default
+        endpoint instead of the region they asked for. qdrant-client's
+        constructor arguments are not accepted either: the migration replaces
+        that call wholesale (see ``aetherfy_vectors.qdrant_compat``).
 
         Raises:
             AuthenticationError: If API key is invalid or missing.
@@ -378,6 +391,7 @@ class AetherfyVectorsClient:
         enable_retry: bool = True,
         headers: Optional[Dict[str, str]] = None,
         evict_caches_on_404: Optional[str] = None,
+        timeout: Optional[float] = None,
     ) -> Any:
         """Make HTTP request to the API with retry logic.
 
@@ -395,6 +409,15 @@ class AetherfyVectorsClient:
                 (cross-client delete or pre-existence check). Don't pass
                 for /schema/<name> reads, where 404 also covers the
                 legitimate "no payload schema set" state.
+            timeout: A DEADLINE in seconds for the whole call, retries and
+                backoff included, from a public method's ``timeout=``
+                argument (qdrant-client's method ``timeout`` bounds the whole
+                operation too). Each attempt is given only the budget that
+                remains, a backoff sleep that would end past the deadline is
+                not taken, and no attempt starts once it has passed. None keeps
+                the client's policy: the constructor's ``timeout`` (body-aware
+                for writes) bounds EACH attempt, and POST/PUT are retried up
+                to 3 times with backoff on top of that.
 
         Returns:
             Response data.
@@ -408,14 +431,24 @@ class AetherfyVectorsClient:
         # uplinks need more runway than the 30 s default. Read methods
         # always use the base timeout (their bodies are tiny). See
         # _compute_body_aware_timeout / TIMEOUT_* class constants.
-        request_timeout = (
-            self._compute_body_aware_timeout(data)
-            if method in ("POST", "PUT") and data is not None
-            else self.timeout
-        )
+        deadline: Optional[float] = None
+        if timeout is not None:
+            deadline = time.monotonic() + timeout
+            request_timeout = timeout
+        elif method in ("POST", "PUT") and data is not None:
+            request_timeout = self._compute_body_aware_timeout(data)
+        else:
+            request_timeout = self.timeout
 
         def make_single_request():
             url = build_api_url(self.endpoint, endpoint)
+            attempt_timeout = request_timeout
+            if deadline is not None:
+                attempt_timeout = deadline - time.monotonic()
+                if attempt_timeout <= 0:
+                    raise RequestTimeoutError(
+                        f"Request to {endpoint} exceeded its {timeout} s deadline"
+                    )
 
             try:
                 # Use session for persistent connections instead of requests.request()
@@ -425,7 +458,7 @@ class AetherfyVectorsClient:
                     json=data if data is not None else None,
                     params=params,
                     headers=headers,  # Pass additional headers if provided
-                    timeout=request_timeout,
+                    timeout=attempt_timeout,
                 )
 
                 if response.status_code in [200, 201]:
@@ -442,6 +475,10 @@ class AetherfyVectorsClient:
                     raise parse_error_response(error_data, response.status_code)
 
             except requests.Timeout:
+                if deadline is not None:
+                    raise RequestTimeoutError(
+                        f"Request to {endpoint} exceeded its {timeout} s deadline"
+                    )
                 raise RequestTimeoutError(
                     f"Request to {endpoint} timed out after {request_timeout} seconds"
                 )
@@ -455,7 +492,7 @@ class AetherfyVectorsClient:
         # Apply retry logic only for write operations (POST, PUT)
         if enable_retry and method in ["POST", "PUT"]:
             return retry_with_backoff(
-                make_single_request, max_retries=3, base_delay=1.0
+                make_single_request, max_retries=3, base_delay=1.0, deadline=deadline
             )
         else:
             return make_single_request()
@@ -551,9 +588,11 @@ class AetherfyVectorsClient:
         self,
         collection_name: str,
         vectors_config: Union[VectorConfig, Dict[str, Any]],
+        *,
         distance: Optional[DistanceMetric] = None,
         description: Optional[str] = None,
         regions: Optional[List[str]] = None,
+        timeout: Optional[float] = None,
         **kwargs,
     ) -> "Collection":
         """Create a new collection.
@@ -572,14 +611,25 @@ class AetherfyVectorsClient:
                 server (422). Subset/empty validation is server-side. Distinct
                 from the client constructor's ``api_region``, which selects the
                 endpoint to connect to rather than where the collection lives.
+            timeout: Deadline in seconds for this whole call, retries and
+                backoff included, like qdrant-client's ``timeout``. Raises
+                RequestTimeoutError once it passes. None keeps the client's
+                timeout, which bounds each attempt rather than the call.
+            **kwargs: qdrant-client ``create_collection`` arguments, checked
+                against ``aetherfy_vectors.qdrant_compat``. None of its
+                storage, index or replication settings can be applied, so each
+                raises TypeError unless passed as None; any other name raises
+                TypeError too.
 
         Returns:
             The created Collection, including its resolved ``regions`` list.
 
         Raises:
             ValidationError: If parameters are invalid.
+            TypeError: For an unknown or unsupported keyword argument.
             AetherfyVectorsException: If creation fails.
         """
+        check_qdrant_kwargs("create_collection", kwargs)
         validate_collection_name(collection_name)
 
         # Handle different input formats for compatibility
@@ -632,7 +682,9 @@ class AetherfyVectorsClient:
         if regions is not None:
             data["regions"] = regions
 
-        response = self._make_request("POST", self._build_collections_list_path(), data)
+        response = self._make_request(
+            "POST", self._build_collections_list_path(), data, timeout=timeout
+        )
 
         # Prepopulate the schema cache from the request we just authored.
         # GET /collections/<name> can be eventually consistent w.r.t. its
@@ -668,12 +720,17 @@ class AetherfyVectorsClient:
             regions=resolved_regions,
         )
 
-    def delete_collection(self, collection_name: str, **kwargs) -> bool:
+    def delete_collection(
+        self, collection_name: str, timeout: Optional[float] = None
+    ) -> bool:
         """Delete a collection.
 
         Args:
             collection_name: Name of the collection to delete.
-            **kwargs: Additional parameters for compatibility.
+            timeout: Deadline in seconds for this whole call, retries and
+                backoff included, like qdrant-client's ``timeout``. Raises
+                RequestTimeoutError once it passes. None keeps the client's
+                timeout, which bounds each attempt rather than the call.
 
         Returns:
             True if collection was deleted successfully.
@@ -687,6 +744,7 @@ class AetherfyVectorsClient:
             "DELETE",
             self._build_collection_path(collection_name),
             evict_caches_on_404=scoped_name,
+            timeout=timeout,
         )
         # Drop both caches so a subsequent recreate-with-different-shape
         # doesn't see stale size/distance/etag/payload-schema entries.
@@ -694,11 +752,8 @@ class AetherfyVectorsClient:
         self._payload_schema_cache.pop(scoped_name, None)
         return True
 
-    def get_collections(self, **kwargs) -> List[Collection]:
+    def get_collections(self) -> List[Collection]:
         """Get list of all collections.
-
-        Args:
-            **kwargs: Additional parameters for compatibility.
 
         Returns:
             List of Collection objects.
@@ -711,12 +766,11 @@ class AetherfyVectorsClient:
         collections = response.get("collections", [])
         return [Collection.from_dict(col) for col in collections]
 
-    def collection_exists(self, collection_name: str, **kwargs) -> bool:
+    def collection_exists(self, collection_name: str) -> bool:
         """Check if a collection exists.
 
         Args:
             collection_name: Name of the collection to check.
-            **kwargs: Additional parameters for compatibility.
 
         Returns:
             True if collection exists, False if a 404 confirms it doesn't.
@@ -755,12 +809,11 @@ class AetherfyVectorsClient:
                 return False
             raise
 
-    def get_collection(self, collection_name: str, **kwargs) -> Collection:
+    def get_collection(self, collection_name: str) -> Collection:
         """Get collection information.
 
         Args:
             collection_name: Name of the collection.
-            **kwargs: Additional parameters for compatibility.
 
         Returns:
             Collection object with details.
@@ -813,7 +866,11 @@ class AetherfyVectorsClient:
         Args:
             collection_name: Name of the target collection.
             points: List of Point objects or dictionaries.
-            **kwargs: Additional parameters for compatibility.
+            **kwargs: qdrant-client arguments of this method, checked against
+                ``aetherfy_vectors.qdrant_compat``: ``wait`` is accepted (every
+                write is already committed before the call returns),
+                ``ordering`` only as 'weak', ``shard_key_selector`` only as
+                None. Any other name raises TypeError.
 
         Returns:
             True if all points were saved.
@@ -825,7 +882,9 @@ class AetherfyVectorsClient:
             ValidationError: Single-chunk validation / 400 errors.
             ValueError: Single-chunk 400 (re-raised for backward
                 compatibility).
+            TypeError: For an unknown or unsupported keyword argument.
         """
+        check_qdrant_kwargs("upsert", kwargs)
         validate_collection_name(collection_name)
 
         scoped_name = self._scope_collection(collection_name)
@@ -1084,11 +1143,19 @@ class AetherfyVectorsClient:
         Args:
             collection_name: Name of the collection.
             points_selector: List of point IDs or filter conditions.
-            **kwargs: Additional parameters for compatibility.
+            **kwargs: qdrant-client arguments of this method, checked against
+                ``aetherfy_vectors.qdrant_compat``: ``wait`` is accepted (every
+                write is already committed before the call returns),
+                ``ordering`` only as 'weak', ``shard_key_selector`` only as
+                None. Any other name raises TypeError.
 
         Returns:
             True if deletion was successful.
+
+        Raises:
+            TypeError: For an unknown or unsupported keyword argument.
         """
+        check_qdrant_kwargs("delete", kwargs)
         validate_collection_name(collection_name)
 
         scoped_name = self._scope_collection(collection_name)
@@ -1123,6 +1190,7 @@ class AetherfyVectorsClient:
         payload: Dict[str, Any],
         points: List[Union[str, int]],
         key: Optional[str] = None,
+        **kwargs,
     ) -> Dict[str, Any]:
         """Set (additive merge) payload keys on a list of points.
 
@@ -1140,10 +1208,16 @@ class AetherfyVectorsClient:
                 preserving sibling keys not mentioned in the partial. Used
                 by ``merge_metadata`` to get atomic per-point partial-merge
                 semantics under ``payload.metadata``.
+            **kwargs: qdrant-client arguments of this method, checked against
+                ``aetherfy_vectors.qdrant_compat``: ``wait`` is accepted (every
+                write is already committed before the call returns),
+                ``ordering`` only as 'weak', ``shard_key_selector`` only as
+                None. Any other name raises TypeError.
 
         Returns:
             Server response dict.
         """
+        check_qdrant_kwargs("set_payload", kwargs)
         validate_collection_name(collection_name)
         for pid in points:
             validate_point_id(pid)
@@ -1164,13 +1238,25 @@ class AetherfyVectorsClient:
         collection_name: str,
         payload: Dict[str, Any],
         points: List[Union[str, int]],
+        **kwargs,
     ) -> Dict[str, Any]:
         """Replace the entire payload on a list of points.
 
         PUT /collections/{name}/points/payload — keys present on the point
         but absent from `payload` are REMOVED. Use this when you want the
         payload to be exactly `payload` after the call.
+
+        Args:
+            collection_name: Target collection.
+            payload: The complete payload each point ends up with.
+            points: Point IDs to update. Server caps at 512.
+            **kwargs: qdrant-client arguments of this method, checked against
+                ``aetherfy_vectors.qdrant_compat``: ``wait`` is accepted (every
+                write is already committed before the call returns),
+                ``ordering`` only as 'weak', ``shard_key_selector`` only as
+                None. Any other name raises TypeError.
         """
+        check_qdrant_kwargs("overwrite_payload", kwargs)
         validate_collection_name(collection_name)
         for pid in points:
             validate_point_id(pid)
@@ -1189,12 +1275,24 @@ class AetherfyVectorsClient:
         collection_name: str,
         keys: List[str],
         points: List[Union[str, int]],
+        **kwargs,
     ) -> Dict[str, Any]:
         """Delete specific payload keys from a list of points.
 
         POST /collections/{name}/points/payload/delete — only the named
         keys are removed; other keys on each point's payload are preserved.
+
+        Args:
+            collection_name: Target collection.
+            keys: Payload keys to remove.
+            points: Point IDs to update. Server caps at 512.
+            **kwargs: qdrant-client arguments of this method, checked against
+                ``aetherfy_vectors.qdrant_compat``: ``wait`` is accepted (every
+                write is already committed before the call returns),
+                ``ordering`` only as 'weak', ``shard_key_selector`` only as
+                None. Any other name raises TypeError.
         """
+        check_qdrant_kwargs("delete_payload", kwargs)
         validate_collection_name(collection_name)
         for pid in points:
             validate_point_id(pid)
@@ -1344,6 +1442,8 @@ class AetherfyVectorsClient:
         ids: List[Union[str, int]],
         with_payload: bool = True,
         with_vectors: bool = False,
+        *,
+        timeout: Optional[float] = None,
         **kwargs,
     ) -> List[Dict[str, Any]]:
         """Retrieve points by IDs.
@@ -1353,11 +1453,19 @@ class AetherfyVectorsClient:
             ids: List of point IDs to retrieve.
             with_payload: Include payload in results.
             with_vectors: Include vectors in results.
-            **kwargs: Additional parameters for compatibility.
+            timeout: Deadline in seconds for this whole call, retries and
+                backoff included, like qdrant-client's ``timeout``. Raises
+                RequestTimeoutError once it passes. None keeps the client's
+                timeout, which bounds each attempt rather than the call.
+            **kwargs: qdrant-client arguments of this method, checked against
+                ``aetherfy_vectors.qdrant_compat``: ``consistency`` and
+                ``shard_key_selector`` are accepted only as None. Any other
+                name raises TypeError.
 
         Returns:
             List of retrieved points.
         """
+        check_qdrant_kwargs("retrieve", kwargs)
         validate_collection_name(collection_name)
 
         scoped_name = self._scope_collection(collection_name)
@@ -1376,6 +1484,7 @@ class AetherfyVectorsClient:
             self._build_collection_path(collection_name, "/points/retrieve"),
             data,
             evict_caches_on_404=scoped_name,
+            timeout=timeout,
         )
         return response.get("result", [])
 
@@ -1385,6 +1494,7 @@ class AetherfyVectorsClient:
         self,
         collection_name: str,
         query_vector: List[float],
+        *,
         limit: int = 10,
         offset: int = 0,
         query_filter: Optional[Union[Filter, Dict[str, Any]]] = None,
@@ -1392,6 +1502,8 @@ class AetherfyVectorsClient:
         with_vectors: bool = False,
         score_threshold: Optional[float] = None,
         search_params: Optional[Dict[str, Any]] = None,
+        timeout: Optional[float] = None,
+        **kwargs,
     ) -> List[SearchResult]:
         """Search for similar vectors in a collection.
 
@@ -1416,15 +1528,25 @@ class AetherfyVectorsClient:
                 params-varying call can never hit an entry stored under
                 different params. Contents are not validated or translated
                 here; the API and Qdrant own the schema.
+            timeout: Deadline in seconds for this whole call, retries and
+                backoff included, like qdrant-client's ``timeout``. Raises
+                RequestTimeoutError once it passes. None keeps the client's
+                timeout, which bounds each attempt rather than the call.
+            **kwargs: qdrant-client arguments of this method, checked against
+                ``aetherfy_vectors.qdrant_compat``: ``append_payload`` only as
+                True (use ``with_payload``), ``consistency`` and
+                ``shard_key_selector`` only as None.
 
         Returns:
             List of SearchResult objects.
 
         Raises:
-            TypeError: If an unknown keyword argument is passed. There is no
-                **kwargs sink: a misspelled or unsupported option fails loudly
-                instead of being silently dropped from the request body.
+            TypeError: If an unknown or unsupported keyword argument is passed.
+                ``**kwargs`` is not a sink: a misspelled or unsupported option
+                fails loudly instead of being silently dropped from the
+                request body.
         """
+        check_qdrant_kwargs("search", kwargs)
         validate_collection_name(collection_name)
         validate_vector(query_vector)
 
@@ -1458,6 +1580,7 @@ class AetherfyVectorsClient:
             self._build_collection_path(collection_name, "/points/search"),
             data,
             evict_caches_on_404=scoped_name,
+            timeout=timeout,
         )
 
         results = []
@@ -1469,11 +1592,14 @@ class AetherfyVectorsClient:
     def scroll(
         self,
         collection_name: str,
+        *,
         limit: int = 10,
         offset: Optional[Union[str, int]] = None,
         scroll_filter: Optional[Union[Filter, Dict[str, Any]]] = None,
         with_payload: bool = True,
         with_vectors: bool = False,
+        order_by: Optional[Union[str, Dict[str, Any]]] = None,
+        timeout: Optional[float] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """Scroll through points in a collection (Qdrant-compatible pagination).
@@ -1488,12 +1614,29 @@ class AetherfyVectorsClient:
             scroll_filter: Payload filter conditions.
             with_payload: Include payload in results.
             with_vectors: Include vectors in results.
-            **kwargs: Additional parameters for compatibility.
+            order_by: Order the points by a payload key instead of by id, as
+                qdrant-client's ``order_by``: a key name, or a dict such as
+                ``{"key": "ts", "direction": "desc"}``. Sent verbatim as the
+                body's ``order_by``; Qdrant owns its schema (the key needs a
+                payload index, and it cannot be combined with ``offset``).
+            timeout: Deadline in seconds for this whole call, retries and
+                backoff included, like qdrant-client's ``timeout``. Raises
+                RequestTimeoutError once it passes. None keeps the client's
+                timeout, which bounds each attempt rather than the call.
+            **kwargs: qdrant-client arguments of this method, checked against
+                ``aetherfy_vectors.qdrant_compat``: ``consistency`` and
+                ``shard_key_selector`` are accepted only as None. Any other
+                name raises TypeError.
 
         Returns:
             Dict with `points` (list of point dicts) and `next_page_offset`
             (cursor or None if this was the last page).
+
+        Raises:
+            TypeError: For an unknown or unsupported keyword argument.
+            ValidationError: If ``order_by`` is neither a str nor a dict.
         """
+        check_qdrant_kwargs("scroll", kwargs)
         validate_collection_name(collection_name)
 
         scoped_name = self._scope_collection(collection_name)
@@ -1507,12 +1650,23 @@ class AetherfyVectorsClient:
             data["offset"] = offset
         if scroll_filter:
             data["filter"] = serialize_filter(scroll_filter, "scroll")
+        if order_by is not None:
+            # A str or a plain dict, like the filters: qdrant-client's model
+            # objects are not serialised here.
+            if not isinstance(order_by, (str, dict)):
+                raise ValidationError(
+                    "scroll: order_by must be a payload key (str) or a dict "
+                    "such as {'key': ..., 'direction': ...}, got "
+                    f"{type(order_by).__name__}."
+                )
+            data["order_by"] = order_by
 
         response = self._make_request(
             "POST",
             self._build_collection_path(collection_name, "/points/scroll"),
             data,
             evict_caches_on_404=scoped_name,
+            timeout=timeout,
         )
 
         # Scroll response shape: {"result": {"points": [...], "next_page_offset": ...}, ...}
@@ -1587,6 +1741,8 @@ class AetherfyVectorsClient:
         collection_name: str,
         count_filter: Optional[Union[Filter, Dict[str, Any]]] = None,
         exact: bool = True,
+        *,
+        timeout: Optional[float] = None,
         **kwargs,
     ) -> int:
         """Count points in collection.
@@ -1597,11 +1753,18 @@ class AetherfyVectorsClient:
                 ``Filter`` or a plain dict, matching search/scroll/delete —
                 it used to take a dict only.
             exact: Whether to return exact count.
-            **kwargs: Additional parameters for compatibility.
+            timeout: Deadline in seconds for this whole call, retries and
+                backoff included, like qdrant-client's ``timeout``. Raises
+                RequestTimeoutError once it passes. None keeps the client's
+                timeout, which bounds each attempt rather than the call.
+            **kwargs: qdrant-client arguments of this method, checked against
+                ``aetherfy_vectors.qdrant_compat``: ``shard_key_selector`` is
+                accepted only as None. Any other name raises TypeError.
 
         Returns:
             Number of points matching the filter.
         """
+        check_qdrant_kwargs("count", kwargs)
         validate_collection_name(collection_name)
 
         scoped_name = self._scope_collection(collection_name)
@@ -1615,6 +1778,7 @@ class AetherfyVectorsClient:
             self._build_collection_path(collection_name, "/points/count"),
             data,
             evict_caches_on_404=scoped_name,
+            timeout=timeout,
         )
         # The wire response is `{"result": {"count": N}, "status": "ok"}`,
         # not flat — the count lives under `result`. Mirrors the JS SDK.
@@ -1882,8 +2046,15 @@ class AetherfyVectorsClient:
 
     # Utility Methods
 
-    def close(self) -> None:
-        """Close the client connection and cleanup resources."""
+    def close(self, **kwargs) -> None:
+        """Close the client connection and cleanup resources.
+
+        Args:
+            **kwargs: qdrant-client's ``grpc_grace`` is accepted and has no
+                effect (there is no gRPC channel to wait on). Any other name
+                raises TypeError.
+        """
+        check_qdrant_kwargs("close", kwargs)
         if hasattr(self, "session"):
             self.session.close()
 

@@ -1,8 +1,9 @@
 """
 Aetherfy Vectors Python SDK
 
-A drop-in replacement for qdrant-client that provides global vector database
-operations with automatic replication, caching, and sub-50ms latency worldwide.
+A client compatible with qdrant-client 1.15.1's core methods (see
+aetherfy_vectors.qdrant_compat for the exact contract) that provides global
+vector database operations with automatic replication, caching, and sub-50ms latency worldwide.
 """
 
 __version__ = "1.1.0"

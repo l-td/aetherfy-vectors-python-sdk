@@ -19,7 +19,7 @@ no infrastructure to run.
 - **📊 Built-in Analytics**: Real-time performance metrics and usage insights
 - **🔧 Auto-Failover**: Intelligent routing and retry mechanisms
 - **🔐 Enterprise Security**: API key authentication and audit logging
-- **🪜 Escape Hatch**: `AetherfyVectorsClient` underneath, API-compatible with `qdrant-client`
+- **🪜 Escape Hatch**: `AetherfyVectorsClient` underneath, compatible with qdrant-client ≤1.15.1's core methods (see [Migration Compatibility](#migration-compatibility))
 
 ## 📦 Installation
 
@@ -90,20 +90,35 @@ from the previous ones.
 
 ### Migration from qdrant-client
 
-Replace your existing qdrant-client code with just **2 lines changed**:
+If your code uses qdrant-client **1.15.1 or earlier** and sticks to the methods
+listed under [Migration Compatibility](#migration-compatibility), migrating
+means changing the import and the constructor call:
 
 ```python
 # Before (qdrant-client)
 from qdrant_client import QdrantClient
 client = QdrantClient(host="localhost", port=6333)
 
-# After (aetherfy-vectors) - Only 2 changes needed!
+# After (aetherfy-vectors): the import and the constructor change
 from aetherfy_vectors import AetherfyVectorsClient
 client = AetherfyVectorsClient(api_key="afy_live_your_api_key_here")
 
-# All your existing code works unchanged! 🎉
+# Calls to the listed methods stay as they are
 results = client.search(collection_name="my_collection", query_vector=[0.1, 0.2, 0.3])
 ```
+
+That holds when qdrant-client arguments are passed by keyword, and it has
+limits:
+
+- Some qdrant-client arguments are refused, because ignoring them would change
+  what you get: `ordering` other than `'weak'`, `shard_key_selector`,
+  `consistency`, `search(append_payload=False)`, and every sharding,
+  replication, storage and index setting of `create_collection`. Each raises
+  `TypeError` naming itself.
+- Code using `query_points` (qdrant-client **1.16 and later**, which removed
+  `search`) does not migrate. This SDK has no `query_points`.
+- Methods not in the list (`recommend`, `discover`, the snapshot and alias
+  APIs, and so on) do not exist here.
 
 ### Basic Usage Example
 
@@ -962,7 +977,9 @@ def health_check():
    client = AetherfyVectorsClient(api_key="your_api_key")
    ```
 
-5. **Test existing functionality** (should work unchanged!)
+5. **Run your tests.** Calls to the methods in the table below, with
+   qdrant-client arguments passed by keyword, need no change. A refused
+   argument or a `query_points` call fails at once, naming what to change.
 
 6. **Optional**: Add analytics calls for insights
 
@@ -970,17 +987,51 @@ def health_check():
 
 ### Migration Compatibility
 
-| qdrant-client Method | aetherfy-vectors | Compatible |
-|---------------------|------------------|------------|
-| `create_collection()` | ✅ | 100% |
-| `get_collections()` | ✅ | 100% |
-| `upsert()` | ✅ | 100% |
-| `search()` | ✅ | 100% |
-| `retrieve()` | ✅ | 100% |
-| `delete()` | ✅ | 100% |
-| `count()` | ✅ | 100% |
+These qdrant-client methods exist here under the same name, taking the same
+keyword arguments:
+`create_collection`, `delete_collection`, `get_collections`, `get_collection`,
+`collection_exists`, `upsert`, `delete`, `retrieve`, `search`, `scroll`,
+`count`, `set_payload`, `overwrite_payload`, `delete_payload`, `close`.
 
-**Plus additional analytics methods unique to Aetherfy!**
+The contract is qdrant-client **1.15.1**'s signatures, the last release that
+still has `search`. A keyword argument that qdrant-client doesn't have raises
+`TypeError`, the same as any Python function would: a misspelt or outdated
+name fails straight away instead of being dropped without a word. The
+qdrant-client arguments these methods don't name themselves are handled one
+by one:
+
+| Method | qdrant-client argument | Here | Why |
+|--------|------------------------|------|-----|
+| `upsert`, `delete`, `set_payload`, `overwrite_payload`, `delete_payload` | `wait` | accepted, no effect | Every point write is committed before the call returns, so `wait=True` already holds and `wait=False` gets a stronger guarantee |
+| `upsert`, `delete`, `set_payload`, `overwrite_payload`, `delete_payload` | `ordering` | refused unless `'weak'` | Writes use Qdrant's default weak ordering; medium and strong are not provided |
+| `upsert`, `delete`, `set_payload`, `overwrite_payload`, `delete_payload`, `retrieve`, `scroll`, `search`, `count` | `shard_key_selector` | refused unless `None` | Custom shard keys are not supported; placement is per collection (`regions=`) |
+| `retrieve`, `scroll`, `search` | `consistency` | refused unless `None` | A read is answered by the region you are connected to; multi-replica read consistency is not provided |
+| `search` | `append_payload` | refused unless `True` | Deprecated by qdrant-client itself; use `with_payload=False` |
+| `create_collection` | `sparse_vectors_config` | refused unless `None` | Only dense vectors are supported |
+| `create_collection` | `shard_number`, `sharding_method` | refused unless `None` | Sharding is managed by the service |
+| `create_collection` | `replication_factor`, `write_consistency_factor` | refused unless `None` | Replication across regions is managed by the service (`regions=`) |
+| `create_collection` | `on_disk_payload`, `hnsw_config`, `optimizers_config`, `wal_config`, `quantization_config`, `strict_mode_config` | refused unless `None` | Storage and index settings are fixed by the service and would not be applied |
+| `create_collection` | `init_from` | refused unless `None` | Creating a collection from another one is not supported |
+| `close` | `grpc_grace` | accepted, no effect | There is no gRPC channel to wait on |
+| `create_collection`, `delete_collection`, `retrieve`, `scroll`, `search`, `count` | `timeout` | honoured | A deadline for the whole call, retries and backoff included, as in qdrant-client. The constructor's `timeout` is different: it bounds each attempt, and writes are retried up to 3 times |
+| `scroll` | `order_by` | honoured | A payload key or `{"key": ..., "direction": ...}`, sent as-is |
+
+A refused argument raises `TypeError` naming it and the reason, so a
+migration finds out on its first run instead of in production.
+
+The constructor is the one call the migration replaces outright, so it
+accepts none of `QdrantClient`'s arguments. It takes only what it documents
+(`api_key`, `endpoint`, `api_region`, `timeout`, `workspace`), and anything
+else raises `TypeError`. Code written before 1.2.0 that passes `region=` now
+fails at construction. Rename it to `api_region=`: until 1.2.0 the old name
+was accepted and ignored, which quietly routed the client to the default
+endpoint.
+
+Positional arguments are accepted only as far as a method's parameter order
+matches qdrant-client's. Past that point parameters are keyword-only, so a
+positional call that would have bound the wrong parameter raises `TypeError`.
+For example, `search`'s third positional is qdrant-client's `query_filter`
+but was this SDK's `limit`.
 
 ## 🤝 Contributing
 
