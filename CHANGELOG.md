@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+The next release is **2.0.0**: the changes marked BREAKING below are breaking under Semantic Versioning, so this cannot ship as 1.2.0.
+
 ### Changed
 - **BREAKING: `AetherfyVectorsClient(...)` raises `TypeError` for an argument
   it does not name.** The constructor ended in a `**kwargs` that nothing read,
