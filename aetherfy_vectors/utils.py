@@ -394,7 +394,11 @@ def parse_error_response(
             error_code=error_code,
         )
     elif status_code == 409:
-        from .exceptions import CollectionInUseError, CollectionInOtherRegionError
+        from .exceptions import (
+            CollectionInUseError,
+            CollectionInOtherRegionError,
+            ConflictError,
+        )
 
         if error_code == "COLLECTION_IN_USE":
             collection_name = (
@@ -423,6 +427,13 @@ def parse_error_response(
                 details=details,
                 error_code=error_code,
             )
+        return ConflictError(
+            message,
+            request_id=request_id,
+            status_code=status_code,
+            details=details,
+            error_code=error_code,
+        )
     elif status_code == 412:
         # Schema version mismatch - return ValidationError to trigger cache clear
         return ValidationError(

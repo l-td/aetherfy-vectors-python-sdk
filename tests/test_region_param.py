@@ -151,10 +151,10 @@ class TestCollectionInOtherRegionError:
         # can still string-match if they want.
         assert err.error_code == "COLLECTION_EXISTS_IN_OTHER_REGION"
 
-    def test_other_409s_still_become_generic(self):
-        # A 409 without a recognized error_code falls through to the
-        # generic AetherfyVectorsException — matches existing behavior
-        # and avoids over-typing every conflict case.
+    def test_other_409s_are_not_this_class(self):
+        # A 409 without this code is not a CollectionInOtherRegionError. What
+        # it IS (ConflictError, since 2026-09-24; the bare base before that)
+        # is pinned in tests/test_conflict_error.py.
         body = {"error": {"code": "SOMETHING_ELSE", "message": "nope"}}
         err = parse_error_response(body, 409)
         assert not isinstance(err, CollectionInOtherRegionError)

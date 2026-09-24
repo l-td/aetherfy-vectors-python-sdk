@@ -110,6 +110,22 @@ class NetworkError(AetherfyVectorsException):
         super().__init__(message, **kwargs)
 
 
+class ConflictError(AetherfyVectorsException):
+    """A 409 the SDK has no more specific class for.
+
+    The two 409s that carry typed fields keep their own classes —
+    ``CollectionInUseError`` (``COLLECTION_IN_USE``) and
+    ``CollectionInOtherRegionError`` (``COLLECTION_EXISTS_IN_OTHER_REGION``)
+    — and are NOT subclasses of this one, matching the JavaScript SDK. Every
+    other 409 lands here, with the backend's code in ``error_code``. It is an
+    ``AetherfyVectorsException``, so a handler catching the base still
+    catches it; before this class existed a generic 409 was the base itself.
+    """
+
+    def __init__(self, message: str = "Resource conflict", **kwargs):
+        super().__init__(message, **kwargs)
+
+
 class SchemaValidationError(AetherfyVectorsException):
     """Payload failed schema validation."""
 

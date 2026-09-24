@@ -69,6 +69,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `search` and `iter`, which always did.
 
 ### Added
+- **`aetherfy_vectors` exports every exception it raises.** `ValidationError`,
+  `PointNotFoundError`, `RequestTimeoutError` and `NetworkError` were raised by
+  the client (and `PointNotFoundError` by a memory `Thread`'s and `Namespace`'s
+  metadata writers), and `CollectionNotFoundError` is built from a 404, yet none
+  of the five was importable from the package root — only from
+  `aetherfy_vectors.exceptions`. All five are in `aetherfy_vectors.__all__` now,
+  matching the JavaScript root. `tests/test_public_surface.py` makes the class
+  structural: every SDK exception raised anywhere in `aetherfy_vectors`,
+  `aetherfy_memory` or `aetherfy_agent` must be exported from the root of the
+  package that defines it, and so must every exception class a package defines
+  under its own base — which covers the classes only `parse_error_response`
+  builds, invisible to a search for `raise`.
+- **`ConflictError`, for a 409 with no more specific class.** Parity with the
+  JavaScript SDK, which has always had it. `COLLECTION_IN_USE` and
+  `COLLECTION_EXISTS_IN_OTHER_REGION` keep `CollectionInUseError` and
+  `CollectionInOtherRegionError` (neither is a `ConflictError` subclass, as in
+  JavaScript); every other 409 used to arrive as the bare
+  `AetherfyVectorsException` and is now a `ConflictError` carrying the backend's
+  code in `error_code`. It subclasses `AetherfyVectorsException`, so
+  `except AetherfyVectorsException` still catches it and it is still not
+  retried. The one observable difference is to code comparing the exact type
+  (`type(e) is AetherfyVectorsException`).
 - **`create_field_index` / `delete_field_index` on `AetherfyVectorsClient`.**
   `PUT /collections/{name}/index` and
   `DELETE /collections/{name}/index/{field_name}` have been on the backend (and
