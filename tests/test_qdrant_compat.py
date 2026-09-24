@@ -506,24 +506,52 @@ class TestHonouredQdrantParameters:
         assert mock_requests.request.call_count == 0
 
 
-class _AlwaysTimesOut:
-    """A transport that never answers: each attempt uses the timeout it was
-    given (capped at `per_attempt`, to model a fast failure) and raises."""
+class _FakeClock:
+    """Stands in for the `time` module in aetherfy_vectors.client and
+    aetherfy_vectors.utils: monotonic() reads a number, sleep() adds to it.
+    Nothing waits, so the assertions below are exact."""
 
-    def __init__(self, per_attempt=None):
+    def __init__(self):
+        self.now = 0.0
+        self.sleeps = []
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.sleeps.append(seconds)
+        self.now += seconds
+
+
+class _AlwaysTimesOut:
+    """A transport that never answers. Each attempt costs the timeout it was
+    given (or `per_attempt`, if smaller, to model a fast failure) on the fake
+    clock, then raises requests.Timeout."""
+
+    def __init__(self, clock, per_attempt=None):
+        self.clock = clock
         self.per_attempt = per_attempt
-        self.attempts = []  # (monotonic start, timeout given)
+        self.attempts = []  # (clock time the attempt started, timeout given)
 
     def __call__(self, *args, **kwargs):
-        import time as _time
-
         import requests
 
         given = kwargs["timeout"]
-        self.attempts.append((_time.monotonic(), given))
-        wait = given if self.per_attempt is None else min(given, self.per_attempt)
-        _time.sleep(max(wait, 0))
+        self.attempts.append((self.clock.now, given))
+        cost = given if self.per_attempt is None else min(given, self.per_attempt)
+        self.clock.now += cost
         raise requests.Timeout("fake transport: no answer")
+
+
+@pytest.fixture
+def clock():
+    """The fake clock, installed in both modules that read time, with backoff
+    jitter pinned to its maximum so the delays are exactly 1 s, 2 s, 4 s."""
+    fake = _FakeClock()
+    with patch("aetherfy_vectors.client.time", fake), patch(
+        "aetherfy_vectors.utils.time", fake
+    ), patch("aetherfy_vectors.utils.random.random", return_value=1.0):
+        yield fake
 
 
 class TestMethodTimeoutIsAWholeCallDeadline:
@@ -531,60 +559,57 @@ class TestMethodTimeoutIsAWholeCallDeadline:
     bound each attempt and then retry up to 3 times with backoff, so
     timeout=5 could take ~18 s. It is a deadline for the whole call now."""
 
-    TOLERANCE = 0.3
-
-    def test_a_hanging_transport_is_bounded_by_the_deadline(self, wired):
-        import time
-
+    def test_a_hanging_transport_is_bounded_by_the_deadline(self, wired, clock):
         from aetherfy_vectors.exceptions import RequestTimeoutError
 
         client, mock_requests = wired
-        transport = _AlwaysTimesOut()
+        transport = _AlwaysTimesOut(clock)
         mock_requests.request.side_effect = transport
-        start = time.monotonic()
         with pytest.raises(RequestTimeoutError, match="deadline"):
             client.retrieve("c", [1], timeout=0.5)
-        elapsed = time.monotonic() - start
-        assert elapsed <= 0.5 + self.TOLERANCE, (elapsed, transport.attempts)
-        # The first attempt was given the whole budget and used it; there is
-        # nothing left for a second one.
-        assert len(transport.attempts) == 1, transport.attempts
+        # One attempt, given the whole budget, which it used up. The 1 s
+        # backoff would end past the deadline, so it was not taken.
+        assert transport.attempts == [(0.0, 0.5)]
+        assert clock.sleeps == []
+        assert clock.now == 0.5
 
-    def test_retries_fit_inside_the_deadline_and_none_starts_after_it(self, wired):
-        import time
-
+    def test_retries_fit_inside_the_deadline_and_none_starts_after_it(
+        self, wired, clock
+    ):
         from aetherfy_vectors.exceptions import RequestTimeoutError
 
         client, mock_requests = wired
-        transport = _AlwaysTimesOut(per_attempt=0.05)
+        transport = _AlwaysTimesOut(clock, per_attempt=0.05)
         mock_requests.request.side_effect = transport
-        budget = 2.5
-        start = time.monotonic()
-        # Jitter pinned to its maximum, so backoff is exactly 1 s then 2 s:
-        # attempt 1 at ~0 s, attempt 2 at ~1.05 s, and the 2 s sleep after it
-        # would end at ~3.1 s, past the deadline, so it must not be taken.
-        with patch("aetherfy_vectors.utils.random.random", return_value=1.0):
-            with pytest.raises(RequestTimeoutError):
-                client.retrieve("c", [1], timeout=budget)
-        elapsed = time.monotonic() - start
-        assert elapsed <= budget + self.TOLERANCE, (elapsed, transport.attempts)
-        assert len(transport.attempts) == 2, transport.attempts
-        for began, given in transport.attempts:
-            offset = began - start
-            assert offset < budget, f"an attempt started {offset:.2f}s in"
-            # Each attempt is given only what remains of the budget.
-            assert offset + given <= budget + 0.05, (offset, given)
+        with pytest.raises(RequestTimeoutError):
+            client.retrieve("c", [1], timeout=2.5)
+        # Attempt 1 at 0 s gets all 2.5 s and fails at 0.05 s. The 1 s
+        # backoff ends at 1.05 s, inside the deadline, so it is taken, and
+        # attempt 2 gets only the 1.45 s that remain. It fails at 1.10 s, and
+        # the 2 s backoff would end at 3.10 s, past the deadline: not taken,
+        # and no third attempt.
+        assert transport.attempts == [
+            (0.0, 2.5),
+            (pytest.approx(1.05), pytest.approx(1.45)),
+        ]
+        assert clock.sleeps == [1.0]
+        assert clock.now == pytest.approx(1.10)
 
-    def test_without_a_method_timeout_the_client_timeout_is_per_attempt(self, wired):
+    def test_without_a_method_timeout_the_client_timeout_is_per_attempt(
+        self, wired, clock
+    ):
+        from aetherfy_vectors.exceptions import RequestTimeoutError
+
         client, mock_requests = wired
-        transport = _AlwaysTimesOut(per_attempt=0.01)
+        transport = _AlwaysTimesOut(clock, per_attempt=0.01)
         mock_requests.request.side_effect = transport
-        with patch("aetherfy_vectors.utils.time.sleep"):
-            with pytest.raises(Exception):
-                client.retrieve("c", [1])
-        # The constructor's timeout keeps its meaning: every one of the four
-        # attempts (1 + 3 retries) is given the full 10.0 s.
-        assert [g for _, g in transport.attempts] == [10.0] * 4
+        with pytest.raises(RequestTimeoutError):
+            client.retrieve("c", [1])
+        # The constructor's timeout keeps its meaning: each of the four
+        # attempts (1 + 3 retries) gets the full 10.0 s, with the whole
+        # 1 + 2 + 4 s backoff between them.
+        assert [given for _, given in transport.attempts] == [10.0] * 4
+        assert clock.sleeps == [1.0, 2.0, 4.0]
 
 
 class TestScrollOrderBy:
