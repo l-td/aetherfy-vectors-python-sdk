@@ -325,14 +325,10 @@ class MemoryClient:
 
         self._client.create_collection(
             THREADS_COLLECTION,
-            VectorConfig(
-                size=self._thread_vector_size, distance=self._thread_distance
-            ),
+            VectorConfig(size=self._thread_vector_size, distance=self._thread_distance),
         )
         self._client.create_field_index(THREADS_COLLECTION, THREAD_ID_KEY, "keyword")
-        self._client.create_field_index(
-            THREADS_COLLECTION, THREAD_MARKER_KEY, "bool"
-        )
+        self._client.create_field_index(THREADS_COLLECTION, THREAD_MARKER_KEY, "bool")
 
     def create_thread(self, thread_id: str) -> Thread:
         """Create a new thread.
@@ -433,9 +429,7 @@ class MemoryClient:
             raise ThreadNotFoundError(thread_id)
         info = self._client.get_collection(THREADS_COLLECTION)
         info.name = thread_id
-        info.points_count = Thread(
-            thread_id, THREADS_COLLECTION, self._client
-        ).count()
+        info.points_count = Thread(thread_id, THREADS_COLLECTION, self._client).count()
         return info
 
     def list_threads(self) -> List[str]:

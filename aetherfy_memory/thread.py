@@ -149,9 +149,7 @@ class Thread(_Scope):
         # not to see it.
         return [{k: v for k, v in p.items() if k != "payload"} for p in kept]
 
-    def _point_selector(
-        self, ids: List[Union[str, int]]
-    ) -> Dict[str, Any]:
+    def _point_selector(self, ids: List[Union[str, int]]) -> Dict[str, Any]:
         """Address these ids AND this thread, in one request.
 
         `has_id` is a first-class Qdrant condition — it is in the pinned

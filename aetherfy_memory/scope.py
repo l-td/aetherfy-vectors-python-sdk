@@ -14,7 +14,7 @@ the subclasses, not here. That is why `Thread` is NOT a subclass of
 share the substitutable surface.
 """
 
-from typing import Any, Dict, Iterator, List, Optional, Union
+from typing import Any, Dict, Iterator, List, Optional, Union, overload
 
 from aetherfy_vectors.client import AetherfyVectorsClient
 from aetherfy_vectors.exceptions import (
@@ -55,6 +55,21 @@ class _Scope:
     # scope clause bolted onto each call site individually is a scope clause
     # that gets forgotten at the next call site added.
     # ---------------------------------------------------------------------
+
+    # A dict in is a dict out, in BOTH implementations: the identity here
+    # hands it straight back and Thread's override always builds a dict.
+    # Stated as an overload so `delete`, whose non-list selector is a dict,
+    # passes the client a dict rather than something the checker must assume
+    # might be a `Filter` or `None` — neither of which that path can produce.
+    @overload
+    def _combine_filter(self, filter: Dict[str, Any]) -> Dict[str, Any]:
+        ...
+
+    @overload
+    def _combine_filter(
+        self, filter: Optional[Union[Filter, Dict[str, Any]]]
+    ) -> Optional[Union[Filter, Dict[str, Any]]]:
+        ...
 
     def _combine_filter(
         self, filter: Optional[Union[Filter, Dict[str, Any]]]
@@ -362,9 +377,7 @@ class _Scope:
                 # an empty `has_id` is one engine-side semantic away from
                 # matching the whole thread. Never send it.
                 return True
-            return self._client.delete(
-                self._collection, self._point_selector(selector)
-            )
+            return self._client.delete(self._collection, self._point_selector(selector))
         return self._client.delete(self._collection, self._combine_filter(selector))
 
     def clear(self) -> bool:
