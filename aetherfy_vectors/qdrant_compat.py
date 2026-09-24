@@ -60,6 +60,11 @@ class QdrantArgRule(NamedTuple):
 
 
 # Point writes: upsert, delete and the three payload writers.
+# IGNORE is honest only while vectordb forces ?wait=true on all five of the
+# write paths these methods map to. That is pinned on the side that owns it:
+# vectordb backend/tests/unit/proxyService.test.js, "SDK <method> (...)
+# forces ?wait=true", whose failure message names this rule. If it ever
+# changes, this becomes a REFUSE (or wait is honoured) in the same release.
 _WAIT = QdrantArgRule(
     IGNORE,
     "every point write is committed before the API answers (it runs the write "
