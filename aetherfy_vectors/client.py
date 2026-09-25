@@ -86,6 +86,23 @@ class AetherfyVectorsClient:
     TIMEOUT_THRESHOLD_BYTES = 5 * 1024 * 1024
     TIMEOUT_PER_MB_OVER_THRESHOLD_S = 1.0
 
+    # Payload-index create. The server holds ONE create for up to
+    # INDEX_WAIT_BUDGET_S while Qdrant builds the index, then answers
+    # "acknowledged" (still building). Mirrors vectordb
+    # backend/config/timeouts.js INDEX_WAIT_BUDGET_MS; no cross-repo gate ties
+    # the two, so a change there must be copied here. When the region that
+    # answers does not host the collection it forwards the create first,
+    # which vectordb allows INDEX_FORWARD_MARGIN_S for (FORWARD_MARGIN_MS in
+    # the same file). Each create attempt's HTTP timeout,
+    # INDEX_CREATE_ATTEMPT_TIMEOUT_S (or the constructor's timeout if that is
+    # longer), must outlast both, plus this client's own hop, or the SDK
+    # times out before the server's answer arrives. The default 30 s did not
+    # leave room for the forward. Pinned in tests/test_field_index.py.
+    # Mirrors aetherfy-vectors-js-sdk/src/client.ts.
+    INDEX_WAIT_BUDGET_S = 25.0
+    INDEX_FORWARD_MARGIN_S = 5.0
+    INDEX_CREATE_ATTEMPT_TIMEOUT_S = 45.0
+
     def __init__(
         self,
         api_key: Optional[str] = None,
@@ -392,6 +409,7 @@ class AetherfyVectorsClient:
         headers: Optional[Dict[str, str]] = None,
         evict_caches_on_404: Optional[str] = None,
         timeout: Optional[float] = None,
+        attempt_timeout: Optional[float] = None,
     ) -> Any:
         """Make HTTP request to the API with retry logic.
 
@@ -418,6 +436,10 @@ class AetherfyVectorsClient:
                 the client's policy: the constructor's ``timeout`` (body-aware
                 for writes) bounds EACH attempt, and POST/PUT are retried up
                 to 3 times with backoff on top of that.
+            attempt_timeout: Replaces the client's per-attempt timeout for
+                an endpoint the server may legitimately hold longer (the
+                payload-index create). Ignored when ``timeout`` is set: the
+                deadline then bounds each attempt.
 
         Returns:
             Response data.
@@ -435,6 +457,8 @@ class AetherfyVectorsClient:
         if timeout is not None:
             deadline = time.monotonic() + timeout
             request_timeout = timeout
+        elif attempt_timeout is not None:
+            request_timeout = attempt_timeout
         elif method in ("POST", "PUT") and data is not None:
             request_timeout = self._compute_body_aware_timeout(data)
         else:
@@ -1319,12 +1343,21 @@ class AetherfyVectorsClient:
         collection_name: str,
         field_name: str,
         field_schema: Union[str, Dict[str, Any]] = "keyword",
+        timeout: Optional[float] = None,
     ) -> bool:
-        """Create a payload index on one field.
+        """Create a payload index on one field, and return once it is built.
 
         PUT /collections/{name}/index with ``{field_name, field_schema}``.
-        The call is idempotent server-side: re-creating an existing index
-        with the same schema succeeds.
+        The server waits for the build for up to 25 s. A build that takes
+        longer is answered "acknowledged" (still building), and this method
+        then sends the create again, which waits for the running build, until
+        the answer is "completed". So when it returns, a filter or an
+        ``order_by`` scroll on the key works in the region that answered.
+        Re-creating an existing index with the same schema returns at once.
+
+        There is deliberately no way to return before the build finishes: a
+        caller that did would scroll into "No range index for order_by key".
+        To bound the wait, pass ``timeout``.
 
         Args:
             collection_name: Name of the collection.
@@ -1334,28 +1367,89 @@ class AetherfyVectorsClient:
                 (``"keyword"``, ``"integer"``, ``"float"``, ``"bool"``,
                 ``"geo"``, ``"datetime"``, ``"uuid"``, ``"text"``), or a
                 dict for the parameterised forms. Forwarded verbatim.
+            timeout: Deadline in seconds for this whole call, every create
+                and retry included. None waits for the build however long it
+                takes; each create then has an HTTP timeout of
+                ``INDEX_CREATE_ATTEMPT_TIMEOUT_S`` (45 s), or the
+                constructor's timeout if that is longer.
 
         Returns:
-            True when the index was accepted.
+            True, and only once the index is built. It never returns False.
+
+        Raises:
+            RequestTimeoutError: ``timeout`` passed while the index was still
+                building. The build carries on server-side, and calling this
+                method again waits for it. If no answer at all came back
+                within ``timeout``, the message says so instead: it is then
+                not known whether the create was taken.
+            AetherfyVectorsException: The server answered a status other than
+                "completed" or "acknowledged"; the index is not confirmed.
         """
         validate_collection_name(collection_name)
         if not isinstance(field_name, str) or not field_name:
             raise ValidationError("field_name must be a non-empty string")
         scoped_name = self._scope_collection(collection_name)
-        self._make_request(
-            "PUT",
-            self._build_collection_path(collection_name, "/index"),
-            {"field_name": field_name, "field_schema": field_schema},
-            evict_caches_on_404=scoped_name,
+        deadline = None if timeout is None else time.monotonic() + timeout
+        attempt_timeout = max(self.timeout, self.INDEX_CREATE_ATTEMPT_TIMEOUT_S)
+        still_building = RequestTimeoutError(
+            f"The payload index on {field_name!r} in collection "
+            f"{collection_name!r} is still building after the {timeout} s "
+            "deadline. The build carries on server-side; calling "
+            "create_field_index again waits for it."
         )
-        return True
+        acknowledged = False
+        while True:
+            remaining = None
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise still_building
+            try:
+                response = self._make_request(
+                    "PUT",
+                    self._build_collection_path(collection_name, "/index"),
+                    {"field_name": field_name, "field_schema": field_schema},
+                    evict_caches_on_404=scoped_name,
+                    timeout=remaining,
+                    attempt_timeout=attempt_timeout,
+                )
+            except RequestTimeoutError:
+                # With a deadline set, every attempt was given what remained
+                # of it, so a timeout here IS the deadline. After an
+                # "acknowledged" the build is known to be running. Before any
+                # answer it is not known the create was even taken, so that
+                # is not claimed. With no deadline set, a per-attempt timeout
+                # keeps its own error.
+                if deadline is None:
+                    raise
+                if acknowledged:
+                    raise still_building from None
+                raise RequestTimeoutError(
+                    f"The payload index create on {field_name!r} in collection "
+                    f"{collection_name!r} got no answer within the {timeout} s "
+                    "deadline, so it is not known whether it was taken. "
+                    "Calling create_field_index again is safe."
+                ) from None
+            result = response.get("result") if isinstance(response, dict) else None
+            status = result.get("status") if isinstance(result, dict) else None
+            if status == "completed":
+                return True
+            if status != "acknowledged":
+                raise AetherfyVectorsException(
+                    f"create_field_index got status {status!r} for the payload "
+                    f"index on {field_name!r} in collection {collection_name!r}, "
+                    "expected 'completed' or 'acknowledged'; the index is not "
+                    "confirmed built."
+                )
+            acknowledged = True
 
     def delete_field_index(self, collection_name: str, field_name: str) -> bool:
         """Drop the payload index on one field.
 
-        DELETE /collections/{name}/index/{field_name}. Returns False when
-        the collection (or the index) is already gone, mirroring
-        ``delete_schema``'s idempotent shape.
+        DELETE /collections/{name}/index/{field_name}. Returns True when the
+        collection exists, INCLUDING when that field was never indexed: the
+        server answers that with 200, like a real drop. Returns False only
+        when the collection itself does not exist (404).
         """
         validate_collection_name(collection_name)
         if not isinstance(field_name, str) or not field_name:

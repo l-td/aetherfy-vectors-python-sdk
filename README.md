@@ -786,9 +786,15 @@ over.
 ```python
 # field_schema: "keyword" | "integer" | "float" | "bool" | "geo" |
 #               "datetime" | "uuid" | "text", or a parameterised object.
+# Returns once the index is built, so a filter or an order_by scroll on the
+# key can follow straight away. A large collection can take longer than the
+# server's 25 s wait; the call then waits on. timeout= bounds the whole call:
+# past it, RequestTimeoutError, the build carries on, and calling again waits.
 client.create_field_index(collection_name, "tenant_id", "keyword")
+client.create_field_index(collection_name, "ts", "integer", timeout=120)
 
-# Idempotent: returns False when the index (or the collection) is already gone.
+# True when the collection exists, even if the field was never indexed.
+# False only when the collection does not exist.
 client.delete_field_index(collection_name, "tenant_id")
 ```
 
