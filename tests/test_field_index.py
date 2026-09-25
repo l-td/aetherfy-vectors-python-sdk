@@ -340,7 +340,7 @@ class TestCreateAttemptTimeout:
         assert C.INDEX_FORWARD_MARGIN_S == 5.0
         # With room for this client's own hop on top.
         held = C.INDEX_WAIT_BUDGET_S + C.INDEX_FORWARD_MARGIN_S
-        assert C.INDEX_CREATE_ATTEMPT_TIMEOUT_S >= held + 10.0
+        assert C.INDEX_ATTEMPT_TIMEOUT_S >= held + 10.0
         # The client-wide default alone does not leave that room, which is
         # why the create does not use it.
         assert C.DEFAULT_TIMEOUT < held + 10.0
@@ -354,7 +354,7 @@ class TestCreateAttemptTimeout:
 
         client.create_field_index("articles", "ts", "integer")
         assert [given for _, given in route.attempts] == [
-            AetherfyVectorsClient.INDEX_CREATE_ATTEMPT_TIMEOUT_S
+            AetherfyVectorsClient.INDEX_ATTEMPT_TIMEOUT_S
         ] * 2
 
     def test_a_longer_client_timeout_is_kept(
@@ -368,3 +368,56 @@ class TestCreateAttemptTimeout:
 
         patient.create_field_index("articles", "ts", "integer")
         assert [given for _, given in route.attempts] == [90.0]
+
+
+class TestDeleteAttemptTimeout:
+    """vectordb holds an index delete like a create (?wait=true, 25 s, and a
+    forward from a region that does not host the collection). A delete given
+    only the client's timeout gave up before the server's answer, and a
+    DELETE is not retried, so the caller got a timeout for a delete that
+    succeeded."""
+
+    def test_a_delete_the_server_holds_28_s_succeeds(
+        self, client, mock_requests, clock
+    ):
+        # The fixture client's own timeout is 10 s, well under the hold.
+        route = _IndexRoute(clock, [{"result": True, "status": "ok"}], cost=28.0)
+        mock_requests.request.side_effect = route
+
+        assert client.delete_field_index("articles", "ts") is True
+        assert route.attempts == [(0.0, AetherfyVectorsClient.INDEX_ATTEMPT_TIMEOUT_S)]
+        assert mock_requests.request.call_args.kwargs["method"] == "DELETE"
+
+    def test_a_delete_is_still_one_request(self, client, mock_requests, clock):
+        route = _IndexRoute(clock, [{"result": True}], cost=60.0)
+        mock_requests.request.side_effect = route
+
+        with pytest.raises(RequestTimeoutError):
+            client.delete_field_index("articles", "ts")
+        assert len(route.attempts) == 1
+
+
+class TestCreateTimeoutMustBePositive:
+    """A deadline of 0 or less used to raise "still building" without sending
+    anything, claiming a build it never started. It is refused up front."""
+
+    @pytest.mark.parametrize(
+        "bad",
+        [0, 0.0, -1, -0.5, float("inf"), float("nan"), True, "60"],
+        ids=["0", "0.0", "-1", "-0.5", "inf", "nan", "True", "a string"],
+    )
+    def test_is_refused_naming_the_value_before_any_request(
+        self, client, mock_requests, bad
+    ):
+        with pytest.raises(ValidationError) as raised:
+            client.create_field_index("articles", "ts", "integer", timeout=bad)
+        assert str(raised.value) == (
+            f"timeout must be a finite number of seconds above 0, got {bad!r}"
+        )
+        mock_requests.request.assert_not_called()
+
+    def test_a_small_positive_timeout_is_taken(self, client, mock_requests, clock):
+        route = _IndexRoute(clock, [COMPLETED], cost=0.01)
+        mock_requests.request.side_effect = route
+
+        assert client.create_field_index("a", "ts", "integer", timeout=0.5) is True

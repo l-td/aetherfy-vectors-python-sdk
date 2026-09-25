@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The next release is **2.0.0**: the changes marked BREAKING below are breaking under Semantic Versioning, so this cannot ship as 1.2.0.
 
 ### Changed
-- **`create_field_index` returns only once the index is built**, re-sending the create while the server answers "acknowledged"; new `timeout=` bounds the wait, 600 s by default and never unbounded (then `RequestTimeoutError`); an "acknowledged" the server did not hold is re-sent only after a 1 s to 10 s pause; `delete_field_index`'s docs now say it returns True for a field that was never indexed.
+- **`create_field_index` returns only once the index is built**, re-sending the create while the server answers "acknowledged"; new `timeout=` bounds the wait, 600 s by default and never unbounded (then `RequestTimeoutError`; a `timeout` that is not a finite number above 0 raises `ValidationError`); each create or `delete_field_index` request gets a 45 s HTTP timeout, since the server may hold it 25 s plus a forward; an "acknowledged" the server did not hold is re-sent only after a 1 s to 10 s pause; `delete_field_index`'s docs now say it returns True for a field that was never indexed.
 - **BREAKING: `AetherfyVectorsClient(...)` raises `TypeError` for an argument
   it does not name.** The constructor ended in a `**kwargs` that nothing read,
   so any unknown argument was accepted and dropped. `region=` was renamed to
