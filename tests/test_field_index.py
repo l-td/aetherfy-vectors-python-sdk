@@ -160,6 +160,9 @@ class _IndexRoute:
     attempt's timeout is shorter than that, raises requests.Timeout at the
     timeout, as the real transport would."""
 
+    # A runaway loop ends the test instead of hanging it.
+    MAX_CREATES = 1000
+
     def __init__(self, clock, answers, cost=25.0):
         self.clock = clock
         self.answers = list(answers)
@@ -168,6 +171,8 @@ class _IndexRoute:
 
     def __call__(self, *args, **kwargs):
         given = kwargs["timeout"]
+        if len(self.attempts) >= self.MAX_CREATES:
+            raise AssertionError(f"more than {self.MAX_CREATES} creates")
         self.attempts.append((self.clock.now, given))
         if given < self.cost:
             self.clock.now += given
@@ -216,10 +221,13 @@ class TestCreateWaitsUntilTheIndexIsBuilt:
         with pytest.raises(RequestTimeoutError) as raised:
             client.create_field_index("articles", "ts", "integer", timeout=60)
 
-        # 0 s: given all 60 s, acknowledged at 25 s. 25 s: given the 35 s
-        # left, acknowledged at 50 s. 50 s: given the last 10 s, and cut by
-        # the deadline while the server is still waiting on the build.
-        assert route.attempts == [(0.0, 60.0), (25.0, 35.0), (50.0, 10.0)]
+        # 0 s: given 45 s (the per-create cap, under the 60 s left),
+        # acknowledged at 25 s. 25 s: given the 35 s left, acknowledged at
+        # 50 s. 50 s: given the last 10 s, and cut by the deadline while the
+        # server is still waiting on the build. Each "acknowledged" was held
+        # the server's full 25 s, so no pause was added between creates.
+        assert route.attempts == [(0.0, 45.0), (25.0, 35.0), (50.0, 10.0)]
+        assert clock.sleeps == []
         assert clock.now == 60.0
         message = str(raised.value)
         assert message == (
@@ -270,6 +278,51 @@ class TestCreateWaitsUntilTheIndexIsBuilt:
         with pytest.raises(AetherfyVectorsException, match="not confirmed built"):
             client.create_field_index("articles", "ts", "integer")
         assert len(route.attempts) == 1
+
+
+class TestCreateIsNeverUnbounded:
+    """A server that answers "acknowledged" at once did not hold the create
+    (a vectordb from before db26396 answers every create that way). Re-sending
+    at once would hammer it, forever when no timeout was passed."""
+
+    def test_an_instant_acknowledged_is_paced_and_ends_at_the_default_deadline(
+        self, client, mock_requests, clock
+    ):
+        route = _IndexRoute(clock, [ACKNOWLEDGED], cost=0.05)
+        mock_requests.request.side_effect = route
+
+        with pytest.raises(RequestTimeoutError) as raised:
+            client.create_field_index("articles", "ts", "integer")
+
+        # Pauses of 1, 2, 4, 8, then 10 s each: 9 creates start in the first
+        # minute. With no floor it would be 1200 (one per 0.05 s).
+        first_minute = [at for at, _ in route.attempts if at < 60.0]
+        assert len(first_minute) == 9, route.attempts[:12]
+        assert clock.sleeps[:6] == [1.0, 2.0, 4.0, 8.0, 10.0, 10.0]
+        assert max(clock.sleeps) == 10.0
+        # And the call ends at the default deadline, not never.
+        assert clock.now == AetherfyVectorsClient.INDEX_DEFAULT_DEADLINE_S
+        assert len(route.attempts) < 70
+        assert str(raised.value) == (
+            "The payload index on 'ts' in collection 'articles' is still "
+            "building after the 600 s deadline. The build carries on "
+            "server-side; calling create_field_index again waits for it."
+        )
+
+    def test_a_server_that_holds_each_create_gets_no_added_pause(
+        self, client, mock_requests, clock
+    ):
+        route = _IndexRoute(
+            clock, [ACKNOWLEDGED, ACKNOWLEDGED, ACKNOWLEDGED, COMPLETED]
+        )
+        mock_requests.request.side_effect = route
+
+        assert client.create_field_index("articles", "ts", "integer") is True
+        assert clock.sleeps == []
+        assert [at for at, _ in route.attempts] == [0.0, 25.0, 50.0, 75.0]
+
+    def test_the_default_deadline_is_ten_minutes(self):
+        assert AetherfyVectorsClient.INDEX_DEFAULT_DEADLINE_S == 600.0
 
 
 class TestCreateAttemptTimeout:

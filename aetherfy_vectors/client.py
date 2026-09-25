@@ -102,6 +102,17 @@ class AetherfyVectorsClient:
     INDEX_WAIT_BUDGET_S = 25.0
     INDEX_FORWARD_MARGIN_S = 5.0
     INDEX_CREATE_ATTEMPT_TIMEOUT_S = 45.0
+    # create_field_index is never unbounded: with no ``timeout=`` it stops at
+    # INDEX_DEFAULT_DEADLINE_S with the same "still building" error. And an
+    # "acknowledged" that came back faster than INDEX_WAIT_BUDGET_S means the
+    # server did not hold the create (a vectordb from before db26396 answers
+    # every create that way, at once), so the next create waits first:
+    # INDEX_RESEND_PAUSE_FIRST_S, doubling up to INDEX_RESEND_PAUSE_MAX_S.
+    # An "acknowledged" the server held for its budget is re-sent at once.
+    # Mirrors aetherfy-vectors-js-sdk/src/client.ts.
+    INDEX_DEFAULT_DEADLINE_S = 600.0
+    INDEX_RESEND_PAUSE_FIRST_S = 1.0
+    INDEX_RESEND_PAUSE_MAX_S = 10.0
 
     def __init__(
         self,
@@ -436,10 +447,10 @@ class AetherfyVectorsClient:
                 the client's policy: the constructor's ``timeout`` (body-aware
                 for writes) bounds EACH attempt, and POST/PUT are retried up
                 to 3 times with backoff on top of that.
-            attempt_timeout: Replaces the client's per-attempt timeout for
-                an endpoint the server may legitimately hold longer (the
-                payload-index create). Ignored when ``timeout`` is set: the
-                deadline then bounds each attempt.
+            attempt_timeout: With ``timeout`` set, caps each attempt below
+                what remains of the deadline: for an endpoint that runs under
+                a long deadline but whose single attempt has its own bound
+                (the payload-index create). Ignored without ``timeout``.
 
         Returns:
             Response data.
@@ -457,8 +468,6 @@ class AetherfyVectorsClient:
         if timeout is not None:
             deadline = time.monotonic() + timeout
             request_timeout = timeout
-        elif attempt_timeout is not None:
-            request_timeout = attempt_timeout
         elif method in ("POST", "PUT") and data is not None:
             request_timeout = self._compute_body_aware_timeout(data)
         else:
@@ -466,13 +475,15 @@ class AetherfyVectorsClient:
 
         def make_single_request():
             url = build_api_url(self.endpoint, endpoint)
-            attempt_timeout = request_timeout
+            this_attempt = request_timeout
             if deadline is not None:
-                attempt_timeout = deadline - time.monotonic()
-                if attempt_timeout <= 0:
+                this_attempt = deadline - time.monotonic()
+                if this_attempt <= 0:
                     raise RequestTimeoutError(
                         f"Request to {endpoint} exceeded its {timeout} s deadline"
                     )
+                if attempt_timeout is not None:
+                    this_attempt = min(this_attempt, attempt_timeout)
 
             try:
                 # Use session for persistent connections instead of requests.request()
@@ -482,7 +493,7 @@ class AetherfyVectorsClient:
                     json=data if data is not None else None,
                     params=params,
                     headers=headers,  # Pass additional headers if provided
-                    timeout=attempt_timeout,
+                    timeout=this_attempt,
                 )
 
                 if response.status_code in [200, 201]:
@@ -499,12 +510,12 @@ class AetherfyVectorsClient:
                     raise parse_error_response(error_data, response.status_code)
 
             except requests.Timeout:
-                if deadline is not None:
+                if deadline is not None and time.monotonic() >= deadline:
                     raise RequestTimeoutError(
                         f"Request to {endpoint} exceeded its {timeout} s deadline"
                     )
                 raise RequestTimeoutError(
-                    f"Request to {endpoint} timed out after {request_timeout} seconds"
+                    f"Request to {endpoint} timed out after {this_attempt} seconds"
                 )
             except requests.ConnectionError as e:
                 # Network connection errors should be retryable
@@ -1357,7 +1368,10 @@ class AetherfyVectorsClient:
 
         There is deliberately no way to return before the build finishes: a
         caller that did would scroll into "No range index for order_by key".
-        To bound the wait, pass ``timeout``.
+        The wait is always bounded: by ``timeout``, or else by
+        ``INDEX_DEFAULT_DEADLINE_S`` (10 minutes). An "acknowledged" that
+        came back before the server's 25 s wait was up (so the server did not
+        hold the create) is re-sent only after a pause, 1 s doubling to 10 s.
 
         Args:
             collection_name: Name of the collection.
@@ -1367,18 +1381,19 @@ class AetherfyVectorsClient:
                 (``"keyword"``, ``"integer"``, ``"float"``, ``"bool"``,
                 ``"geo"``, ``"datetime"``, ``"uuid"``, ``"text"``), or a
                 dict for the parameterised forms. Forwarded verbatim.
-            timeout: Deadline in seconds for this whole call, every create
-                and retry included. None waits for the build however long it
-                takes; each create then has an HTTP timeout of
-                ``INDEX_CREATE_ATTEMPT_TIMEOUT_S`` (45 s), or the
-                constructor's timeout if that is longer.
+            timeout: Deadline in seconds for this whole call, every create,
+                retry and pause included. None means
+                ``INDEX_DEFAULT_DEADLINE_S`` (600 s). Each create has an HTTP
+                timeout of ``INDEX_CREATE_ATTEMPT_TIMEOUT_S`` (45 s), or the
+                constructor's timeout if that is longer, or what remains of
+                the deadline if that is shorter.
 
         Returns:
             True, and only once the index is built. It never returns False.
 
         Raises:
-            RequestTimeoutError: ``timeout`` passed while the index was still
-                building. The build carries on server-side, and calling this
+            RequestTimeoutError: The deadline (``timeout``, or the default)
+                passed while the index was still building. The build carries on server-side, and calling this
                 method again waits for it. If no answer at all came back
                 within ``timeout``, the message says so instead: it is then
                 not known whether the create was taken.
@@ -1389,21 +1404,23 @@ class AetherfyVectorsClient:
         if not isinstance(field_name, str) or not field_name:
             raise ValidationError("field_name must be a non-empty string")
         scoped_name = self._scope_collection(collection_name)
-        deadline = None if timeout is None else time.monotonic() + timeout
+        if timeout is None:
+            timeout = self.INDEX_DEFAULT_DEADLINE_S
+        deadline = time.monotonic() + timeout
         attempt_timeout = max(self.timeout, self.INDEX_CREATE_ATTEMPT_TIMEOUT_S)
+        pause = self.INDEX_RESEND_PAUSE_FIRST_S
         still_building = RequestTimeoutError(
             f"The payload index on {field_name!r} in collection "
-            f"{collection_name!r} is still building after the {timeout} s "
+            f"{collection_name!r} is still building after the {timeout:g} s "
             "deadline. The build carries on server-side; calling "
             "create_field_index again waits for it."
         )
         acknowledged = False
         while True:
-            remaining = None
-            if deadline is not None:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise still_building
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise still_building
+            started = time.monotonic()
             try:
                 response = self._make_request(
                     "PUT",
@@ -1414,19 +1431,18 @@ class AetherfyVectorsClient:
                     attempt_timeout=attempt_timeout,
                 )
             except RequestTimeoutError:
-                # With a deadline set, every attempt was given what remained
-                # of it, so a timeout here IS the deadline. After an
-                # "acknowledged" the build is known to be running. Before any
-                # answer it is not known the create was even taken, so that
-                # is not claimed. With no deadline set, a per-attempt timeout
-                # keeps its own error.
-                if deadline is None:
+                # Before the deadline, this is one create outliving its own
+                # HTTP timeout, and that error stands. At the deadline, after
+                # an "acknowledged" the build is known to be running; on the
+                # first create it is not known the create was even taken, so
+                # that is not claimed.
+                if time.monotonic() < deadline:
                     raise
                 if acknowledged:
                     raise still_building from None
                 raise RequestTimeoutError(
                     f"The payload index create on {field_name!r} in collection "
-                    f"{collection_name!r} got no answer within the {timeout} s "
+                    f"{collection_name!r} got no answer within the {timeout:g} s "
                     "deadline, so it is not known whether it was taken. "
                     "Calling create_field_index again is safe."
                 ) from None
@@ -1442,6 +1458,11 @@ class AetherfyVectorsClient:
                     "confirmed built."
                 )
             acknowledged = True
+            if time.monotonic() - started < self.INDEX_WAIT_BUDGET_S:
+                # The server did not hold this create, so re-sending at once
+                # would hammer it.
+                time.sleep(min(pause, max(deadline - time.monotonic(), 0.0)))
+                pause = min(pause * 2, self.INDEX_RESEND_PAUSE_MAX_S)
 
     def delete_field_index(self, collection_name: str, field_name: str) -> bool:
         """Drop the payload index on one field.
