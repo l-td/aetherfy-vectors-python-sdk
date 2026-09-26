@@ -10,6 +10,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The next release is **2.0.0**: the changes marked BREAKING below are breaking under Semantic Versioning, so this cannot ship as 1.2.0.
 
 ### Changed
+- **BREAKING (wire): `search()` sends `POST /collections/{name}/points/query`**
+  instead of Qdrant's retired `/points/search`, which the API now refuses with
+  410 `ROUTE_RETIRED`. The call, its arguments and its return value are
+  unchanged: the vector goes in the body as `query`, every other argument keeps
+  its wire name (`limit`, `offset`, `filter`, `with_payload`, `with_vector`,
+  `score_threshold`, `params`), and the matches are read from `result.points`.
+  `QDRANT_COMPAT["search"]` is unchanged (it classifies qdrant-client's
+  `search()` arguments, and those did not change). An SDK older than this
+  breaks on search against the current API.
 - **`create_field_index` returns only once the index is built**, re-sending the create while the server answers "acknowledged"; new `timeout=` bounds the wait, 600 s by default and never unbounded (then `RequestTimeoutError`; a `timeout` that is not a finite number above 0 raises `ValidationError`); each create or `delete_field_index` request gets a 45 s HTTP timeout, since the server may hold it 25 s plus a forward; an "acknowledged" the server did not hold is re-sent only after a 1 s to 10 s pause; `delete_field_index`'s docs now say it returns True for a field that was never indexed.
 - **BREAKING: `AetherfyVectorsClient(...)` raises `TypeError` for an argument
   it does not name.** The constructor ended in a `**kwargs` that nothing read,
@@ -163,6 +172,10 @@ The next release is **2.0.0**: the changes marked BREAKING below are breaking un
   verbatim.
 
 ### Release needed
+- **Publish together with the API that refuses `/points/search`.** Published
+  1.x `search()` calls `/points/search` and gets 410 `ROUTE_RETIRED` from that
+  API; this version calls `/points/query`, which that API serves. Push the
+  vectordb change and publish this release in the same window.
 - **The pending release is no longer a patch.** The changes above remove
   `create_thread`'s `vector_size` / `distance` parameters and the `Thread`
   schema methods, and change where a thread's data lives. Under semver that is

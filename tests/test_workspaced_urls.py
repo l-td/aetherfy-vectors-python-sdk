@@ -126,7 +126,7 @@ class TestWorkspacedPointOps:
     @pytest.mark.parametrize(
         "op,suffix",
         [
-            ("search", "/points/search"),
+            ("search", "/points/query"),
             ("scroll", "/points/scroll"),
             ("count", "/points/count"),
         ],

@@ -52,7 +52,7 @@ class TestQdrantCompatibility:
         self, client, mock_requests, mock_successful_response, sample_search_results
     ):
         """Test search method parameter compatibility."""
-        search_data = {"result": sample_search_results}
+        search_data = {"result": {"points": sample_search_results}}
         mock_requests.request.return_value = mock_successful_response(search_data)
 
         query_vector = [0.1, 0.2, 0.3, 0.4]
@@ -219,7 +219,7 @@ class TestMigrationScenarios:
         self, client, mock_requests, mock_successful_response, sample_search_results
     ):
         """Test advanced migration patterns with complex operations."""
-        search_data = {"result": sample_search_results}
+        search_data = {"result": {"points": sample_search_results}}
         mock_requests.request.return_value = mock_successful_response(search_data)
 
         # Complex search with all parameters
@@ -279,7 +279,7 @@ class TestAPIResponseCompatibility:
         self, client, mock_requests, mock_successful_response, sample_search_results
     ):
         """Test that search responses match expected format."""
-        search_data = {"result": sample_search_results}
+        search_data = {"result": {"points": sample_search_results}}
         mock_requests.request.return_value = mock_successful_response(search_data)
 
         results = client.search("test_collection", [0.1, 0.2, 0.3])

@@ -390,7 +390,7 @@ class AetherfyVectorsClient:
 
         Args:
             collection_name: BARE (unscoped) collection name.
-            suffix: Optional path suffix (e.g. ``"/points/search"``).
+            suffix: Optional path suffix (e.g. ``"/points/query"``).
                 Must already begin with ``/`` when non-empty.
         """
         from urllib.parse import quote
@@ -1643,6 +1643,12 @@ class AetherfyVectorsClient:
     ) -> List[SearchResult]:
         """Search for similar vectors in a collection.
 
+        Sent as ``POST /collections/{name}/points/query``, Qdrant's search
+        route (the API refuses the retired ``/points/search`` with 410
+        ROUTE_RETIRED). The call and its arguments are unchanged: the vector
+        goes in the body as ``query``, the other arguments keep their wire
+        names, and the matches are read from ``result.points``.
+
         Args:
             collection_name: Name of the collection to search in.
             query_vector: Query vector for similarity search.
@@ -1689,7 +1695,7 @@ class AetherfyVectorsClient:
         scoped_name = self._scope_collection(collection_name)
 
         data = {
-            "vector": query_vector,
+            "query": query_vector,
             "limit": limit,
             "offset": offset,
             "with_payload": with_payload,
@@ -1713,14 +1719,14 @@ class AetherfyVectorsClient:
 
         response = self._make_request(
             "POST",
-            self._build_collection_path(collection_name, "/points/search"),
+            self._build_collection_path(collection_name, "/points/query"),
             data,
             evict_caches_on_404=scoped_name,
             timeout=timeout,
         )
 
         results = []
-        for result in response.get("result", []):
+        for result in (response.get("result") or {}).get("points", []):
             results.append(SearchResult.from_dict(result))
 
         return results

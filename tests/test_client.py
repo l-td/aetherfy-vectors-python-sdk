@@ -735,7 +735,7 @@ class TestSearchOperations:
         self, client, mock_requests, mock_successful_response, sample_search_results
     ):
         """Test successful vector search."""
-        search_data = {"result": sample_search_results}
+        search_data = {"result": {"points": sample_search_results}}
         mock_requests.request.return_value = mock_successful_response(search_data)
 
         query_vector = [0.1, 0.2, 0.3, 0.4]
@@ -749,15 +749,16 @@ class TestSearchOperations:
 
         args, kwargs = mock_requests.request.call_args
         assert kwargs["method"] == "POST"
-        assert "points/search" in kwargs["url"]
-        assert kwargs["json"]["vector"] == query_vector
+        assert kwargs["url"].endswith("/points/query")
+        assert kwargs["json"]["query"] == query_vector
+        assert "vector" not in kwargs["json"]
         assert kwargs["json"]["limit"] == 5
 
     def test_search_with_filter(
         self, client, mock_requests, mock_successful_response, sample_search_results
     ):
         """Test search with filter conditions."""
-        search_data = {"result": sample_search_results}
+        search_data = {"result": {"points": sample_search_results}}
         mock_requests.request.return_value = mock_successful_response(search_data)
 
         query_vector = [0.1, 0.2, 0.3, 0.4]
@@ -775,7 +776,7 @@ class TestSearchOperations:
         self, client, mock_requests, mock_successful_response, sample_search_results
     ):
         """Test search with score threshold."""
-        search_data = {"result": sample_search_results}
+        search_data = {"result": {"points": sample_search_results}}
         mock_requests.request.return_value = mock_successful_response(search_data)
 
         query_vector = [0.1, 0.2, 0.3, 0.4]
