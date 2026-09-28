@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 The next release is **2.0.0**: the changes marked BREAKING below are breaking under Semantic Versioning, so this cannot ship as 1.2.0.
 
+### Added
+- **`aetherfy_agent.token(audience, scopes=None)`** exchanges the agent's own
+  `AETHERFY_API_KEY` for a short-lived agent token (`POST /agent-tokens`) and
+  returns an `AgentToken` (`token`, `expires_at`). The token names one audience,
+  carries a subset of the key's scopes, and stops working within fifteen
+  minutes or when the deployment ends: it is what code on an agent hands onward
+  instead of the key. Cached per key, audience and scopes until a minute before
+  it expires. A refusal raises the new `TokenError`, carrying the platform's
+  `error_code`.
+
 ### Changed
 - **`create_field_index` returns only once the index is built**, re-sending the create while the server answers "acknowledged"; new `timeout=` bounds the wait, 600 s by default and never unbounded (then `RequestTimeoutError`; a `timeout` that is not a finite number above 0 raises `ValidationError`); each create or `delete_field_index` request gets a 45 s HTTP timeout, since the server may hold it 25 s plus a forward; an "acknowledged" the server did not hold is re-sent only after a 1 s to 10 s pause; `delete_field_index`'s docs now say it returns True for a field that was never indexed.
 - **BREAKING: `AetherfyVectorsClient(...)` raises `TypeError` for an argument

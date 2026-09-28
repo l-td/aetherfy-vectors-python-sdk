@@ -645,6 +645,25 @@ except RunReadError as exc:
     print(exc.error_code)
 ```
 
+### Handing out a short-lived token instead of the key
+
+`AETHERFY_API_KEY` lives as long as the deployment. When code running on the
+agent needs to give a credential to something else, give it a token instead:
+one audience, a subset of the key's scopes, and dead within fifteen minutes or
+the moment the deployment ends. `token()` caches it until a minute before it
+expires, so calling it before every request is cheap.
+
+```python
+from aetherfy_agent import token
+from aetherfy_agent.exceptions import TokenError
+
+try:
+    minted = token("aetherfy-control-plane", scopes=["runs:read"])
+    print(minted.token, minted.expires_at)
+except TokenError as exc:
+    print(exc.error_code)
+```
+
 Full contract, including the environment variables behind every call:
 [docs.aetherfy.com/agents/task-contract](https://docs.aetherfy.com/agents/task-contract).
 

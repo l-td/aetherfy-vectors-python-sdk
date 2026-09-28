@@ -84,3 +84,19 @@ class Run:
     error_message: Optional[str] = None
     #: Everything the control plane sent, unmodified.
     raw: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class AgentToken:
+    """
+    A short-lived Aetherfy agent token, minted from this machine's own key.
+
+    ``token`` is sent as ``Authorization: Bearer <token>`` to the service it was
+    minted for, and to nothing else: it names one audience and that service
+    refuses any other. ``expires_at`` is the ISO 8601 instant it stops working,
+    as the control plane sent it. Hand the token onward instead of the key —
+    the key lives as long as the deployment, the token at most fifteen minutes.
+    """
+
+    token: str
+    expires_at: str

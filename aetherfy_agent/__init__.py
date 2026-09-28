@@ -18,11 +18,14 @@ equivalent stops being copied into every task.
     finished = wait(run.spawn_id)            # or result(...) for a plain read
     print(finished.result)
 
+    bearer = token("aetherfy-control-plane", scopes=["runs:read"]).token
+
 TWO HALVES, and they are the same contract read from opposite ends. A task
 reads its payload and writes its result; whoever started it spawns and then
 reads that result back. ``payload``/``write_result`` are files on the machine
 and touch no network at all; ``spawn``/``result``/``wait`` are the control
-plane, and are the only calls here that do.
+plane, and are the only calls here that do — with ``token``, which exchanges
+this machine's key for a short-lived token to hand onward instead of the key.
 
 It ships inside the ``aetherfy-vectors`` distribution beside
 ``aetherfy_vectors`` and ``aetherfy_memory``, and the standard runtime image
@@ -32,8 +35,20 @@ nothing in your requirements. A custom container installs it itself.
 
 import json
 import os
+import time
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
-from typing import Any, Callable, Dict, Iterable, List, Optional, TypeVar
+from datetime import datetime
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Optional,
+    Sequence,
+    Tuple,
+    TypeVar,
+)
 from urllib.parse import quote
 
 from . import _http
@@ -53,10 +68,11 @@ from .exceptions import (
     RunNotFound,
     RunReadError,
     SpawnError,
+    TokenError,
     TooManyRunsInFlight,
     WaitTimeoutInvalid,
 )
-from .models import MachineShape, Run, Spawn
+from .models import AgentToken, MachineShape, Run, Spawn
 
 # ONE distribution, ONE version. `aetherfy_vectors.__version__` is what
 # setup.py reads to stamp the wheel, so re-exporting it here means the
@@ -73,6 +89,7 @@ __all__ = [
     "write_result",
     "result",
     "wait",
+    "token",
     # PUBLIC IN BOTH LANGUAGES OR NEITHER. The JavaScript helper exports these
     # three from its entry point, so a task ported between the two would find
     # the bound readable in one and not the other. A caller sizing its own
@@ -80,6 +97,7 @@ __all__ = [
     "WAIT_TIMEOUT_MIN_SECONDS",
     "WAIT_TIMEOUT_MAX_SECONDS",
     "WAIT_TIMEOUT_DEFAULT_SECONDS",
+    "AgentToken",
     "MachineShape",
     "Run",
     "Spawn",
@@ -93,6 +111,7 @@ __all__ = [
     "RunNotFound",
     "RunAccessDenied",
     "SpawnError",
+    "TokenError",
     "TooManyRunsInFlight",
     "WaitTimeoutInvalid",
 ]
@@ -557,6 +576,87 @@ def wait(run_id: str, timeout_seconds: int = WAIT_TIMEOUT_DEFAULT_SECONDS) -> Ru
         "{0}/wait?timeout_seconds={1}".format(_run_url(run_id), timeout_seconds),
         timeout=timeout_seconds + _WAIT_TRANSPORT_MARGIN_SECONDS,
         retry_connection_errors=False,
+    )
+
+
+#: A cached token is handed out until this long before it expires, so a caller
+#: never receives one that dies on the way to the service it is meant for.
+#: Byte-for-byte the JavaScript helper's margin.
+_TOKEN_REFRESH_MARGIN_SECONDS = 60
+
+#: (key, audience, scopes) -> (token, expiry as epoch seconds). Keyed by the KEY
+#: as well as the request: a task machine is handed a new key for every run it
+#: serves, and a token minted from the previous run's key dies with that run.
+_token_cache: Dict[
+    Tuple[str, str, Optional[Tuple[str, ...]]], Tuple[AgentToken, float]
+] = {}
+
+
+def token(audience: str, scopes: Optional[Sequence[str]] = None) -> AgentToken:
+    """
+    Exchange this machine's key for a short-lived agent token for ``audience``.
+
+    Hand the token onward — to a tool, a sub-process, another service — instead
+    of ``AETHERFY_API_KEY``. It names one audience and that service refuses any
+    other, carries only ``scopes`` (every scope the key holds for that audience
+    when omitted), and stops working within fifteen minutes, or the moment this
+    deployment ends.
+
+    CACHED until a minute before it expires, per key, audience and scopes, so
+    calling this before every request costs one exchange per ten minutes rather
+    than one per request.
+
+    :raises TokenError: the control plane refused — read ``error_code``.
+    :raises TypeError: ``scopes`` is a single string rather than a list of them.
+    :raises NotRunningOnAgent: ``AETHERFY_API_KEY`` or ``AETHERFY_API_URL`` is
+        not set.
+    :raises AgentTransportError: the request never reached the control plane.
+    """
+    if isinstance(scopes, str):
+        # A str is a Sequence of one-character scopes: "runs:read" would ask
+        # for "r", "u", "n", ... and be refused with a message about none of it.
+        raise TypeError("scopes must be a list of scope names, not a single string.")
+    api_key = _require("AETHERFY_API_KEY", "the key a token is exchanged for")
+    api_url = _require("AETHERFY_API_URL", "the control plane's base URL")
+    requested = tuple(sorted(scopes)) if scopes is not None else None
+
+    cache_key = (api_key, audience, requested)
+    cached = _token_cache.get(cache_key)
+    if cached is not None and time.time() < cached[1] - _TOKEN_REFRESH_MARGIN_SECONDS:
+        return cached[0]
+
+    body: Dict[str, Any] = {"audience": audience}
+    if requested is not None:
+        body["scopes"] = list(requested)
+    status, response = _http.request_json(
+        "POST",
+        "{0}/agent-tokens".format(api_url.rstrip("/")),
+        api_key=api_key,
+        ua=_user_agent(),
+        body=body,
+    )
+
+    if status == 201 and isinstance(response, dict):
+        minted = AgentToken(
+            token=str(response.get("token")), expires_at=str(response.get("expires_at"))
+        )
+        try:
+            expires = datetime.fromisoformat(minted.expires_at.replace("Z", "+00:00"))
+        except ValueError:
+            raise TokenError(
+                "The token was minted but its expires_at ({0!r}) is not a "
+                "timestamp, so it cannot be cached safely.".format(minted.expires_at),
+                status_code=status,
+            ) from None
+        _token_cache[cache_key] = (minted, expires.timestamp())
+        return minted
+
+    detail = _detail_of(response)
+    message = detail.get("message") or "Minting a token failed with status {0}.".format(
+        status
+    )
+    raise TokenError(
+        message, status_code=status, error_code=detail.get("code"), details=detail
     )
 
 

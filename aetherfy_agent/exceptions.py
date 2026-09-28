@@ -327,3 +327,32 @@ class WaitTimeoutInvalid(RunReadError):
             error_code=DEPLOYMENT_WAIT_TIMEOUT_INVALID,
             details=details,
         )
+
+
+class TokenError(AgentError):
+    """
+    Raised when the control plane refuses to mint an agent token.
+
+    ``error_code`` is the platform's stable code and the thing to branch on:
+    ``AGENT_TOKEN_AUDIENCE_UNKNOWN`` (not an audience tokens are minted for),
+    ``AGENT_TOKEN_SCOPE_NOT_GRANTED`` (a scope this key cannot grant there),
+    ``AGENT_TOKENS_UNCONFIGURED`` (tokens are not enabled on this platform), or
+    ``AGENT_TOKEN_REQUIRES_AGENT_KEY`` (the key in ``AETHERFY_API_KEY`` is an
+    account key, not the one Aetherfy injected). ``details`` carries the
+    envelope's extras, e.g. ``audiences`` and ``not_granted``.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: Optional[int] = None,
+        error_code: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__(
+            message,
+            status_code=status_code,
+            details=details,
+            error_code=error_code,
+        )
