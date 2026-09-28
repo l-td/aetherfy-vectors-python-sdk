@@ -126,12 +126,23 @@ def test_the_one_minute_floor_applies_to_the_cache_too(transport):
     assert connection("google", min_valid_seconds=0).access_token == "new"
 
 
-def test_a_never_expiring_token_is_cached_for_good(transport):
-    transport.replies = [(200, answer(expires_in=None, provider="notion"))]
+def test_a_never_expiring_token_is_rechecked_after_a_while(transport, monkeypatch):
+    # Cached, but not for good: a disconnect on the dashboard revokes it, and a
+    # long-running agent must hear about that.
+    transport.replies = [
+        (200, answer(expires_in=None, token="first", provider="notion")),
+        (200, answer(expires_in=None, token="second", provider="notion")),
+    ]
+    clock = [1000.0]
+    monkeypatch.setattr(aetherfy_agent.connections, "monotonic", lambda: clock[0])
     first = connection("notion", min_valid_seconds=3000)
     assert first.expires_at is None
+    clock[0] += aetherfy_agent.connections._NO_EXPIRY_RECHECK_SECONDS - 1
     assert connection("notion", min_valid_seconds=3000) is first
     assert len(transport.calls) == 1
+    clock[0] += 1
+    assert connection("notion", min_valid_seconds=3000).access_token == "second"
+    assert len(transport.calls) == 2
 
 
 @pytest.mark.parametrize(

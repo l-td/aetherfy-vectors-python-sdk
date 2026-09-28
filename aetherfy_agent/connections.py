@@ -21,12 +21,15 @@ A PER-NAME IN-PROCESS CACHE. A token is reused until it would have less than
 ``max(min_valid_seconds, 60)`` seconds left — the same margin the control plane
 itself applies — so a loop calling ``connection("google")`` per item costs one
 request per token lifetime, not one per item. The cache is per process: a
-fan-out's worker processes each keep their own.
+fan-out's worker processes each keep their own. A token with no expiry
+(Notion's) is asked for again after ``_NO_EXPIRY_RECHECK_SECONDS``, so a
+disconnect or a reconnect on the dashboard reaches a long-running agent.
 """
 
 import threading
 from datetime import datetime, timedelta, timezone
-from typing import Dict, Optional
+from time import monotonic
+from typing import Dict, Optional, Tuple
 from urllib.parse import quote
 
 from . import _http
@@ -52,13 +55,20 @@ MIN_VALID_SECONDS_DEFAULT = 300
 #: cache holds itself to the same floor.
 _REFRESH_FLOOR_SECONDS = 60
 
-_cache: Dict[str, ConnectionToken] = {}
+#: How long a token with no expiry is reused before the control plane is asked
+#: again. Without a bound it would outlive its own revocation.
+_NO_EXPIRY_RECHECK_SECONDS = 300
+
+#: name -> (token, monotonic() when it was fetched)
+_cache: Dict[str, Tuple[ConnectionToken, float]] = {}
 _cache_lock = threading.Lock()
 
 
-def _fresh_enough(token: ConnectionToken, min_valid_seconds: int) -> bool:
+def _fresh_enough(
+    token: ConnectionToken, fetched_at: float, min_valid_seconds: int
+) -> bool:
     if token.expires_at is None:
-        return True
+        return monotonic() - fetched_at < _NO_EXPIRY_RECHECK_SECONDS
     margin = timedelta(seconds=max(min_valid_seconds, _REFRESH_FLOOR_SECONDS))
     return token.expires_at - datetime.now(timezone.utc) > margin
 
@@ -101,8 +111,8 @@ def connection(
 
     with _cache_lock:
         cached = _cache.get(name)
-    if cached is not None and _fresh_enough(cached, min_valid_seconds):
-        return cached
+    if cached is not None and _fresh_enough(*cached, min_valid_seconds):
+        return cached[0]
 
     # Imported here, not at module top: they live in the package's __init__,
     # which imports this module to re-export connection().
@@ -131,7 +141,7 @@ def connection(
             scopes=tuple(body.get("scopes") or ()),
         )
         with _cache_lock:
-            _cache[name] = token
+            _cache[name] = (token, monotonic())
         return token
 
     detail = body.get("detail") if isinstance(body, dict) else None

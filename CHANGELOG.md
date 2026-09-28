@@ -14,7 +14,8 @@ The next release is **2.0.0**: the changes marked BREAKING below are breaking un
   fresh OAuth access token (`ConnectionToken`) for a Google, Slack or Notion
   connection made on the Aetherfy dashboard, from the control plane's
   `POST /connections/{name}/token`. Tokens are cached per name in the process
-  until they would have less than `max(min_valid_seconds, 60)` seconds left.
+  until they would have less than `max(min_valid_seconds, 60)` seconds left;
+  a token with no expiry (Notion) is asked for again after five minutes.
   Refusals are typed: `ConnectionNotFound`, `ConnectionNeedsReauth`,
   `ConnectionUnavailable` (retryable) and `ConnectionAccessDenied`, all under
   `ConnectionTokenError`. Only an agent machine's own key is answered.
