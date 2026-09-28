@@ -648,6 +648,31 @@ except RunReadError as exc:
 Full contract, including the environment variables behind every call:
 [docs.aetherfy.com/agents/task-contract](https://docs.aetherfy.com/agents/task-contract).
 
+### Connections: Google, Slack and Notion tokens
+
+Connect Google, Slack or Notion to an agent (or its workspace) once, on the
+Aetherfy dashboard. Agent code then asks for a fresh access token by the
+connection's name; Aetherfy runs the OAuth sign-in and the refreshes, and no
+refresh token reaches the agent.
+
+```python
+from aetherfy_agent import connection
+from aetherfy_agent.exceptions import ConnectionNeedsReauth, ConnectionUnavailable
+
+try:
+    token = connection("google", min_valid_seconds=300)
+except ConnectionNeedsReauth:
+    print("reconnect it on the dashboard")
+except ConnectionUnavailable:
+    print("the provider did not answer; retry shortly")
+else:
+    headers = {"Authorization": f"{token.token_type} {token.access_token}"}
+```
+
+Only an agent machine's own `AETHERFY_API_KEY` is answered. A token is reused
+until it would have less than `min_valid_seconds` (and never less than a minute)
+left. The full contract is the Connections page of the Aetherfy agent docs.
+
 ## 🧩 Payload Schemas
 
 Collections can carry an optional payload schema that the SDK validates against **before** upsert — catching malformed payloads client-side without a round trip. Schemas are cached and automatically revalidated when they change server-side (via ETag).
