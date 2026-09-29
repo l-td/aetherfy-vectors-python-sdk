@@ -14,8 +14,9 @@ The next release is **2.0.0**: the changes marked BREAKING below are breaking un
   `AETHERFY_API_KEY` for a short-lived agent token (`POST /agent-tokens`) and
   returns an `AgentToken` (`token`, `expires_at`). The token names one audience,
   carries a subset of the key's scopes, and stops working within fifteen
-  minutes or when the deployment ends: it is what code on an agent hands onward
-  instead of the key. Cached per key, audience and scopes until a minute before
+  minutes or when the deployment ends. The only audience today is the control
+  plane, so a token is a narrower credential for it, not something to give a
+  third party. Cached per key, audience and scopes until a minute before
   it expires. A refusal raises the new `TokenError`, carrying the platform's
   `error_code`.
 

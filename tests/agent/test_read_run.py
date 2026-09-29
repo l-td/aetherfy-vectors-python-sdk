@@ -237,6 +237,29 @@ def test_someone_elses_run_is_the_same_refusal_from_both_reads(transport, call):
     assert exc.value.error_code == "DEPLOYMENT_ACCESS_DENIED"
 
 
+@pytest.mark.parametrize("call", [result, wait])
+def test_a_run_outside_the_agent_keys_scope_is_a_read_error_not_access_denied(
+    transport, call
+):
+    """The agent's own key reads only its own run and the runs it spawned
+    (aetherfy-control-plane api/middleware/agent_scope.py). Any other run is
+    403 AUTH_AGENT_KEY_OUT_OF_SCOPE -- a different code from another account's
+    run, so it must not be dressed up as RunAccessDenied."""
+    transport.reply = (
+        403,
+        refusal(
+            "AUTH_AGENT_KEY_OUT_OF_SCOPE", "This agent's credential cannot call it"
+        ),
+    )
+
+    with pytest.raises(RunReadError) as exc:
+        call(RUN_ID)
+
+    assert not isinstance(exc.value, RunAccessDenied)
+    assert exc.value.status_code == 403
+    assert exc.value.error_code == "AUTH_AGENT_KEY_OUT_OF_SCOPE"
+
+
 def test_the_two_refusals_are_provably_distinct(transport):
     transport.reply = (404, refusal("DEPLOYMENT_NOT_FOUND"))
     with pytest.raises(RunNotFound):

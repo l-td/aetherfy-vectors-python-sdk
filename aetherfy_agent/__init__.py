@@ -25,7 +25,7 @@ reads its payload and writes its result; whoever started it spawns and then
 reads that result back. ``payload``/``write_result`` are files on the machine
 and touch no network at all; ``spawn``/``result``/``wait`` are the control
 plane, and are the only calls here that do — with ``token``, which exchanges
-this machine's key for a short-lived token to hand onward instead of the key.
+this machine's key for a short-lived, narrower token for the control plane.
 
 It ships inside the ``aetherfy-vectors`` distribution beside
 ``aetherfy_vectors`` and ``aetherfy_memory``, and the standard runtime image
@@ -382,6 +382,9 @@ def spawn(child: str, payload: Optional[Dict[str, Any]] = None) -> Spawn:
     :raises TooManyRunsInFlight: 429, the concurrent-run cap is full. The one
         failure here worth retrying.
     :raises SpawnError: any other refusal — read ``error_code``, not the prose.
+        ``AUTH_AGENT_KEY_OUT_OF_SCOPE`` (403) means the credential in
+        ``AETHERFY_API_KEY`` may not spawn as this agent -- e.g. a token that
+        does not carry ``runs:spawn``.
     :raises AgentTransportError: the request never reached the control plane.
     """
     api_key = _require("AETHERFY_API_KEY", "the key a spawn authenticates with")
@@ -527,7 +530,11 @@ def result(run_id: str) -> Run:
     id of this run itself in ``AETHERFY_SPAWN_ID``.
 
     :raises RunNotFound: 404, no run has that id.
-    :raises RunAccessDenied: 403, the run belongs to another account.
+    :raises RunAccessDenied: 403 ``DEPLOYMENT_ACCESS_DENIED``, the run belongs to
+        another account (an account key was used).
+    :raises RunReadError: 403 ``AUTH_AGENT_KEY_OUT_OF_SCOPE`` when this machine's
+        own ``AETHERFY_API_KEY`` reads a run that is neither this agent's own
+        nor one it spawned: an agent's key reads only those.
     :raises RunReadError: any other refusal — read ``error_code``, not the prose.
     :raises AgentTransportError: the request never reached the control plane.
     """
@@ -560,7 +567,11 @@ def wait(run_id: str, timeout_seconds: int = WAIT_TIMEOUT_DEFAULT_SECONDS) -> Ru
     :raises WaitTimeoutInvalid: 422, the server rejected the timeout anyway —
         its bound moved and this helper's copy is stale.
     :raises RunNotFound: 404, no run has that id.
-    :raises RunAccessDenied: 403, the run belongs to another account.
+    :raises RunAccessDenied: 403 ``DEPLOYMENT_ACCESS_DENIED``, the run belongs to
+        another account (an account key was used).
+    :raises RunReadError: 403 ``AUTH_AGENT_KEY_OUT_OF_SCOPE`` when this machine's
+        own ``AETHERFY_API_KEY`` reads a run that is neither this agent's own
+        nor one it spawned: an agent's key reads only those.
     :raises RunReadError: any other refusal.
     :raises AgentTransportError: the request never reached the control plane.
     """
@@ -596,11 +607,17 @@ def token(audience: str, scopes: Optional[Sequence[str]] = None) -> AgentToken:
     """
     Exchange this machine's key for a short-lived agent token for ``audience``.
 
-    Hand the token onward — to a tool, a sub-process, another service — instead
-    of ``AETHERFY_API_KEY``. It names one audience and that service refuses any
-    other, carries only ``scopes`` (every scope the key holds for that audience
-    when omitted), and stops working within fifteen minutes, or the moment this
-    deployment ends.
+    The token is this same agent, narrowed further: it names one audience and
+    that service refuses any other, carries only ``scopes`` (every scope the key
+    holds for that audience when omitted), and stops working within fifteen
+    minutes, or the moment this deployment ends. Use it where code on this
+    machine needs less than the key -- a runs:read token for a component that
+    only reads runs.
+
+    IT IS A BEARER CREDENTIAL FOR ITS AUDIENCE, and today the only audience is
+    ``aetherfy-control-plane``. Do not give it to a third-party service to prove
+    who this agent is: whoever holds it can call the Aetherfy agents API with
+    its scopes until it expires.
 
     CACHED until a minute before it expires, per key, audience and scopes, so
     calling this before every request costs one exchange per ten minutes rather
