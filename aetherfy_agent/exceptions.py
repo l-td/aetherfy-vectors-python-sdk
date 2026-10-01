@@ -283,6 +283,11 @@ class RunAccessDenied(RunReadError):
     Raised on ``403 DEPLOYMENT_ACCESS_DENIED`` — the run belongs to another
     account.
 
+    Not raised for an agent's own key reading a run that is not its own: that
+    is ``403 AUTH_AGENT_KEY_OUT_OF_SCOPE``, a different code for a different
+    problem (what the key may read, not whose run it is), and it arrives as a
+    plain :class:`RunReadError` carrying that ``error_code``.
+
     Distinct from :class:`RunNotFound` because the platform distinguishes them,
     and the two are different problems: an id that does not exist is a bug in
     what you passed, an id you may not read is a bug in whose key you used.
@@ -326,4 +331,33 @@ class WaitTimeoutInvalid(RunReadError):
             status_code=422,
             error_code=DEPLOYMENT_WAIT_TIMEOUT_INVALID,
             details=details,
+        )
+
+
+class TokenError(AgentError):
+    """
+    Raised when the control plane refuses to mint an agent token.
+
+    ``error_code`` is the platform's stable code and the thing to branch on:
+    ``AGENT_TOKEN_AUDIENCE_UNKNOWN`` (not an audience tokens are minted for),
+    ``AGENT_TOKEN_SCOPE_NOT_GRANTED`` (a scope this key cannot grant there),
+    ``AGENT_TOKENS_UNCONFIGURED`` (tokens are not enabled on this platform), or
+    ``AGENT_TOKEN_REQUIRES_AGENT_KEY`` (the key in ``AETHERFY_API_KEY`` is an
+    account key, not the one Aetherfy injected). ``details`` carries the
+    envelope's extras, e.g. ``audiences`` and ``not_granted``.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: Optional[int] = None,
+        error_code: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__(
+            message,
+            status_code=status_code,
+            details=details,
+            error_code=error_code,
         )

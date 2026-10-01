@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 The next release is **2.0.0**: the changes marked BREAKING below are breaking under Semantic Versioning, so this cannot ship as 1.2.0.
 
+### Added
+- **`aetherfy_agent.token(audience, scopes=None)`** exchanges the agent's own
+  `AETHERFY_API_KEY` for a short-lived agent token (`POST /agent-tokens`) and
+  returns an `AgentToken` (`token`, `expires_at`). The token names one audience,
+  carries a subset of the key's scopes, and stops working within fifteen
+  minutes or when the deployment ends. The only audience today is the control
+  plane, so a token is a narrower credential for it, not something to give a
+  third party. Cached per key, audience and scopes until a minute before
+  it expires. A refusal raises the new `TokenError`, carrying the platform's
+  `error_code`.
+
 ### Changed
 - **BREAKING (wire): `search()` sends `POST /collections/{name}/points/query`**
   instead of Qdrant's retired `/points/search`, which the API now refuses with

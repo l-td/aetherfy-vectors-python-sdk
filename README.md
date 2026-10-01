@@ -645,6 +645,31 @@ except RunReadError as exc:
     print(exc.error_code)
 ```
 
+With the agent's own `AETHERFY_API_KEY`, the control plane lets a run read only
+itself and the runs its agent spawned; reading any other run is refused with
+`RunReadError` and `error_code` `AUTH_AGENT_KEY_OUT_OF_SCOPE`.
+
+### Handing out a short-lived token instead of the key
+
+`AETHERFY_API_KEY` lives as long as the deployment. When code running on the
+agent needs less than the key -- say, only to read its runs -- mint it a token:
+one audience, a subset of the key's scopes, and dead within fifteen minutes or
+the moment the deployment ends. `token()` caches it until a minute before it
+expires, so calling it before every request is cheap. Today the only audience
+is `aetherfy-control-plane`, so a token is a credential for the Aetherfy agents
+API: never give one to a third-party service.
+
+```python
+from aetherfy_agent import token
+from aetherfy_agent.exceptions import TokenError
+
+try:
+    minted = token("aetherfy-control-plane", scopes=["runs:read"])
+    print(minted.token, minted.expires_at)
+except TokenError as exc:
+    print(exc.error_code)
+```
+
 Full contract, including the environment variables behind every call:
 [docs.aetherfy.com/agents/task-contract](https://docs.aetherfy.com/agents/task-contract).
 
