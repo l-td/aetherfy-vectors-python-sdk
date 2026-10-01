@@ -327,3 +327,102 @@ class WaitTimeoutInvalid(RunReadError):
             error_code=DEPLOYMENT_WAIT_TIMEOUT_INVALID,
             details=details,
         )
+
+
+#: The control-plane codes the connection token route answers with, each given
+#: a type below. One definition each, used both to pick the type and to stamp
+#: its ``error_code`` — see the note on RUN_PAYLOAD_TOO_LARGE above.
+CONNECTION_NOT_FOUND = "CONNECTION_NOT_FOUND"
+CONNECTION_NEEDS_REAUTH = "CONNECTION_NEEDS_REAUTH"
+CONNECTION_PROVIDER_UNAVAILABLE = "CONNECTION_PROVIDER_UNAVAILABLE"
+CONNECTION_REQUIRES_AGENT_KEY = "CONNECTION_REQUIRES_AGENT_KEY"
+
+
+class ConnectionTokenError(AgentError):
+    """
+    Raised when the control plane refuses a connection token.
+
+    Same discipline as :class:`RunReadError`: the STATUS AND THE CODE together
+    select a subclass, and an unrecognised pairing arrives as this class
+    reporting exactly what came back. ``retryable`` says whether asking again
+    shortly can succeed.
+    """
+
+    retryable = False
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: Optional[int] = None,
+        error_code: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__(
+            message,
+            status_code=status_code,
+            details=details,
+            error_code=error_code,
+        )
+
+
+class ConnectionNotFound(ConnectionTokenError):
+    """
+    Raised on ``404 CONNECTION_NOT_FOUND`` — no connection by that name on this
+    agent or its workspace. Connect it on the dashboard, or check the name.
+    """
+
+    def __init__(self, message: str, *, details: Optional[Dict[str, Any]] = None):
+        super().__init__(
+            message, status_code=404, error_code=CONNECTION_NOT_FOUND, details=details
+        )
+
+
+class ConnectionNeedsReauth(ConnectionTokenError):
+    """
+    Raised on ``409 CONNECTION_NEEDS_REAUTH`` — the provider refused the stored
+    grant (it was revoked, or lapsed). Only reconnecting it on the dashboard
+    helps; asking again cannot.
+    """
+
+    def __init__(self, message: str, *, details: Optional[Dict[str, Any]] = None):
+        super().__init__(
+            message,
+            status_code=409,
+            error_code=CONNECTION_NEEDS_REAUTH,
+            details=details,
+        )
+
+
+class ConnectionUnavailable(ConnectionTokenError):
+    """
+    Raised on ``502 CONNECTION_PROVIDER_UNAVAILABLE`` — the provider did not
+    answer a refresh in time and the stored token has expired. Transient:
+    retry shortly.
+    """
+
+    retryable = True
+
+    def __init__(self, message: str, *, details: Optional[Dict[str, Any]] = None):
+        super().__init__(
+            message,
+            status_code=502,
+            error_code=CONNECTION_PROVIDER_UNAVAILABLE,
+            details=details,
+        )
+
+
+class ConnectionAccessDenied(ConnectionTokenError):
+    """
+    Raised on ``403 CONNECTION_REQUIRES_AGENT_KEY`` — the key is not a running
+    agent's own. Tokens are handed only to the ``AETHERFY_API_KEY`` the platform
+    injects into an agent machine; an account key is refused.
+    """
+
+    def __init__(self, message: str, *, details: Optional[Dict[str, Any]] = None):
+        super().__init__(
+            message,
+            status_code=403,
+            error_code=CONNECTION_REQUIRES_AGENT_KEY,
+            details=details,
+        )

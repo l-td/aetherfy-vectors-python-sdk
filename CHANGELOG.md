@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 The next release is **2.0.0**: the changes marked BREAKING below are breaking under Semantic Versioning, so this cannot ship as 1.2.0.
 
+### Added
+- **`aetherfy_agent.connection(name, *, min_valid_seconds=300)`** returns a
+  fresh OAuth access token (`ConnectionToken`) for a Google, Slack or Notion
+  connection made on the Aetherfy dashboard, from the control plane's
+  `POST /connections/{name}/token`. Tokens are cached per name in the process
+  until they would have less than `max(min_valid_seconds, 60)` seconds left;
+  a token with no expiry (Notion) is asked for again after five minutes.
+  Refusals are typed: `ConnectionNotFound`, `ConnectionNeedsReauth`,
+  `ConnectionUnavailable` (retryable) and `ConnectionAccessDenied`, all under
+  `ConnectionTokenError`. Only an agent machine's own key is answered.
+
 ### Changed
 - **BREAKING (wire): `search()` sends `POST /collections/{name}/points/query`**
   instead of Qdrant's retired `/points/search`, which the API now refuses with
