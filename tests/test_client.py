@@ -120,7 +120,24 @@ class TestCollectionManagement:
         assert result.name == "test_collection"
         args, kwargs = mock_requests.request.call_args
         assert kwargs["json"]["vectors"]["size"] == 256
-        assert kwargs["json"]["vectors"]["distance"] == "Euclidean"
+        # "Euclidean" is accepted as input and goes out as the API's "Euclid".
+        assert kwargs["json"]["vectors"]["distance"] == "Euclid"
+
+    def test_euclidean_goes_on_the_wire_as_euclid(
+        self, client, mock_requests, mock_successful_response
+    ):
+        """DistanceMetric.EUCLIDEAN is sent as "Euclid", the name the API stores
+        and returns; the API refuses "Euclidean" (400 VALIDATION_ERROR)."""
+        mock_requests.request.return_value = mock_successful_response({})
+
+        for config in (
+            VectorConfig(size=8, distance=DistanceMetric.EUCLIDEAN),
+            {"size": 8, "distance": "euclidean"},
+            {"size": 8, "distance": "EUCLID"},
+        ):
+            client.create_collection("test_collection", config)
+            args, kwargs = mock_requests.request.call_args
+            assert kwargs["json"]["vectors"]["distance"] == "Euclid", config
 
     def test_create_collection_with_description(
         self, client, mock_requests, mock_successful_response

@@ -10,6 +10,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The next release is **2.0.0**: the changes marked BREAKING below are breaking under Semantic Versioning, so this cannot ship as 1.2.0.
 
 ### Changed
+- **BREAKING (wire): `DistanceMetric.EUCLIDEAN` is `"Euclid"`, not
+  `"Euclidean"`.** `"Euclid"` is the API's own name: a collection created with
+  it reads back `"Euclid"`, where `"Euclidean"` never round-tripped (it was
+  stored and returned as `"Euclid"`, so comparing a collection's distance to
+  the constant's value silently failed). The API now refuses `"Euclidean"` with
+  400 `VALIDATION_ERROR` (field `vectors`), so a 1.x SDK cannot create a
+  Euclidean collection against it. The member's name is unchanged, and
+  `create_collection` still accepts `"euclidean"` and `"euclid"` in any case,
+  sending `"Euclid"`.
 - **BREAKING (wire): `search()` sends `POST /collections/{name}/points/query`**
   instead of Qdrant's retired `/points/search`, which the API now refuses with
   410 `ROUTE_RETIRED`. The call, its arguments and its return value are
