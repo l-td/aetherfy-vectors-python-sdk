@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **BREAKING: the memory layer's threads collection is named for its
+  workspace** — `__threads__<workspace>` in a workspace, `__threads__` outside
+  one. Collection names are unique per account, so the single `__threads__`
+  every workspace used could exist in one workspace only: a second workspace's
+  first `create_thread` was refused 409 `COLLECTION_NAME_TAKEN`. A
+  `MemoryClient` derives the name from its own workspace on every use, so it
+  never opens another workspace's threads collection. A `__threads__` created
+  inside a workspace by an earlier version is not read: create the threads
+  again (there is no migration shim).
+- **BREAKING (import): `aetherfy_memory.models.THREADS_COLLECTION` is
+  replaced by `THREADS_COLLECTION_PREFIX` (`"__threads__"`) and
+  `threads_collection_name(workspace)`.**
+- The control plane now refuses to move a threads collection to another
+  workspace (`COLLECTION_SDK_MANAGED`); the prefix it refuses on is held equal
+  to `THREADS_COLLECTION_PREFIX` by an e2e pair test.
+
+### Documentation
+- The README no longer says workspaces avoid name collisions: collection names
+  are unique per account, and a workspace decides where a collection is
+  reachable from, not what it may be called.
+
 ## [1.2.0] - 2026-10-04
 
 This release contains changes marked BREAKING below. They ship in a minor

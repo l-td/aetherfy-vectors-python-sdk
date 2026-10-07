@@ -13,7 +13,7 @@ requires `role`/`content`; a memory uses `text`), so a Thread is not
 add-substitutable for a Namespace. Both share the read/scope surface via
 `_Scope`.
 
-EVERY THREAD IN A WORKSPACE SHARES ONE COLLECTION (`__threads__`), and a
+EVERY THREAD IN A WORKSPACE SHARES ONE COLLECTION (`__threads__<workspace>`), and a
 thread is a FILTER over it: `thread_id` is stamped on every point and every
 read and write this class issues carries the matching clause. The clause is
 assembled here, never from a caller-supplied string, because the proxy
