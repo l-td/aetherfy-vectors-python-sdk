@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documented
+- `result()` and `wait()` called with the agent's own `AETHERFY_API_KEY` on a
+  run that is neither the agent's own nor one it spawned get 403
+  `AUTH_AGENT_KEY_OUT_OF_SCOPE` from the control plane, which arrives as
+  `RunReadError` with that `error_code` -- not `RunAccessDenied`, which stays
+  `DEPLOYMENT_ACCESS_DENIED` (another account's run). No behaviour change.
+
 ## [1.2.0] - 2026-10-04
 
 This release contains changes marked BREAKING below. They ship in a minor
