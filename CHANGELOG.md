@@ -7,12 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **BREAKING (platform): an agent's injected `AETHERFY_API_KEY` is no longer
+  the account on the Aetherfy agents API.** The control plane now answers it
+  403 `AUTH_AGENT_KEY_OUT_OF_SCOPE` on every route outside the routes listed at
+  [docs.aetherfy.com/platform/api-keys](https://docs.aetherfy.com/platform/api-keys#agent-scoped-keys-issued-by-aetherfy),
+  and on a listed route whose path names another agent or another agent's run.
+  The `aetherfy_agent` helpers call only listed routes and are unaffected; code
+  in an agent that used the key for anything else (deploying, listing agents,
+  secrets, workspaces) now gets that 403. To give an agent account access on
+  purpose, create a key yourself, store it as one of the agent's secrets under
+  a name of your own (the `AETHERFY_` prefix is reserved), and send that key
+  instead. On the Aetherfy vector API the injected key still acts for the whole
+  account.
+
 ### Documented
 - `result()` and `wait()` called with the agent's own `AETHERFY_API_KEY` on a
-  run that is neither the agent's own nor one it spawned get 403
-  `AUTH_AGENT_KEY_OUT_OF_SCOPE` from the control plane, which arrives as
-  `RunReadError` with that `error_code` -- not `RunAccessDenied`, which stays
-  `DEPLOYMENT_ACCESS_DENIED` (another account's run). No behaviour change.
+  run it may not read get that 403, which arrives as `RunReadError` with
+  `error_code` `AUTH_AGENT_KEY_OUT_OF_SCOPE` -- not `RunAccessDenied`, which
+  stays `DEPLOYMENT_ACCESS_DENIED` (another account's run). The SDK's own
+  behaviour is unchanged.
 
 ## [1.2.0] - 2026-10-04
 
