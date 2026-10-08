@@ -43,6 +43,7 @@ def threads_collection_name(workspace: Optional[str]) -> str:
     """The threads collection of `workspace` (None: outside any workspace)."""
     return THREADS_COLLECTION_PREFIX + (workspace or "")
 
+
 # The tenant key. A NORMAL customer payload key, not a reserved/attested one:
 # the attested tier (`__aetherfy_agent_id`, `__aetherfy_deployment_id`) is for
 # values the server re-stamps from the credential and can therefore vouch for,
