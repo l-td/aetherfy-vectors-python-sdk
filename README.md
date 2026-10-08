@@ -654,6 +654,10 @@ except RunReadError as exc:
     print(exc.error_code)
 ```
 
+With the agent's own `AETHERFY_API_KEY`, a read the control plane does not
+allow that key ([which ones it allows](https://docs.aetherfy.com/platform/api-keys#agent-scoped-keys-issued-by-aetherfy))
+is refused with `RunReadError` and `error_code` `AUTH_AGENT_KEY_OUT_OF_SCOPE`.
+
 Full contract, including the environment variables behind every call:
 [docs.aetherfy.com/agents/task-contract](https://docs.aetherfy.com/agents/task-contract).
 

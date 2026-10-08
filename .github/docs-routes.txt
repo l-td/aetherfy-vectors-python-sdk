@@ -20,3 +20,4 @@ https://docs.aetherfy.com/vectors/errors
 https://docs.aetherfy.com/vectors/search-tuning
 https://docs.aetherfy.com/quickstart
 https://docs.aetherfy.com/agents/task-contract
+https://docs.aetherfy.com/platform/api-keys
