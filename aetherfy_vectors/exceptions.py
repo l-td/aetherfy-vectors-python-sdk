@@ -246,10 +246,17 @@ class PartialUpsertError(AetherfyVectorsException):
         **kwargs,
     ):
         failed_count = sum(len(f["point_ids"]) for f in failed)
+        # A failed chunk's outcome is unknown, never "not written": a chunk
+        # that timed out or lost its connection may have been applied, and
+        # the server writes a large chunk in parts, so a refusal can come
+        # after part of it was written.
         message = (
-            f"Partial upsert: {saved} of {total} points saved; "
-            f"{failed_count} failed across {len(failed)} chunk(s). "
-            f"See .failed for per-chunk point IDs and errors."
+            f"Partial upsert: {saved} of {total} points confirmed saved; the outcome "
+            f"of the other {failed_count} point(s), in {len(failed)} chunk(s) that "
+            f"failed, is unknown: a chunk that timed out, lost its connection or was "
+            f"refused may have been written in whole or in part. Retrying the upsert "
+            f"is safe: it replaces points by id. See .failed for per-chunk point IDs "
+            f"and errors."
         )
         super().__init__(message, **kwargs)
         self.saved = saved
