@@ -341,6 +341,17 @@ def parse_error_response(
             retry_after=retry_after,
             error_code=error_code,
         )
+    elif status_code == 403 and error_code == "AGENT_KEY_WORKSPACE_FORBIDDEN":
+        from .exceptions import AgentWorkspaceForbiddenError
+
+        workspace = details.get("workspace") if isinstance(details, dict) else None
+        return AgentWorkspaceForbiddenError(
+            workspace,
+            request_id=request_id,
+            status_code=status_code,
+            details=details,
+            error_code=error_code,
+        )
     elif status_code in [502, 503, 504]:
         return ServiceUnavailableError(
             message,
