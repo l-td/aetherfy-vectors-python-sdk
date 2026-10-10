@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- `PartialUpsertError`'s message no longer counts the points of a failed chunk
+  as failed: it reports them as of unknown outcome. A chunk that timed out or
+  lost its connection may have been written, and the server writes a large
+  chunk in parts, so a refusal can come after part of it was written. The
+  message now says so, and that retrying the upsert is safe because it
+  replaces points by id. Only the message changed: the class, `.saved`,
+  `.total` and `.failed` are as before.
 - **BREAKING: the memory layer's threads collection is named for its
   workspace** — `__threads__<workspace>` in a workspace, `__threads__` outside
   one. Collection names are unique per account, so the single `__threads__`
