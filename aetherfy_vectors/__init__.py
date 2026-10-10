@@ -27,6 +27,7 @@ from .exceptions import (
     PartialUpsertError,
     CollectionInUseError,
     CollectionInOtherRegionError,
+    AgentWorkspaceForbiddenError,
     QuotaExceededError,
 )
 from .models import (
@@ -58,6 +59,7 @@ __all__ = [
     "PartialUpsertError",
     "CollectionInUseError",
     "CollectionInOtherRegionError",
+    "AgentWorkspaceForbiddenError",
     "QuotaExceededError",
     "SearchResult",
     "Point",

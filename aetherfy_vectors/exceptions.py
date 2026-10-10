@@ -188,6 +188,40 @@ class CollectionInOtherRegionError(AetherfyVectorsException):
         self.requesting_region = requesting_region
 
 
+class AgentWorkspaceForbiddenError(AetherfyVectorsException):
+    """An agent's API key addressed a workspace it has not been granted.
+
+    The key Aetherfy injects into a deployed agent reaches its own workspace
+    plus the workspaces the account owner granted it; any other is refused
+    (403 ``AGENT_KEY_WORKSPACE_FORBIDDEN``) whether or not the collection
+    exists there. ``workspace`` names it, or is None for the collections in no
+    workspace. Not retryable: the owner grants access on the agent's page in
+    the dashboard, or with ``afy access <agent> --add <workspace>``, and it
+    takes effect within 60 seconds.
+    """
+
+    def __init__(
+        self,
+        workspace: Optional[str],
+        message: Optional[str] = None,
+        **kwargs,
+    ):
+        where = (
+            f"workspace '{workspace}'"
+            if workspace
+            else "the collections in no workspace"
+        )
+        if message is None:
+            message = f"This agent's API key cannot use {where}."
+        add = workspace if workspace else '""'
+        message += (
+            f" Ask the account owner to grant this agent access to {where}: "
+            f"the agent's page in the dashboard, or `afy access <agent> --add {add}`."
+        )
+        super().__init__(message, **kwargs)
+        self.workspace = workspace
+
+
 class QuotaExceededError(AetherfyVectorsException):
     """Tier quota exceeded (e.g. collection count limit)."""
 
