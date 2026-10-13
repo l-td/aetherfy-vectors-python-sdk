@@ -533,8 +533,8 @@ def result(run_id: str) -> Run:
     :raises RunAccessDenied: 403 ``DEPLOYMENT_ACCESS_DENIED``, the run belongs to
         another account (an account key was used).
     :raises RunReadError: 403 ``AUTH_AGENT_KEY_OUT_OF_SCOPE`` when this machine's
-        own ``AETHERFY_API_KEY`` reads a run that is neither this agent's own
-        nor one it spawned: an agent's key reads only those.
+        own ``AETHERFY_API_KEY`` reads a run that key may not read (which
+        ones it may: https://docs.aetherfy.com/platform/api-keys#agent-scoped-keys-issued-by-aetherfy).
     :raises RunReadError: any other refusal — read ``error_code``, not the prose.
     :raises AgentTransportError: the request never reached the control plane.
     """
@@ -570,8 +570,8 @@ def wait(run_id: str, timeout_seconds: int = WAIT_TIMEOUT_DEFAULT_SECONDS) -> Ru
     :raises RunAccessDenied: 403 ``DEPLOYMENT_ACCESS_DENIED``, the run belongs to
         another account (an account key was used).
     :raises RunReadError: 403 ``AUTH_AGENT_KEY_OUT_OF_SCOPE`` when this machine's
-        own ``AETHERFY_API_KEY`` reads a run that is neither this agent's own
-        nor one it spawned: an agent's key reads only those.
+        own ``AETHERFY_API_KEY`` reads a run that key may not read (which
+        ones it may: https://docs.aetherfy.com/platform/api-keys#agent-scoped-keys-issued-by-aetherfy).
     :raises RunReadError: any other refusal.
     :raises AgentTransportError: the request never reached the control plane.
     """

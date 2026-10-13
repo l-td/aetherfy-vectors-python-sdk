@@ -6,7 +6,7 @@ aetherfy_vectors.qdrant_compat for the exact contract) that provides global
 vector database operations with automatic replication, caching, and sub-50ms latency worldwide.
 """
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 __author__ = "Aetherfy"
 __email__ = "developers@aetherfy.com"
 
@@ -27,6 +27,7 @@ from .exceptions import (
     PartialUpsertError,
     CollectionInUseError,
     CollectionInOtherRegionError,
+    AgentWorkspaceForbiddenError,
     QuotaExceededError,
 )
 from .models import (
@@ -58,6 +59,7 @@ __all__ = [
     "PartialUpsertError",
     "CollectionInUseError",
     "CollectionInOtherRegionError",
+    "AgentWorkspaceForbiddenError",
     "QuotaExceededError",
     "SearchResult",
     "Point",

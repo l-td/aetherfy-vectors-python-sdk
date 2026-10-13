@@ -9,7 +9,7 @@ reserved-field guard for the merge/delete-keys helpers.
 import pytest
 from unittest.mock import MagicMock
 
-from aetherfy_memory.models import THREAD_ID_KEY, THREADS_COLLECTION
+from aetherfy_memory.models import THREAD_ID_KEY, threads_collection_name
 from aetherfy_memory.namespace import Namespace
 from aetherfy_memory.thread import Thread
 from aetherfy_vectors.exceptions import (
@@ -37,7 +37,7 @@ def _make_thread():
     client.retrieve.return_value = [
         {"id": P1, "payload": {THREAD_ID_KEY: "conv-1", "role": "user"}}
     ]
-    return Thread("conv-1", THREADS_COLLECTION, client), client
+    return Thread("conv-1", threads_collection_name("my-bot"), client), client
 
 
 # ---------- set_metadata ---------------------------------------------------

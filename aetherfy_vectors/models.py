@@ -14,7 +14,8 @@ class DistanceMetric(Enum):
     """Supported distance metrics for vector similarity."""
 
     COSINE = "Cosine"
-    EUCLIDEAN = "Euclidean"
+    # The API's own name: a collection created with it reads back "Euclid".
+    EUCLIDEAN = "Euclid"
     DOT = "Dot"
     MANHATTAN = "Manhattan"
 

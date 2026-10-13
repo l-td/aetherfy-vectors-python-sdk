@@ -69,6 +69,12 @@ no collection slot and a plan's collection limit does not cap how many
 conversations you can have. One collection means one dimension for all of
 them, so `create_thread` takes no `vector_size`: it comes from the client.
 
+That collection is `__threads__<workspace>` in a workspace and `__threads__`
+outside one: collection names are unique per account, so each workspace's
+conversations need a name of their own. It is managed by the SDK. Aetherfy
+refuses to move it to another workspace (a moved one would be read by no
+client of either workspace).
+
 ```python
 memory = MemoryClient(thread_vector_size=1536)   # threads, for OpenAI small
 ```
@@ -444,7 +450,9 @@ PRS violations raise `ValidationError` (400) or surface as 413
 
 ## 🤝 Multi-Agent Workspaces
 
-Workspaces let multiple agents share vector collections without name collisions. All collections created through a workspace-scoped client are automatically namespaced — agents in the same workspace see each other's collections; agents in different workspaces are fully isolated.
+Workspaces let multiple agents share vector collections. A collection belongs to one workspace, and that decides where it is reachable from: agents in the same workspace see each other's collections, and agents in other workspaces (or outside any) cannot reach them.
+
+Collection names are unique per **account**, not per workspace: a workspace decides where a collection is reachable from, not what it may be called. `documents` in `invoice-pipeline` and `documents` outside any workspace cannot both exist; the second create answers 409 `COLLECTION_NAME_TAKEN`.
 
 ### Creating a workspace-scoped client
 
@@ -459,10 +467,11 @@ client = AetherfyVectorsClient(
 
 ### How scoping works
 
-Collection names are automatically prefixed — you always use the short name:
+You always use the collection's own name; the client sends it on the
+workspace's routes:
 
 ```python
-# Create a collection (stored as "invoice-pipeline/documents" internally)
+# Create a collection in the client's workspace
 from aetherfy_vectors.models import VectorConfig, DistanceMetric
 
 client.create_collection("documents", VectorConfig(size=768, distance=DistanceMetric.COSINE))
@@ -505,7 +514,7 @@ client = AetherfyVectorsClient(api_key=os.environ["AETHERFY_API_KEY"])
 ### No workspace
 
 ```python
-# No workspace — collections are stored as-is, not scoped.
+# No workspace — the collection is reachable from outside any workspace.
 # Pass None explicitly to ignore AETHERFY_WORKSPACE inside a workspaced agent.
 client = AetherfyVectorsClient(api_key="afy_live_your_key", workspace=None)
 client.create_collection("my-global-collection", VectorConfig(size=768, distance=DistanceMetric.COSINE))
@@ -645,9 +654,9 @@ except RunReadError as exc:
     print(exc.error_code)
 ```
 
-With the agent's own `AETHERFY_API_KEY`, the control plane lets a run read only
-itself and the runs its agent spawned; reading any other run is refused with
-`RunReadError` and `error_code` `AUTH_AGENT_KEY_OUT_OF_SCOPE`.
+With the agent's own `AETHERFY_API_KEY`, a read the control plane does not
+allow that key ([which ones it allows](https://docs.aetherfy.com/platform/api-keys#agent-scoped-keys-issued-by-aetherfy))
+is refused with `RunReadError` and `error_code` `AUTH_AGENT_KEY_OUT_OF_SCOPE`.
 
 ### Handing out a short-lived token instead of the key
 

@@ -1,7 +1,7 @@
 """Wire-level contract for search(search_params=...).
 
 The backend forwards the search body verbatim to Qdrant (raw-body passthrough
-on POST /points/search), so `params` is a pure serialization contract: what the
+on POST /points/query), so `params` is a pure serialization contract: what the
 SDK puts in the body is what the engine gets. These tests pin the body, not the
 behavior — no live search is needed to prove the contract.
 
@@ -26,7 +26,7 @@ QUERY_VECTOR = [0.1, 0.2, 0.3, 0.4]
 # built from the client) so a change in the client is a diff here, not a
 # self-fulfilling assertion. Key order included: the cache key is byte-derived.
 BASELINE_BODY = {
-    "vector": QUERY_VECTOR,
+    "query": QUERY_VECTOR,
     "limit": 10,
     "offset": 0,
     "with_payload": True,
@@ -38,7 +38,7 @@ BASELINE_BODY = {
 def searching_client(client, mock_requests, mock_successful_response):
     """Client whose next search returns one well-formed result."""
     mock_requests.request.return_value = mock_successful_response(
-        {"result": [{"id": 1, "score": 0.9, "payload": {}, "vector": QUERY_VECTOR}]}
+        {"result": {"points": [{"id": 1, "score": 0.9, "payload": {}, "vector": QUERY_VECTOR}]}}
     )
     return client
 

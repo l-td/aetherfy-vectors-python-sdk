@@ -248,7 +248,7 @@ def test_a_run_outside_the_agent_keys_scope_is_a_read_error_not_access_denied(
     transport.reply = (
         403,
         refusal(
-            "AUTH_AGENT_KEY_OUT_OF_SCOPE", "This agent's credential cannot call it"
+            "AUTH_AGENT_KEY_OUT_OF_SCOPE", "This agent's API key cannot call it"
         ),
     )
 

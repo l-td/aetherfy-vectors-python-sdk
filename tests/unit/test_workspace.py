@@ -128,7 +128,7 @@ class TestVectorOperationsWithWorkspace:
         assert call_args[0][0] == "POST"
         # Post-A/B: nested URL form, not URL-encoded slash.
         assert "workspaces/test-workspace/collections/documents" in call_args[0][1]
-        assert "points/search" in call_args[0][1]
+        assert call_args[0][1].endswith("points/query")
 
     def test_upsert_with_workspace(self, mock_client):
         """Test upsert operation scopes collection name."""

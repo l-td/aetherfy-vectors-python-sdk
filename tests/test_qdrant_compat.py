@@ -311,8 +311,8 @@ def wired(client, mock_requests):
 
     def answer(*args, **kwargs):
         url = kwargs.get("url", "")
-        if url.endswith("/points/search"):
-            return _response({"result": []})
+        if url.endswith("/points/query"):
+            return _response({"result": {"points": []}})
         if url.endswith("/points/retrieve"):
             return _response({"result": []})
         return _response(
