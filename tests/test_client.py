@@ -120,7 +120,24 @@ class TestCollectionManagement:
         assert result.name == "test_collection"
         args, kwargs = mock_requests.request.call_args
         assert kwargs["json"]["vectors"]["size"] == 256
-        assert kwargs["json"]["vectors"]["distance"] == "Euclidean"
+        # "Euclidean" is accepted as input and goes out as the API's "Euclid".
+        assert kwargs["json"]["vectors"]["distance"] == "Euclid"
+
+    def test_euclidean_goes_on_the_wire_as_euclid(
+        self, client, mock_requests, mock_successful_response
+    ):
+        """DistanceMetric.EUCLIDEAN is sent as "Euclid", the name the API stores
+        and returns; the API refuses "Euclidean" (400 VALIDATION_ERROR)."""
+        mock_requests.request.return_value = mock_successful_response({})
+
+        for config in (
+            VectorConfig(size=8, distance=DistanceMetric.EUCLIDEAN),
+            {"size": 8, "distance": "euclidean"},
+            {"size": 8, "distance": "EUCLID"},
+        ):
+            client.create_collection("test_collection", config)
+            args, kwargs = mock_requests.request.call_args
+            assert kwargs["json"]["vectors"]["distance"] == "Euclid", config
 
     def test_create_collection_with_description(
         self, client, mock_requests, mock_successful_response
@@ -735,7 +752,7 @@ class TestSearchOperations:
         self, client, mock_requests, mock_successful_response, sample_search_results
     ):
         """Test successful vector search."""
-        search_data = {"result": sample_search_results}
+        search_data = {"result": {"points": sample_search_results}}
         mock_requests.request.return_value = mock_successful_response(search_data)
 
         query_vector = [0.1, 0.2, 0.3, 0.4]
@@ -749,15 +766,16 @@ class TestSearchOperations:
 
         args, kwargs = mock_requests.request.call_args
         assert kwargs["method"] == "POST"
-        assert "points/search" in kwargs["url"]
-        assert kwargs["json"]["vector"] == query_vector
+        assert kwargs["url"].endswith("/points/query")
+        assert kwargs["json"]["query"] == query_vector
+        assert "vector" not in kwargs["json"]
         assert kwargs["json"]["limit"] == 5
 
     def test_search_with_filter(
         self, client, mock_requests, mock_successful_response, sample_search_results
     ):
         """Test search with filter conditions."""
-        search_data = {"result": sample_search_results}
+        search_data = {"result": {"points": sample_search_results}}
         mock_requests.request.return_value = mock_successful_response(search_data)
 
         query_vector = [0.1, 0.2, 0.3, 0.4]
@@ -775,7 +793,7 @@ class TestSearchOperations:
         self, client, mock_requests, mock_successful_response, sample_search_results
     ):
         """Test search with score threshold."""
-        search_data = {"result": sample_search_results}
+        search_data = {"result": {"points": sample_search_results}}
         mock_requests.request.return_value = mock_successful_response(search_data)
 
         query_vector = [0.1, 0.2, 0.3, 0.4]

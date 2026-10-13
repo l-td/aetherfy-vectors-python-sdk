@@ -188,6 +188,40 @@ class CollectionInOtherRegionError(AetherfyVectorsException):
         self.requesting_region = requesting_region
 
 
+class AgentWorkspaceForbiddenError(AetherfyVectorsException):
+    """An agent's API key addressed a workspace it has not been granted.
+
+    The key Aetherfy injects into a deployed agent reaches its own workspace
+    plus the workspaces the account owner granted it; any other is refused
+    (403 ``AGENT_KEY_WORKSPACE_FORBIDDEN``) whether or not the collection
+    exists there. ``workspace`` names it, or is None for the collections in no
+    workspace. Not retryable: the owner grants access on the agent's page in
+    the dashboard, or with ``afy access <agent> --add <workspace>``, and it
+    takes effect within 60 seconds.
+    """
+
+    def __init__(
+        self,
+        workspace: Optional[str],
+        message: Optional[str] = None,
+        **kwargs,
+    ):
+        where = (
+            f"workspace '{workspace}'"
+            if workspace
+            else "the collections in no workspace"
+        )
+        if message is None:
+            message = f"This agent's API key cannot use {where}."
+        add = workspace if workspace else '""'
+        message += (
+            f" Ask the account owner to grant this agent access to {where}: "
+            f"the agent's page in the dashboard, or `afy access <agent> --add {add}`."
+        )
+        super().__init__(message, **kwargs)
+        self.workspace = workspace
+
+
 class QuotaExceededError(AetherfyVectorsException):
     """Tier quota exceeded (e.g. collection count limit)."""
 
@@ -246,10 +280,17 @@ class PartialUpsertError(AetherfyVectorsException):
         **kwargs,
     ):
         failed_count = sum(len(f["point_ids"]) for f in failed)
+        # A failed chunk's outcome is unknown, never "not written": a chunk
+        # that timed out or lost its connection may have been applied, and
+        # the server writes a large chunk in parts, so a refusal can come
+        # after part of it was written.
         message = (
-            f"Partial upsert: {saved} of {total} points saved; "
-            f"{failed_count} failed across {len(failed)} chunk(s). "
-            f"See .failed for per-chunk point IDs and errors."
+            f"Partial upsert: {saved} of {total} points confirmed saved; the outcome "
+            f"of the other {failed_count} point(s), in {len(failed)} chunk(s) that "
+            f"failed, is unknown: a chunk that timed out, lost its connection or was "
+            f"refused may have been written in whole or in part. Retrying the upsert "
+            f"is safe: it replaces points by id. See .failed for per-chunk point IDs "
+            f"and errors."
         )
         super().__init__(message, **kwargs)
         self.saved = saved

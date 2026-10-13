@@ -28,7 +28,9 @@ For raw-Qdrant operations not exposed here, drop to the low-level client:
     from aetherfy_vectors import AetherfyVectorsClient
 """
 
-__version__ = "1.0.0"
+# ONE distribution, ONE version, as in aetherfy_agent: this said "1.0.0" inside
+# the 1.1.0 package. Re-exported, never a second literal.
+from aetherfy_vectors import __version__  # noqa: E402
 
 from .client import MemoryClient
 from .exceptions import (

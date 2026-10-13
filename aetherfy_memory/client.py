@@ -43,7 +43,7 @@ from .models import (
     DEFAULT_VECTOR_SIZE,
     THREAD_ID_KEY,
     THREAD_MARKER_KEY,
-    THREADS_COLLECTION,
+    threads_collection_name,
 )
 from .namespace import Namespace
 from .thread import Thread
@@ -51,8 +51,8 @@ from .thread import Thread
 
 # User-facing names must start with letter/digit and contain only letters,
 # digits, hyphens, underscores, and dots. No leading special chars — the
-# `__threads__` collection name is therefore unreachable from this regex,
-# so no namespace can collide with it.
+# threads collection's `__threads__` prefix is therefore unreachable from this
+# regex, so no namespace can collide with it.
 _NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,254}$")
 
 
@@ -181,11 +181,22 @@ class MemoryClient:
         return self._client.workspace
 
     @property
+    def _threads(self) -> str:
+        """This workspace's threads collection (models.threads_collection_name).
+
+        Derived from this client's own workspace every time, so it can only
+        ever name this workspace's collection: a threads collection of another
+        workspace is never opened or adopted.
+        """
+        return threads_collection_name(self.workspace)
+
+    @property
     def vectors(self) -> AetherfyVectorsClient:
         """Direct access to the underlying AetherfyVectorsClient.
 
         Use this as the low-level escape hatch for any operation not exposed
-        on MemoryClient. Collection names are workspace-scoped automatically.
+        on MemoryClient. Every collection it reaches is in this client's
+        workspace (collection NAMES are unique per account).
         """
         return self._client
 
@@ -258,14 +269,14 @@ class MemoryClient:
         """All namespace names in this workspace.
 
         Threads are no longer collections, so there is nothing thread-shaped
-        left to filter out of the collection list — except the single
-        `__threads__` collection they all share, which is an implementation
+        left to filter out of the collection list — except this workspace's
+        threads collection, which they all share, which is an implementation
         detail and not a namespace.
         """
         return [
             col.name
             for col in self._client.get_collections()
-            if col.name != THREADS_COLLECTION
+            if col.name != self._threads
         ]
 
     def delete_namespace(self, name: str) -> bool:
@@ -307,8 +318,8 @@ class MemoryClient:
         payload filter is SCANNED rather than looked up, and this is the
         one collection whose every read carries a tenant filter.
         """
-        if self._client.collection_exists(THREADS_COLLECTION):
-            existing = self._client.get_collection(THREADS_COLLECTION)
+        if self._client.collection_exists(self._threads):
+            existing = self._client.get_collection(self._threads)
             size = existing.config.size
             if not size:
                 # Collection.from_dict defaults size to 0 when the response
@@ -324,11 +335,11 @@ class MemoryClient:
             return
 
         self._client.create_collection(
-            THREADS_COLLECTION,
+            self._threads,
             VectorConfig(size=self._thread_vector_size, distance=self._thread_distance),
         )
-        self._client.create_field_index(THREADS_COLLECTION, THREAD_ID_KEY, "keyword")
-        self._client.create_field_index(THREADS_COLLECTION, THREAD_MARKER_KEY, "bool")
+        self._client.create_field_index(self._threads, THREAD_ID_KEY, "keyword")
+        self._client.create_field_index(self._threads, THREAD_MARKER_KEY, "bool")
 
     def create_thread(self, thread_id: str) -> Thread:
         """Create a new thread.
@@ -369,7 +380,7 @@ class MemoryClient:
             raise ThreadAlreadyExistsError(thread_id)
 
         self._client.upsert(
-            THREADS_COLLECTION,
+            self._threads,
             [
                 {
                     "id": str(uuid.uuid4()),
@@ -381,15 +392,15 @@ class MemoryClient:
                 }
             ],
         )
-        return Thread(thread_id, THREADS_COLLECTION, self._client)
+        return Thread(thread_id, self._threads, self._client)
 
     def _thread_marker_exists(self, thread_id: str) -> bool:
         """True iff this thread's marker point is present."""
-        if not self._client.collection_exists(THREADS_COLLECTION):
+        if not self._client.collection_exists(self._threads):
             return False
         return (
             self._client.count(
-                THREADS_COLLECTION,
+                self._threads,
                 count_filter=self._threads_marker_filter(thread_id),
                 exact=True,
             )
@@ -401,7 +412,7 @@ class MemoryClient:
         _validate_user_name(thread_id, "thread id")
         if not self._thread_marker_exists(thread_id):
             raise ThreadNotFoundError(thread_id)
-        return Thread(thread_id, THREADS_COLLECTION, self._client)
+        return Thread(thread_id, self._threads, self._client)
 
     def thread_exists(self, thread_id: str) -> bool:
         """True if the thread exists in this workspace.
@@ -427,9 +438,9 @@ class MemoryClient:
         _validate_user_name(thread_id, "thread id")
         if not self._thread_marker_exists(thread_id):
             raise ThreadNotFoundError(thread_id)
-        info = self._client.get_collection(THREADS_COLLECTION)
+        info = self._client.get_collection(self._threads)
         info.name = thread_id
-        info.points_count = Thread(thread_id, THREADS_COLLECTION, self._client).count()
+        info.points_count = Thread(thread_id, self._threads, self._client).count()
         return info
 
     def list_threads(self) -> List[str]:
@@ -448,11 +459,11 @@ class MemoryClient:
         A `dict` keeps first-seen order; a `set` would have made the order of
         this list depend on hashing.
         """
-        if not self._client.collection_exists(THREADS_COLLECTION):
+        if not self._client.collection_exists(self._threads):
             return []
         ids: List[str] = []
         for point in self._client.scroll_iter(
-            THREADS_COLLECTION,
+            self._threads,
             scroll_filter={
                 "must": [{"key": THREAD_MARKER_KEY, "match": {"value": True}}]
             },
@@ -475,7 +486,7 @@ class MemoryClient:
         if not self._thread_marker_exists(thread_id):
             return False
         return self._client.delete(
-            THREADS_COLLECTION,
+            self._threads,
             {"must": [{"key": THREAD_ID_KEY, "match": {"value": thread_id}}]},
         )
 

@@ -11,6 +11,8 @@ The headline case is `test_more_threads_than_the_plan_allows_collections`: the
 defect this model change exists to remove.
 """
 
+import re
+
 import pytest
 
 from aetherfy_memory import MemoryClient
@@ -23,9 +25,11 @@ from aetherfy_memory.models import (
     DEFAULT_VECTOR_SIZE,
     THREAD_ID_KEY,
     THREAD_MARKER_KEY,
-    THREADS_COLLECTION,
+    THREADS_COLLECTION_PREFIX,
+    threads_collection_name,
 )
 from aetherfy_vectors.exceptions import PointNotFoundError
+from aetherfy_vectors.models import DistanceMetric, VectorConfig
 
 from .fake_vectors_store import FakeVectorsClient, unit_vector
 
@@ -53,6 +57,9 @@ def _msgs(thread, n, prefix="m", axis=0):
     ]
 
 
+THREADS = threads_collection_name("my-bot")
+
+
 # ===========================================================================
 # The cross-repo pin
 # ===========================================================================
@@ -63,11 +70,59 @@ def test_the_threads_collection_name_is_the_pinned_literal():
     literal should be a literal there, so a rename is caught rather than
     followed. This is the other half of that pin. Without it a rename goes
     green here and reds in a repo that cannot explain why — so the gate
-    lives where the rename would happen.
+    lives where the rename would happen. The control plane's SDK-managed
+    prefix (which it refuses to move) is held equal to it by an e2e pair test.
     """
-    assert THREADS_COLLECTION == "__threads__"
+    assert THREADS_COLLECTION_PREFIX == "__threads__"
     assert THREAD_ID_KEY == "thread_id"
     assert THREAD_MARKER_KEY == "thread_marker"
+
+
+# ===========================================================================
+# One threads collection per workspace, named for it
+# ===========================================================================
+
+
+def test_the_threads_collection_is_named_for_its_workspace():
+    """Collection names are unique per ACCOUNT, so a single `__threads__` in
+    every workspace could exist in one workspace only: the server answered
+    the second workspace's create 409 COLLECTION_NAME_TAKEN."""
+    assert threads_collection_name(None) == "__threads__"
+    assert threads_collection_name("my-bot") == "__threads__my-bot"
+
+
+def test_two_workspaces_of_one_account_get_two_collections():
+    a, b = FakeVectorsClient(workspace="support"), FakeVectorsClient(workspace="sales")
+    MemoryClient(client=a).create_thread("conv-1")
+    MemoryClient(client=b).create_thread("conv-1")
+    assert list(a.collections) == ["__threads__support"]
+    assert list(b.collections) == ["__threads__sales"]
+
+
+def test_outside_any_workspace_it_is_the_bare_prefix():
+    store = FakeVectorsClient(workspace=None)
+    MemoryClient(client=store).create_thread("conv-1")
+    assert list(store.collections) == ["__threads__"]
+
+
+def test_every_workspace_name_the_product_accepts_fits_the_server_rule():
+    """Workspace names are `^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`, 3 to 63
+    characters (control plane api/routes/workspaces.py). With the prefix the
+    longest is 74 characters, inside vectordb's `[a-zA-Z0-9_-]{1,100}`."""
+    for ws in ["abc", "a" * 63, "my-bot-2", "0" * 63]:
+        assert re.fullmatch(r"[a-zA-Z0-9_-]{1,100}", threads_collection_name(ws)), ws
+
+
+def test_another_workspaces_threads_collection_is_never_opened():
+    """The name is derived from the client's own workspace on every use, so a
+    `__threads__` of another workspace — or the bare one from before this
+    rule — is never read or written as this workspace's."""
+    store = FakeVectorsClient(workspace="support")
+    store.create_collection("__threads__", VectorConfig(size=DEFAULT_VECTOR_SIZE, distance=DistanceMetric.COSINE))
+    memory = MemoryClient(client=store)
+    memory.create_thread("conv-1")
+    assert sorted(store.collections) == ["__threads__", "__threads__support"]
+    assert store.collections["__threads__"]["points"] == {}
 
 
 # ===========================================================================
@@ -87,7 +142,7 @@ def test_more_threads_than_the_plan_allows_collections(memory, store):
         memory.create_thread(f"conv-{i}")
 
     assert len(store.get_collections()) == 1
-    assert [c.name for c in store.get_collections()] == [THREADS_COLLECTION]
+    assert [c.name for c in store.get_collections()] == [THREADS]
     assert sorted(memory.list_threads()) == sorted(f"conv-{i}" for i in range(10))
     # And none of them is a namespace.
     assert memory.list_namespaces() == []
@@ -134,7 +189,7 @@ def test_a_second_marker_does_not_list_the_thread_twice(memory, store):
 
     memory.create_thread("a")
     store.upsert(
-        THREADS_COLLECTION,
+        THREADS,
         [
             {
                 "id": str(uuid.uuid4()),
@@ -162,7 +217,7 @@ def test_list_threads_keeps_first_seen_order(memory):
 
 def test_marker_vector_is_a_unit_vector_not_a_zero_vector(memory, store):
     memory.create_thread("conv-1")
-    (marker,) = list(store.collections[THREADS_COLLECTION]["points"].values())
+    (marker,) = list(store.collections[THREADS]["points"].values())
     assert marker["payload"][THREAD_MARKER_KEY] is True
     assert sum(v * v for v in marker["vector"]) == pytest.approx(1.0)
 
@@ -350,7 +405,7 @@ def _fail_open_with_a_stamped_marker(store):
     only the client-side guard under test.
     """
     store.fail_open_on_must_not = True
-    for p in store.collections[THREADS_COLLECTION]["points"].values():
+    for p in store.collections[THREADS]["points"].values():
         if p["payload"].get(THREAD_MARKER_KEY):
             p["payload"]["ts"] = 99.0
 
@@ -478,7 +533,7 @@ def test_clear_does_not_drop_the_shared_collection(memory, store):
     a = memory.create_thread("a")
     memory.create_thread("b")
     a.clear()
-    assert THREADS_COLLECTION in store.collections
+    assert THREADS in store.collections
 
 
 def test_delete_thread_leaves_a_sibling_threads_points_intact(memory):
@@ -522,7 +577,7 @@ def test_namespaces_are_unaffected_and_still_one_collection_each(memory, store):
     memory.create_namespace("kb", vector_size=DIM)
     memory.create_thread("a")
     assert memory.list_namespaces() == ["kb"]
-    assert sorted(store.collections) == sorted([THREADS_COLLECTION, "kb"])
+    assert sorted(store.collections) == sorted([THREADS, "kb"])
 
 
 def test_namespace_clear_still_drops_its_own_collection(memory, store):
@@ -563,8 +618,8 @@ def test_a_namespace_keeps_the_schema_surface(memory):
 def test_the_threads_collection_indexes_both_filtered_keys(memory, store):
     memory.create_thread("a")
     assert store.indexes == [
-        (THREADS_COLLECTION, THREAD_ID_KEY, "keyword"),
-        (THREADS_COLLECTION, THREAD_MARKER_KEY, "bool"),
+        (THREADS, THREAD_ID_KEY, "keyword"),
+        (THREADS, THREAD_MARKER_KEY, "bool"),
     ]
 
 
@@ -606,4 +661,4 @@ def test_a_readable_mismatch_still_raises(memory, store):
 def test_the_client_default_dimension_is_still_384(store):
     m = MemoryClient(client=store)
     m.create_thread("a")
-    assert store.collections[THREADS_COLLECTION]["config"].size == DEFAULT_VECTOR_SIZE
+    assert store.collections[THREADS]["config"].size == DEFAULT_VECTOR_SIZE

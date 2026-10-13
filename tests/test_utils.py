@@ -264,9 +264,9 @@ class TestBuildApiUrl:
     def test_build_api_url_nested_path(self):
         url = build_api_url(
             "https://api.example.com",
-            "collections/foo/points/search",
+            "collections/foo/points/query",
         )
-        assert url == "https://api.example.com/api/v1/collections/foo/points/search"
+        assert url == "https://api.example.com/api/v1/collections/foo/points/query"
 
     def test_build_api_url_regions_discovery(self):
         url = build_api_url("https://api.example.com", "regions")

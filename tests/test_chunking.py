@@ -18,6 +18,7 @@ from aetherfy_vectors.chunking import (
 from aetherfy_vectors.exceptions import (
     PartialUpsertError,
     AetherfyVectorsException,
+    RequestTimeoutError,
     ValidationError,
 )
 
@@ -160,9 +161,8 @@ class TestPartialUpsertError:
         assert err.saved == 3
         assert err.total == 6
         assert err.failed == failed
-        assert "3 of 6 points saved" in err.message
-        assert "3 failed" in err.message
-        assert "1 chunk" in err.message
+        assert "3 of 6 points confirmed saved" in err.message
+        assert "the other 3 point(s), in 1 chunk(s) that failed, is unknown" in err.message
 
     def test_aggregates_failed_count_across_multiple_failed_chunks(self):
         failed = [
@@ -170,8 +170,17 @@ class TestPartialUpsertError:
             {"point_ids": ["c", "d", "e"], "error": ValidationError("chunk 2")},
         ]
         err = PartialUpsertError(0, 5, failed)
-        assert "0 of 5 points saved" in err.message
-        assert "5 failed across 2 chunk(s)" in err.message
+        assert "0 of 5 points confirmed saved" in err.message
+        assert "the other 5 point(s), in 2 chunk(s) that failed, is unknown" in err.message
+
+    def test_never_calls_a_failed_chunk_not_written_and_says_retrying_is_safe(self):
+        # A chunk that timed out may have been written: the message must not
+        # count it as failed-to-save, and must say a retry is safe.
+        failed = [{"point_ids": ["a"], "error": RequestTimeoutError("timed out")}]
+        err = PartialUpsertError(4, 5, failed)
+        assert "may have been written" in err.message
+        assert "Retrying the upsert is safe: it replaces points by id" in err.message
+        assert "1 failed" not in err.message
 
     def test_is_an_aetherfy_vectors_exception_subclass(self):
         # Callers catching AetherfyVectorsException should catch
