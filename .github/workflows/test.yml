@@ -12,17 +12,6 @@ on:
       - 'setup.py'
       - 'requirements*.txt'
       - '.github/workflows/test.yml'
-  pull_request:
-    branches: [ main, develop ]
-    paths:
-      - 'aetherfy_vectors/**'
-      - 'aetherfy_memory/**'
-      - 'aetherfy_agent/**'
-      - 'tests/**'
-      - 'README.md'
-      - 'setup.py'
-      - 'requirements*.txt'
-      - '.github/workflows/test.yml'
   workflow_dispatch:
 
 jobs:
