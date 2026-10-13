@@ -1,12 +1,13 @@
 """
 Value types returned by the Aetherfy Agent helper.
 
-All three are plain frozen dataclasses: they describe what the platform already
+All four are plain frozen dataclasses: they describe what the platform already
 told this process, so there is nothing to configure and nothing to mutate.
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from datetime import datetime
+from typing import Any, Dict, Optional, Tuple
 
 
 @dataclass(frozen=True)
@@ -84,3 +85,24 @@ class Run:
     error_message: Optional[str] = None
     #: Everything the control plane sent, unmodified.
     raw: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ConnectionToken:
+    """
+    A fresh access token for one connection (Google, Slack, Notion).
+
+    Send ``access_token`` to the provider's own API as
+    ``Authorization: {token_type} {access_token}``. ``expires_at`` is ``None``
+    for a provider whose tokens do not expire (Notion). No refresh token ever
+    reaches the agent: Aetherfy refreshes, and :func:`aetherfy_agent.connection`
+    asks again when this one runs low.
+    """
+
+    access_token: str = field(repr=False)
+    token_type: str
+    expires_at: Optional[datetime]
+    provider: str
+    name: str
+    account_label: Optional[str]
+    scopes: Tuple[str, ...]

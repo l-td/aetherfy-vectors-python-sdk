@@ -16,6 +16,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   retryable. `AGENT_ACCESS_UNAVAILABLE` (503) arrives as the existing retryable
   service-unavailable error.
 
+### Added
+- **`aetherfy_agent.connection(name, *, min_valid_seconds=300)`** returns a
+  fresh OAuth access token (`ConnectionToken`) for a Google, Slack or Notion
+  connection made on the Aetherfy dashboard, from the control plane's
+  `POST /connections/{name}/token`. Tokens are cached per name in the process
+  until they would have less than `max(min_valid_seconds, 60)` seconds left;
+  a token with no expiry (Notion) is asked for again after five minutes.
+  Refusals are typed: `ConnectionNotFound`, `ConnectionNeedsReauth`,
+  `ConnectionUnavailable` (retryable) and `ConnectionAccessDenied`, all under
+  `ConnectionTokenError`. Only an agent machine's own key is answered.
+
 ### Changed
 - `PartialUpsertError`'s message no longer counts the points of a failed chunk
   as failed: it reports them as of unknown outcome. A chunk that timed out or
