@@ -353,7 +353,13 @@ class PartialUpsertError(AetherfyVectorsException):
 
 
 def is_retryable_error(error: Exception) -> bool:
-    """Check if an error should be retried.
+    """True when the error's KIND may be retried: a 5xx, a timeout, a network
+    failure, or a 429 with a Retry-After.
+
+    The client's own retries follow retry_policy.should_retry, which also
+    weighs the operation; this is only the default of the generic
+    utils.retry_with_backoff. Retrying an ambiguous failure is safe only for
+    an operation retry_policy classes REPEATABLE.
 
     Args:
         error: The exception to check.
