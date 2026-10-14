@@ -401,3 +401,58 @@ class TestSchemaOperationsWithWorkspace:
         mock_client.clear_schema_cache("documents")
 
         assert key not in mock_client._schema_cache
+
+
+class TestWorkspaceIsDecidedBeforeAnyRequest:
+    """A client without a workspace is refused before region discovery runs:
+    the configuration error, not a network one, and no request at all."""
+
+    def test_no_workspace_with_api_region_makes_no_request(self, monkeypatch):
+        from unittest.mock import patch
+
+        monkeypatch.delenv("AETHERFY_WORKSPACE_ID", raising=False)
+        monkeypatch.delenv("AETHERFY_VECTORS_URL", raising=False)
+        with patch.object(
+            AetherfyVectorsClient, "_resolve_region_endpoint"
+        ) as discovery, patch("aetherfy_vectors.client.requests") as requests:
+            with pytest.raises(ValueError, match="AETHERFY_WORKSPACE_ID"):
+                AetherfyVectorsClient(api_key=KEY, api_region="eu-central-1")
+        discovery.assert_not_called()
+        assert not requests.method_calls
+
+    def test_control_a_named_workspace_with_api_region_runs_discovery(
+        self, monkeypatch
+    ):
+        from unittest.mock import patch
+
+        monkeypatch.delenv("AETHERFY_WORKSPACE_ID", raising=False)
+        monkeypatch.delenv("AETHERFY_VECTORS_URL", raising=False)
+        with patch.object(
+            AetherfyVectorsClient,
+            "_resolve_region_endpoint",
+            return_value="https://eu.example",
+        ) as discovery:
+            client = AetherfyVectorsClient(
+                api_key=KEY, workspace="w", api_region="eu-central-1"
+            )
+        discovery.assert_called_once()
+        assert client.endpoint == "https://eu.example"
+
+
+class TestMemoryClientForwardsTheWorkspace:
+    def test_a_named_workspace_reaches_the_vectors_client(self, monkeypatch):
+        from aetherfy_memory import MemoryClient
+
+        monkeypatch.delenv("AETHERFY_WORKSPACE_ID", raising=False)
+        memory = MemoryClient(api_key=KEY, workspace="w")
+
+        assert memory.vectors._build_collections_list_path() == (
+            "workspaces/w/collections"
+        )
+
+    def test_outside_an_agent_without_a_workspace_it_is_refused(self, monkeypatch):
+        from aetherfy_memory import MemoryClient
+
+        monkeypatch.delenv("AETHERFY_WORKSPACE_ID", raising=False)
+        with pytest.raises(ValueError, match="AETHERFY_WORKSPACE_ID"):
+            MemoryClient(api_key=KEY)

@@ -185,6 +185,20 @@ class AetherfyVectorsClient:
                 or no workspace is given (see ``workspace``).
             AetherfyVectorsException: If region discovery fails.
         """
+        # The workspace: a name, or (for 'auto') the agent's workspace id.
+        # Exactly one of the two is set; there is no workspaceless client.
+        # Decided first, before region discovery makes a request.
+        self._workspace: Optional[str] = None
+        self._workspace_id: Optional[str] = None
+        if workspace == "auto":
+            self._workspace_id = os.getenv("AETHERFY_WORKSPACE_ID") or None
+            if self._workspace_id is None:
+                raise ValueError(NO_WORKSPACE_MESSAGE_AUTO)
+        elif isinstance(workspace, str) and workspace:
+            self._workspace = workspace
+        else:
+            raise ValueError(NO_WORKSPACE_MESSAGE)
+
         # Validate the API-region override eagerly so a typo fails at
         # construction, not on the first network round trip.
         env_region = os.getenv("AETHERFY_VECTORS_API_REGION")
@@ -232,19 +246,6 @@ class AetherfyVectorsClient:
             resolved_endpoint = self.DEFAULT_ENDPOINT
 
         self.endpoint = resolved_endpoint.rstrip("/")
-
-        # The workspace: a name, or (for 'auto') the agent's workspace id.
-        # Exactly one of the two is set; there is no workspaceless client.
-        self._workspace: Optional[str] = None
-        self._workspace_id: Optional[str] = None
-        if workspace == "auto":
-            self._workspace_id = os.getenv("AETHERFY_WORKSPACE_ID") or None
-            if self._workspace_id is None:
-                raise ValueError(NO_WORKSPACE_MESSAGE_AUTO)
-        elif isinstance(workspace, str) and workspace:
-            self._workspace = workspace
-        else:
-            raise ValueError(NO_WORKSPACE_MESSAGE)
 
         # auth_manager is initialized above (before endpoint resolution).
         # Build the standard header bundle now that the endpoint is known.
