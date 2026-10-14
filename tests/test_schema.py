@@ -1097,6 +1097,68 @@ class TestClientValidationIntegration:
         # Verify schema was refreshed
         assert client._payload_schema_cache[client._scope_collection("test_collection")]["etag"] == "new_etag"
 
+    def test_upsert_412_revalidates_against_the_refreshed_strict_schema(
+        self, client, mock_requests, mock_successful_response, mock_error_response
+    ):
+        """After a 412, the refreshed strict schema is applied before the retry.
+
+        The refreshed schema is cached under the workspace-scoped name; the
+        re-validation used to look it up by the bare name, find nothing, and
+        retry without validating.
+        """
+        collection_response = mock_successful_response(
+            {
+                "result": {
+                    "config": {"params": {"vectors": {"size": 2, "distance": "Cosine"}}}
+                },
+                "schema_version": "vec_etag",
+            },
+            200,
+        )
+        # Before: no field is required, so the point passes.
+        old_schema_response = mock_successful_response(
+            {
+                "schema": {"fields": {"name": {"type": "string", "required": False}}},
+                "enforcement_mode": "strict",
+                "description": None,
+                "etag": "old_etag",
+            },
+            200,
+        )
+        old_schema_response.headers = {"etag": "old_etag"}
+        precondition_failed = mock_error_response(
+            message="Schema has changed",
+            status_code=412,
+            error_code="SCHEMA_VERSION_MISMATCH",
+        )
+        # After: `sku` is required, and the point has none.
+        new_schema_response = mock_successful_response(
+            {
+                "schema": {"fields": {"sku": {"type": "string", "required": True}}},
+                "enforcement_mode": "strict",
+                "description": None,
+                "etag": "new_etag",
+            },
+            200,
+        )
+        new_schema_response.headers = {"etag": "new_etag"}
+        retried = mock_successful_response({"status": "ok"}, 200)
+
+        mock_requests.request.side_effect = [
+            collection_response,
+            old_schema_response,
+            precondition_failed,
+            new_schema_response,
+            retried,
+        ]
+
+        points = [Point(id=1, vector=[0.1, 0.2], payload={"name": "Product A"})]
+
+        with pytest.raises(SchemaValidationError):
+            client.upsert("test_collection", points)
+        # Refused before the retry was sent.
+        assert mock_requests.request.call_count == 4
+
     def test_upsert_with_off_enforcement_skips_validation(
         self, client, mock_requests, mock_successful_response
     ):
