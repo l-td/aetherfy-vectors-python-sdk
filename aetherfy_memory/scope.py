@@ -21,6 +21,7 @@ from aetherfy_vectors.exceptions import (
     AetherfyVectorsException,
     CollectionNotFoundError,
     PointNotFoundError,
+    WorkspaceNotFoundError,
 )
 from aetherfy_vectors.models import Filter, SearchResult
 
@@ -184,7 +185,8 @@ class _Scope:
             )
         except AetherfyVectorsException as e:
             if e.status_code == 404 and not isinstance(
-                e, (PointNotFoundError, CollectionNotFoundError)
+                e,
+                (PointNotFoundError, CollectionNotFoundError, WorkspaceNotFoundError),
             ):
                 raise PointNotFoundError(str(id), self._collection) from e
             raise
@@ -220,7 +222,8 @@ class _Scope:
             )
         except AetherfyVectorsException as e:
             if e.status_code == 404 and not isinstance(
-                e, (PointNotFoundError, CollectionNotFoundError)
+                e,
+                (PointNotFoundError, CollectionNotFoundError, WorkspaceNotFoundError),
             ):
                 raise PointNotFoundError(str(id), self._collection) from e
             raise

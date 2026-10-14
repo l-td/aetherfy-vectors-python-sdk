@@ -18,6 +18,7 @@ from aetherfy_vectors.models import (
     Collection,
 )
 from aetherfy_vectors.exceptions import (
+    AetherfyVectorsException,
     AuthenticationError,
     ValidationError,
     CollectionNotFoundError,
@@ -275,7 +276,8 @@ class TestCollectionManagement:
     def test_collection_exists_false(self, client, mock_requests, mock_error_response):
         """Test collection_exists returns False for non-existing collection."""
         mock_requests.request.return_value = mock_error_response(
-            message="Collection not found", status_code=404
+            message="Collection not found", status_code=404,
+            error_code="COLLECTION_NOT_FOUND"
         )
 
         result = client.collection_exists("nonexistent_collection")
@@ -316,26 +318,26 @@ class TestCollectionManagement:
         with pytest.raises(ServiceUnavailableError):
             client.collection_exists("any_collection")
 
-    def test_collection_exists_returns_false_on_non_dict_404_body(
+    def test_collection_exists_raises_on_a_404_that_names_no_collection(
         self, client, mock_requests
     ):
-        """Returning False on 404 must work even when the upstream body is
-        a bare JSON string (e.g. "Not Found") instead of a dict.
+        """Only COLLECTION_NOT_FOUND is a False. A 404 without it (here a bare
+        JSON string, e.g. from something in front of the API) is not proof the
+        collection is missing, so it is raised rather than read as empty.
 
-        This is the path that surfaced the parse_error_response crash in
-        e2e: the backend returns a non-dict body on 404, parse_error_response
-        previously crashed with AttributeError before collection_exists
-        ever saw an exception class to inspect.
+        The body still parses: parse_error_response once crashed with
+        AttributeError on a non-dict body.
         """
-        # Build a Response stand-in whose .json() returns a bare string.
         response = Mock()
         response.status_code = 404
         response.content = b'"Not Found"'
         response.json.return_value = "Not Found"
         mock_requests.request.return_value = response
 
-        result = client.collection_exists("nonexistent_collection")
-        assert result is False
+        with pytest.raises(AetherfyVectorsException) as exc:
+            client.collection_exists("nonexistent_collection")
+        assert not isinstance(exc.value, CollectionNotFoundError)
+        assert exc.value.status_code == 404
 
     def test_create_collection_prepopulates_schema_cache(
         self, client, mock_requests, mock_successful_response
@@ -480,6 +482,7 @@ class TestCollectionManagement:
         mock_requests.request.return_value = mock_error_response(
             message="Collection not found",
             status_code=404,
+            error_code="COLLECTION_NOT_FOUND",
         )
 
         # The exception propagates — that's the contract — but the side
@@ -513,6 +516,7 @@ class TestCollectionManagement:
         mock_requests.request.return_value = mock_error_response(
             message="Collection not found",
             status_code=404,
+            error_code="COLLECTION_NOT_FOUND",
         )
 
         with pytest.raises(Exception):

@@ -484,7 +484,7 @@ class TestClientSchemaOperations:
     def test_get_schema_not_found(self, client, mock_requests, mock_error_response):
         """Test schema not found returns None."""
         mock_requests.request.return_value = mock_error_response(
-            message="Schema not found", status_code=404, error_code="SCHEMA_NOT_FOUND"
+            message="Schema not found", status_code=404, error_code="SCHEMA_NOT_DEFINED"
         )
 
         schema = client.get_schema("nonexistent_collection")
@@ -559,7 +559,7 @@ class TestClientSchemaOperations:
     def test_delete_schema_not_found(self, client, mock_requests, mock_error_response):
         """Test schema deletion when schema doesn't exist."""
         mock_requests.request.return_value = mock_error_response(
-            message="Schema not found", status_code=404, error_code="SCHEMA_NOT_FOUND"
+            message="Schema not found", status_code=404, error_code="SCHEMA_NOT_DEFINED"
         )
 
         with pytest.raises(SchemaNotFoundError):
@@ -649,7 +649,8 @@ class TestClientSchemaOperations:
         }
 
         mock_requests.request.return_value = mock_error_response(
-            message="Collection not found", status_code=404
+            message="Collection not found", status_code=404,
+            error_code="COLLECTION_NOT_FOUND"
         )
 
         from aetherfy_vectors.schema import Schema, FieldDefinition
@@ -684,7 +685,8 @@ class TestClientSchemaOperations:
         }
 
         mock_requests.request.return_value = mock_error_response(
-            message="Collection not found", status_code=404
+            message="Collection not found", status_code=404,
+            error_code="COLLECTION_NOT_FOUND"
         )
 
         with pytest.raises(Exception):

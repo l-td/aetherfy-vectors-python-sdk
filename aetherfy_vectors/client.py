@@ -34,6 +34,7 @@ from .exceptions import (
     SchemaValidationError,
     SchemaNotFoundError,
     PartialUpsertError,
+    WorkspaceNotFoundError,
 )
 from .qdrant_compat import check_qdrant_kwargs
 from .chunking import chunk_points_by_bytes, MAX_REQUEST_BYTES, point_wire_bytes
@@ -531,10 +532,13 @@ class AetherfyVectorsClient:
                     # the collection no longer exists upstream (e.g. a
                     # cross-client delete). Drop the local caches so the
                     # next call doesn't keep believing the cached entry.
-                    if evict_caches_on_404 is not None and response.status_code == 404:
+                    error = parse_error_response(error_data, response.status_code)
+                    if evict_caches_on_404 is not None and isinstance(
+                        error, CollectionNotFoundError
+                    ):
                         self._schema_cache.pop(evict_caches_on_404, None)
                         self._payload_schema_cache.pop(evict_caches_on_404, None)
-                    raise parse_error_response(error_data, response.status_code)
+                    raise error
 
             except requests.Timeout:
                 if deadline is not None and time.monotonic() >= deadline:
@@ -865,10 +869,10 @@ class AetherfyVectorsClient:
                 evict_caches_on_404=scoped_name,
             )
             return True
-        except AetherfyVectorsException as e:
-            if getattr(e, "status_code", None) == 404:
-                return False
-            raise
+        except CollectionNotFoundError:
+            # Only "this collection is not in the workspace" is a False; an
+            # unknown workspace (WorkspaceNotFoundError) or a refusal is not.
+            return False
 
     def get_collection(self, collection_name: str) -> Collection:
         """Get collection information.
@@ -1525,10 +1529,10 @@ class AetherfyVectorsClient:
                 attempt_timeout=max(self.timeout, self.INDEX_ATTEMPT_TIMEOUT_S),
             )
             return True
-        except AetherfyVectorsException as e:
-            if getattr(e, "status_code", None) == 404:
-                return False
-            raise
+        except CollectionNotFoundError:
+            # Only "this collection is not in the workspace" is a False; an
+            # unknown workspace (WorkspaceNotFoundError) or a refusal is not.
+            return False
 
     def merge_metadata(
         self,
@@ -1557,7 +1561,8 @@ class AetherfyVectorsClient:
             )
         except AetherfyVectorsException as e:
             if e.status_code == 404 and not isinstance(
-                e, (PointNotFoundError, CollectionNotFoundError)
+                e,
+                (PointNotFoundError, CollectionNotFoundError, WorkspaceNotFoundError),
             ):
                 raise PointNotFoundError(str(point_id), collection_name) from e
             raise
@@ -1584,7 +1589,8 @@ class AetherfyVectorsClient:
             )
         except AetherfyVectorsException as e:
             if e.status_code == 404 and not isinstance(
-                e, (PointNotFoundError, CollectionNotFoundError)
+                e,
+                (PointNotFoundError, CollectionNotFoundError, WorkspaceNotFoundError),
             ):
                 raise PointNotFoundError(str(point_id), collection_name) from e
             raise
@@ -1989,19 +1995,16 @@ class AetherfyVectorsClient:
             return schema
 
         except AetherfyVectorsException as e:
-            if e.status_code == 404:
-                # Backend disambiguates the two 404 cases via error.code:
-                #   COLLECTION_NOT_FOUND → collection is gone, evict caches
-                #   SCHEMA_NOT_DEFINED → collection exists but no schema (legit)
-                # Without the code (older backend or unstructured body) we
-                # treat 404 as "no schema set" (return None) without
-                # evicting — same shape as today's behavior. The eviction
-                # path only fires when the backend explicitly tells us
-                # the collection is gone.
-                error_code = self._extract_error_code(e)
-                if error_code == "COLLECTION_NOT_FOUND":
-                    self._schema_cache.pop(scoped_name, None)
-                    self._payload_schema_cache.pop(scoped_name, None)
+            # Two 404s mean "no schema", told apart by error.code:
+            #   COLLECTION_NOT_FOUND → the collection is gone: evict caches
+            #   SCHEMA_NOT_DEFINED → the collection has no schema (legit)
+            # Any other 404 (an unknown workspace) is raised.
+            error_code = self._extract_error_code(e)
+            if e.status_code == 404 and error_code == "COLLECTION_NOT_FOUND":
+                self._schema_cache.pop(scoped_name, None)
+                self._payload_schema_cache.pop(scoped_name, None)
+                return None
+            if e.status_code == 404 and error_code == "SCHEMA_NOT_DEFINED":
                 return None
             raise
 
@@ -2102,18 +2105,22 @@ class AetherfyVectorsClient:
             return True
 
         except AetherfyVectorsException as e:
-            if e.status_code == 404:
-                # Disambiguate via backend's error.code:
-                #   COLLECTION_NOT_FOUND → collection is gone, evict caches.
-                #   SCHEMA_NOT_DEFINED → collection exists, no schema set.
-                # Both surface as SchemaNotFoundError to the caller — the
-                # difference is whether we self-heal the local caches.
-                error_code = self._extract_error_code(e)
-                if error_code == "COLLECTION_NOT_FOUND":
-                    self._schema_cache.pop(scoped_name, None)
-                    self._payload_schema_cache.pop(scoped_name, None)
-                raise SchemaNotFoundError(collection_name)
-            raise
+            # Disambiguate via the backend's error.code:
+            #   COLLECTION_NOT_FOUND → collection is gone, evict caches.
+            #   SCHEMA_NOT_DEFINED → collection exists, no schema set.
+            # Both surface as SchemaNotFoundError to the caller — the
+            # difference is whether we self-heal the local caches. Any other
+            # 404 (an unknown workspace) is raised as it is.
+            error_code = self._extract_error_code(e)
+            if e.status_code != 404 or error_code not in (
+                "COLLECTION_NOT_FOUND",
+                "SCHEMA_NOT_DEFINED",
+            ):
+                raise
+            if error_code == "COLLECTION_NOT_FOUND":
+                self._schema_cache.pop(scoped_name, None)
+                self._payload_schema_cache.pop(scoped_name, None)
+            raise SchemaNotFoundError(collection_name)
 
     def analyze_schema(
         self, collection_name: str, sample_size: int = 1000

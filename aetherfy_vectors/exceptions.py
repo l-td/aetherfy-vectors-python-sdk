@@ -193,11 +193,11 @@ class AgentWorkspaceForbiddenError(AetherfyVectorsException):
 
     The key Aetherfy injects into a deployed agent reaches its own workspace
     plus the workspaces the account owner granted it; any other is refused
-    (403 ``AGENT_KEY_WORKSPACE_FORBIDDEN``) whether or not the collection
-    exists there. ``workspace`` names it, or is None for the collections in no
-    workspace. Not retryable: the owner grants access on the agent's page in
-    the dashboard, or with ``afy access <agent> --add <workspace>``, and it
-    takes effect within 60 seconds.
+    (403 ``AGENT_KEY_WORKSPACE_FORBIDDEN``) whether or not it exists.
+    ``workspace`` names it, or is None when it was addressed by id. Not
+    retryable: the owner grants access on the agent's page in the dashboard,
+    or with ``afy access <agent> --add <workspace>``, and it takes effect
+    within 60 seconds.
     """
 
     def __init__(
@@ -206,20 +206,44 @@ class AgentWorkspaceForbiddenError(AetherfyVectorsException):
         message: Optional[str] = None,
         **kwargs,
     ):
-        where = (
-            f"workspace '{workspace}'"
-            if workspace
-            else "the collections in no workspace"
-        )
+        where = f"workspace '{workspace}'" if workspace else "this workspace"
         if message is None:
             message = f"This agent's API key cannot use {where}."
-        add = workspace if workspace else '""'
+        add = workspace if workspace else "<workspace>"
         message += (
             f" Ask the account owner to grant this agent access to {where}: "
             f"the agent's page in the dashboard, or `afy access <agent> --add {add}`."
         )
         super().__init__(message, **kwargs)
         self.workspace = workspace
+
+
+class WorkspaceNotFoundError(AetherfyVectorsException):
+    """No such workspace in this account (404 ``WORKSPACE_NOT_FOUND``).
+
+    ``workspace`` is the name as sent, or None when it was addressed by id;
+    ``workspace_id`` is then the id as sent. Not retryable: create the
+    workspace, or fix the name. A workspace of another account answers the
+    same way, by design.
+    """
+
+    def __init__(
+        self,
+        workspace: Optional[str],
+        workspace_id: Optional[str] = None,
+        message: Optional[str] = None,
+        **kwargs,
+    ):
+        if message is None:
+            where = (
+                f"Workspace '{workspace}'"
+                if workspace
+                else f"Workspace id '{workspace_id}'"
+            )
+            message = f"{where} not found in this account."
+        super().__init__(message, **kwargs)
+        self.workspace = workspace
+        self.workspace_id = workspace_id
 
 
 class QuotaExceededError(AetherfyVectorsException):

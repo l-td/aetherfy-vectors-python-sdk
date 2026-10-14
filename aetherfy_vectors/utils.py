@@ -10,7 +10,6 @@ import random
 import re
 import time
 from typing import Any, Dict, List, Optional, Union, Callable
-from urllib.parse import urlparse
 
 from .exceptions import ValidationError, AetherfyVectorsException
 
@@ -328,12 +327,22 @@ def parse_error_response(
             retry_after=retry_after,
             error_code=error_code,
         )
-    elif status_code == 403 and error_code == "AGENT_KEY_WORKSPACE_FORBIDDEN":
-        from .exceptions import AgentWorkspaceForbiddenError
+    elif status_code == 403:
+        if error_code == "AGENT_KEY_WORKSPACE_FORBIDDEN":
+            from .exceptions import AgentWorkspaceForbiddenError
 
-        workspace = details.get("workspace") if isinstance(details, dict) else None
-        return AgentWorkspaceForbiddenError(
-            workspace,
+            workspace = details.get("workspace") if isinstance(details, dict) else None
+            return AgentWorkspaceForbiddenError(
+                workspace,
+                request_id=request_id,
+                status_code=status_code,
+                details=details,
+                error_code=error_code,
+            )
+        # Every other refusal of this key, e.g. AUTH_AGENT_KEY_OUT_OF_SCOPE
+        # (an agent key on an account-only route).
+        return AuthenticationError(
+            message,
             request_id=request_id,
             status_code=status_code,
             details=details,
@@ -363,6 +372,30 @@ def parse_error_response(
             return PointNotFoundError(
                 point_id,
                 collection_name,
+                request_id=request_id,
+                status_code=status_code,
+                details=details,
+                error_code=error_code,
+            )
+        elif error_code == "SCHEMA_NOT_DEFINED":
+            from .exceptions import SchemaNotFoundError
+
+            d = details if isinstance(details, dict) else {}
+            return SchemaNotFoundError(
+                d.get("collection_name", "unknown"),
+                request_id=request_id,
+                status_code=status_code,
+                details=details,
+                error_code=error_code,
+            )
+        elif error_code == "WORKSPACE_NOT_FOUND":
+            from .exceptions import WorkspaceNotFoundError
+
+            d = details if isinstance(details, dict) else {}
+            return WorkspaceNotFoundError(
+                d.get("workspace"),
+                d.get("workspace_id"),
+                message=message,
                 request_id=request_id,
                 status_code=status_code,
                 details=details,
@@ -426,6 +459,15 @@ def parse_error_response(
                 error_code=error_code,
             )
         return ConflictError(
+            message,
+            request_id=request_id,
+            status_code=status_code,
+            details=details,
+            error_code=error_code,
+        )
+    elif status_code == 422:
+        # Unprocessable: VALIDATION_ERROR, COLLECTION_SDK_MANAGED, ...
+        return ValidationError(
             message,
             request_id=request_id,
             status_code=status_code,
