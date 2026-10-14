@@ -222,3 +222,18 @@ def test_the_ruling_s_once_operations_are_once():
     for op in ["search", "count", "scroll", "retrieve", "upsert", "set_payload",
                "overwrite_payload", "create_field_index", "get_collection"]:
         assert OPERATIONS[op] == REPEATABLE, op
+
+
+def test_set_schema_is_repeatable_only_while_it_sends_no_if_match(client):
+    """A repeat of an If-Match write after a hidden success gets a false 412:
+    if set_schema ever sends If-Match, it must be classed ONCE."""
+    from aetherfy_vectors.schema import Schema
+
+    sent = queue(client, _ok({"etag": "v1"}))
+    client.set_schema("docs", Schema(fields={}))
+
+    headers = sent.call_args.kwargs.get("headers") or {}
+    if any(h.lower() == "if-match" for h in headers):
+        assert OPERATIONS["set_schema"] == ONCE
+    else:
+        assert OPERATIONS["set_schema"] == REPEATABLE

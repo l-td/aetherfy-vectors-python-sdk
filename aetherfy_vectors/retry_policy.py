@@ -39,7 +39,7 @@ set_payload                REPEATABLE  write keyed by point id
 overwrite_payload          REPEATABLE  write keyed by point id
 delete_payload             REPEATABLE  removing the same keys again changes nothing
 create_field_index         REPEATABLE  creating the same index again changes nothing
-set_schema                 REPEATABLE  sent without If-Match: the same schema again
+set_schema                 REPEATABLE  BECAUSE it is sent without If-Match (below)
 create_collection          ONCE        a repeat finds the collection it just made
 delete_collection          ONCE        a repeat finds nothing to delete
 delete                     ONCE        deleting points; a repeat reports a false error
@@ -76,6 +76,10 @@ OPERATIONS: Dict[str, str] = {
     "overwrite_payload": REPEATABLE,
     "delete_payload": REPEATABLE,
     "create_field_index": REPEATABLE,
+    # Repeatable BECAUSE set_schema is sent without If-Match: a repeat writes
+    # the same schema again. If it ever sends If-Match, a repeat after a
+    # hidden success gets a false 412, and it must move to ONCE
+    # (tests/test_retry_policy.py holds the two together).
     "set_schema": REPEATABLE,
     "create_collection": ONCE,
     "delete_collection": ONCE,

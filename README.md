@@ -558,6 +558,10 @@ a call's timeout.
 | `upsert`, `set_payload`, `overwrite_payload`, `delete_payload`, `create_field_index`, `set_schema` | writes keyed by id: repeatable |
 | `create_collection`, `delete_collection`, `delete` (points), `delete_schema`, `delete_field_index` | once: a repeat after a hidden success reports a false error, so an ambiguous failure is raised after one attempt |
 
+`set_schema` is repeatable because it is sent without `If-Match`: a repeat writes
+the same schema again. A conditional write would get a false 412 on a repeat
+after a hidden success, so it would be classed once.
+
 When the retries run out, the last error is raised (`ServiceUnavailableError`, `RequestTimeoutError` or `NetworkError`).
 
 Renaming a collection, and moving one to another workspace, are done from the
