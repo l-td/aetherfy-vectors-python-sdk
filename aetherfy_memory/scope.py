@@ -17,12 +17,6 @@ share the substitutable surface.
 from typing import Any, Dict, Iterator, List, Optional, Union, overload
 
 from aetherfy_vectors.client import AetherfyVectorsClient
-from aetherfy_vectors.exceptions import (
-    AetherfyVectorsException,
-    CollectionNotFoundError,
-    PointNotFoundError,
-    WorkspaceNotFoundError,
-)
 from aetherfy_vectors.models import Filter, SearchResult
 
 
@@ -176,20 +170,12 @@ class _Scope:
                 f"Reserved keys cannot appear in metadata partial: {sorted(bad)}"
             )
         self._assert_owns([id])
-        try:
-            return self._client.set_payload(
-                self._collection,
-                payload=partial,
-                points=[id],
-                key="metadata",
-            )
-        except AetherfyVectorsException as e:
-            if e.status_code == 404 and not isinstance(
-                e,
-                (PointNotFoundError, CollectionNotFoundError, WorkspaceNotFoundError),
-            ):
-                raise PointNotFoundError(str(id), self._collection) from e
-            raise
+        return self._client.set_payload(
+            self._collection,
+            payload=partial,
+            points=[id],
+            key="metadata",
+        )
 
     def delete_metadata_keys(
         self,
@@ -214,19 +200,11 @@ class _Scope:
             )
         self._assert_owns([id])
         dotted = [f"metadata.{k}" for k in keys]
-        try:
-            return self._client.delete_payload(
-                self._collection,
-                keys=dotted,
-                points=[id],
-            )
-        except AetherfyVectorsException as e:
-            if e.status_code == 404 and not isinstance(
-                e,
-                (PointNotFoundError, CollectionNotFoundError, WorkspaceNotFoundError),
-            ):
-                raise PointNotFoundError(str(id), self._collection) from e
-            raise
+        return self._client.delete_payload(
+            self._collection,
+            keys=dotted,
+            points=[id],
+        )
 
     # ---------------------------------------------------------------------
     # Read

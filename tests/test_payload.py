@@ -151,7 +151,7 @@ def test_merge_metadata_rejects_non_dict():
 def test_merge_metadata_translates_404_to_point_not_found():
     client = _make_client()
     client._make_request.side_effect = AetherfyVectorsException(
-        "Not found", status_code=404
+        "Not found", status_code=404, error_code="NOT_FOUND"
     )
     with pytest.raises(PointNotFoundError) as excinfo:
         client.merge_metadata("col", MISSING, {"a": 1})
@@ -191,7 +191,7 @@ def test_delete_metadata_keys_rejects_non_string_items():
 def test_delete_metadata_keys_translates_404_to_point_not_found():
     client = _make_client()
     client._make_request.side_effect = AetherfyVectorsException(
-        "Not found", status_code=404
+        "Not found", status_code=404, error_code="NOT_FOUND"
     )
     with pytest.raises(PointNotFoundError) as excinfo:
         client.delete_metadata_keys("col", MISSING, ["k1"])

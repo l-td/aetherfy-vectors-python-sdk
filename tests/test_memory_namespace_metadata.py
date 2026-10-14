@@ -169,11 +169,11 @@ def test_thread_merge_metadata_allows_text():
     client.set_payload.assert_called_once()
 
 
-def test_merge_metadata_translates_404_to_point_not_found():
+def test_merge_metadata_passes_the_client_s_point_not_found_through():
+    """The client raises PointNotFoundError for a missing point (NOT_FOUND
+    on the payload routes); the memory layer adds no translation of its own."""
     ns, client = _make_ns()
-    client.set_payload.side_effect = AetherfyVectorsException(
-        "Not found", status_code=404
-    )
+    client.set_payload.side_effect = PointNotFoundError(MISSING, "user_X_my-ns")
     with pytest.raises(PointNotFoundError) as excinfo:
         ns.merge_metadata(MISSING, {"k": 1})
     assert excinfo.value.point_id == MISSING
@@ -225,11 +225,11 @@ def test_thread_delete_metadata_keys_rejects_role_content_ts():
         client.delete_payload.assert_not_called()
 
 
-def test_delete_metadata_keys_translates_404_to_point_not_found():
+def test_delete_metadata_keys_passes_the_client_s_point_not_found_through():
+    """The client raises PointNotFoundError for a missing point (NOT_FOUND
+    on the payload routes); the memory layer adds no translation of its own."""
     ns, client = _make_ns()
-    client.delete_payload.side_effect = AetherfyVectorsException(
-        "Not found", status_code=404
-    )
+    client.delete_payload.side_effect = PointNotFoundError(MISSING, "user_X_my-ns")
     with pytest.raises(PointNotFoundError) as excinfo:
         ns.delete_metadata_keys(MISSING, ["k1"])
     assert excinfo.value.point_id == MISSING

@@ -34,6 +34,8 @@ def body(code, **fields):
 
 WORKSPACE_NOT_FOUND_BY_NAME = body("WORKSPACE_NOT_FOUND", workspace="typo")
 WORKSPACE_NOT_FOUND_BY_ID = body("WORKSPACE_NOT_FOUND", workspace_id=WS_ID)
+# Qdrant's own 404 (a missing point), as vectordb re-wraps it.
+POINT_NOT_THERE = body("NOT_FOUND", message="No point with id 1 found")
 COLLECTION_NOT_FOUND = body(
     "COLLECTION_NOT_FOUND",
     message="Collection 'docs' not found",
@@ -272,7 +274,7 @@ def test_metadata_ops_do_not_call_an_unknown_workspace_a_missing_point(wired, op
 @pytest.mark.parametrize("op", ["merge_metadata", "delete_metadata_keys"])
 def test_control_metadata_ops_still_name_a_missing_point(wired, op):
     client, queue = wired
-    queue(_response(404, {"status": {"error": "No point with id 1 found"}}))
+    queue(_response(404, POINT_NOT_THERE))
     arg = {"a": 1} if op == "merge_metadata" else ["a"]
 
     with pytest.raises(PointNotFoundError):
@@ -362,7 +364,7 @@ def test_control_a_namespace_still_names_a_missing_point(wired, op):
     from aetherfy_memory.namespace import Namespace
 
     client, queue = wired
-    queue(_response(404, {"status": {"error": "No point with id 1 found"}}))
+    queue(_response(404, POINT_NOT_THERE))
     arg = {"a": 1} if op == "merge_metadata" else ["a"]
 
     with pytest.raises(PointNotFoundError):
@@ -396,3 +398,39 @@ def test_an_unknown_404_code_is_a_typed_not_found_carrying_it():
     assert type(err) is NotFoundError
     assert err.error_code == "ALIAS_NOT_FOUND"
     assert err.status_code == 404
+
+
+# ===========================================================================
+# A missing point on the payload routes: NOT_FOUND, by code
+# ===========================================================================
+
+
+@pytest.mark.parametrize(
+    "op,args",
+    [
+        ("set_payload", lambda: ("docs", {"a": 1}, [1])),
+        ("overwrite_payload", lambda: ("docs", {"a": 1}, [1])),
+        ("delete_payload", lambda: ("docs", ["a"], [1])),
+    ],
+)
+def test_a_payload_route_s_not_found_is_a_missing_point(wired, op, args):
+    client, queue = wired
+    queue(_response(404, POINT_NOT_THERE))
+
+    with pytest.raises(PointNotFoundError) as exc:
+        getattr(client, op)(*args())
+    assert exc.value.error_code == "NOT_FOUND"
+    assert exc.value.point_id == "1"
+
+
+def test_control_a_code_less_404_on_a_payload_route_is_not_a_missing_point(wired):
+    """vectordb never answers a 404 without a code: one is not read as a
+    missing point, it is the NotFoundError fallback."""
+    from aetherfy_vectors import NotFoundError
+
+    client, queue = wired
+    queue(_response(404, {"status": {"error": "No point with id 1 found"}}))
+
+    with pytest.raises(NotFoundError) as exc:
+        client.set_payload("docs", {"a": 1}, [1])
+    assert not isinstance(exc.value, PointNotFoundError)

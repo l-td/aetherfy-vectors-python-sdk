@@ -35,7 +35,6 @@ from .exceptions import (
     SchemaValidationError,
     SchemaNotFoundError,
     PartialUpsertError,
-    WorkspaceNotFoundError,
 )
 from .qdrant_compat import check_qdrant_kwargs
 from .retry_policy import OPERATIONS
@@ -1304,6 +1303,42 @@ class AetherfyVectorsClient:
     # cap: body.points.length <= 512.
     # ------------------------------------------------------------------
 
+    def _payload_request(
+        self,
+        method: str,
+        collection_name: str,
+        suffix: str,
+        data: Dict[str, Any],
+        points: Sequence[Union[str, int]],
+        scoped_name: str,
+        *,
+        operation: str,
+    ) -> Any:
+        """A payload route request. vectordb re-wraps Qdrant's own 404 (a
+        point that does not exist) as code ``NOT_FOUND``; on these routes that
+        is the point, so it is raised as PointNotFoundError. Every other 404
+        keeps its own type (COLLECTION_NOT_FOUND, WORKSPACE_NOT_FOUND, ...).
+        """
+        try:
+            return self._make_request(
+                method,
+                self._build_collection_path(collection_name, suffix),
+                data,
+                evict_caches_on_404=scoped_name,
+                operation=operation,
+            )
+        except AetherfyVectorsException as e:
+            if e.status_code == 404 and e.error_code == "NOT_FOUND":
+                raise PointNotFoundError(
+                    ", ".join(str(p) for p in points),
+                    collection_name,
+                    request_id=e.request_id,
+                    status_code=e.status_code,
+                    details=e.details,
+                    error_code=e.error_code,
+                ) from e
+            raise
+
     def set_payload(
         self,
         collection_name: str,
@@ -1345,11 +1380,13 @@ class AetherfyVectorsClient:
         data: Dict[str, Any] = {"payload": payload, "points": points}
         if key is not None:
             data["key"] = key
-        response = self._make_request(
+        response = self._payload_request(
             "POST",
-            self._build_collection_path(collection_name, "/points/payload"),
+            collection_name,
+            "/points/payload",
             data,
-            evict_caches_on_404=scoped_name,
+            points,
+            scoped_name,
             operation="set_payload",
         )
         return response.get("result", response) if response else {}
@@ -1383,11 +1420,13 @@ class AetherfyVectorsClient:
             validate_point_id(pid)
         scoped_name = self._scope_collection(collection_name)
         data = {"payload": payload, "points": points}
-        response = self._make_request(
+        response = self._payload_request(
             "PUT",
-            self._build_collection_path(collection_name, "/points/payload"),
+            collection_name,
+            "/points/payload",
             data,
-            evict_caches_on_404=scoped_name,
+            points,
+            scoped_name,
             operation="overwrite_payload",
         )
         return response.get("result", response) if response else {}
@@ -1420,11 +1459,13 @@ class AetherfyVectorsClient:
             validate_point_id(pid)
         scoped_name = self._scope_collection(collection_name)
         data = {"keys": keys, "points": points}
-        response = self._make_request(
+        response = self._payload_request(
             "POST",
-            self._build_collection_path(collection_name, "/points/payload/delete"),
+            collection_name,
+            "/points/payload/delete",
             data,
-            evict_caches_on_404=scoped_name,
+            points,
+            scoped_name,
             operation="delete_payload",
         )
         return response.get("result", response) if response else {}
@@ -1618,20 +1659,12 @@ class AetherfyVectorsClient:
         """
         if not isinstance(partial, dict):
             raise TypeError("partial must be a dict")
-        try:
-            return self.set_payload(
-                collection_name,
-                payload=partial,
-                points=[point_id],
-                key="metadata",
-            )
-        except AetherfyVectorsException as e:
-            if e.status_code == 404 and not isinstance(
-                e,
-                (PointNotFoundError, CollectionNotFoundError, WorkspaceNotFoundError),
-            ):
-                raise PointNotFoundError(str(point_id), collection_name) from e
-            raise
+        return self.set_payload(
+            collection_name,
+            payload=partial,
+            points=[point_id],
+            key="metadata",
+        )
 
     def delete_metadata_keys(
         self,
@@ -1647,19 +1680,11 @@ class AetherfyVectorsClient:
         if not isinstance(keys, list) or not all(isinstance(k, str) for k in keys):
             raise TypeError("keys must be a list of strings")
         dotted = [f"metadata.{k}" for k in keys]
-        try:
-            return self.delete_payload(
-                collection_name,
-                keys=dotted,
-                points=[point_id],
-            )
-        except AetherfyVectorsException as e:
-            if e.status_code == 404 and not isinstance(
-                e,
-                (PointNotFoundError, CollectionNotFoundError, WorkspaceNotFoundError),
-            ):
-                raise PointNotFoundError(str(point_id), collection_name) from e
-            raise
+        return self.delete_payload(
+            collection_name,
+            keys=dotted,
+            points=[point_id],
+        )
 
     def retrieve(
         self,

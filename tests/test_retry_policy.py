@@ -207,7 +207,16 @@ def test_every_request_declares_an_operation_of_the_table_and_vice_versa():
     )
     declared = set(re.findall(r'operation="([a-z_]+)"', source))
     assert declared == set(OPERATIONS)
-    assert source.count("self._make_request(") == source.count('operation="')
+    calls = re.findall(
+        r"self\._(?:make|payload)_request\((.*?)operation=([^,)\s]+)",
+        source,
+        re.S,
+    )
+    # Every call names its operation as a literal, except the one
+    # pass-through inside _payload_request.
+    passed_through = [op for _, op in calls if not op.startswith('"')]
+    assert passed_through == ["operation"]
+    assert len(calls) - 1 == source.count('operation="')
 
 
 def test_the_ruling_s_once_operations_are_once():
@@ -245,7 +254,9 @@ def _http_method_of_each_operation():
         encoding="utf-8"
     )
     methods = {}
-    for call in re.finditer(r"self\._make_request\((.*?)operation=\"([a-z_]+)\"", source, re.S):
+    for call in re.finditer(
+        r"self\._(?:make|payload)_request\((.*?)operation=\"([a-z_]+)\"", source, re.S
+    ):
         verb = re.search(r'"(GET|POST|PUT|PATCH|DELETE)"', call.group(1))
         methods.setdefault(call.group(2), set()).add(verb.group(1) if verb else "?")
     return methods

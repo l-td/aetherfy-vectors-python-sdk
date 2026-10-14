@@ -84,6 +84,15 @@ described here.
   (`retry_policy.REPEATABLE` or `ONCE`, required) and decides through the
   same rule; its `retry_condition` (type-only by default) is gone.
 
+- **BREAKING: a missing point on the payload routes is `PointNotFoundError`
+  by code.** vectordb re-wraps Qdrant's own 404 (a point that does not
+  exist) as `NOT_FOUND`; `set_payload`, `overwrite_payload` and
+  `delete_payload` raise it as `PointNotFoundError` (carrying the code), and
+  so `merge_metadata` / `delete_metadata_keys` and the memory layer's do.
+  Before, any 404 without a known type on those calls was turned into
+  `PointNotFoundError`; a 404 without a code is now the `NotFoundError`
+  fallback like anywhere else.
+
 ### Added
 
 - **`NotFoundError`** (`aetherfy_vectors`, re-exported at the root): the
