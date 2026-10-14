@@ -327,3 +327,18 @@ def test_a_real_refused_connection_is_never_connected():
         assert _never_connected(e)
     else:
         pytest.fail("a closed port answered")
+
+
+def test_retry_with_backoff_around_a_client_call_retries_a_never_made_connection():
+    """The typed error a client call raises carries request_sent=False, so
+    the public helper retries a ONCE operation on it, as the client does."""
+    from aetherfy_vectors.utils import retry_with_backoff
+
+    client = _real_client("http://192.0.2.1", timeout=0.3)
+
+    with pytest.raises(RequestTimeoutError) as exc:
+        retry_with_backoff(
+            lambda: client.delete_collection("docs"), ONCE, max_retries=1, base_delay=0.01
+        )
+    assert exc.value.request_sent is False
+    assert client.session.request.call_count == 8  # the client's 4, twice
