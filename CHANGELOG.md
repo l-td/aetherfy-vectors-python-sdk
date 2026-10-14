@@ -65,6 +65,11 @@ described here.
 
 ### Added
 
+- **`NotFoundError`** (`aetherfy_vectors`, re-exported at the root): the
+  parent of `CollectionNotFoundError`, `PointNotFoundError`,
+  `SchemaNotFoundError` and `WorkspaceNotFoundError`, and what a 404 whose
+  `error_code` the SDK does not know arrives as (it was the base
+  `AetherfyVectorsException`), carrying the code.
 - **`WorkspaceNotFoundError`** (`aetherfy_vectors`, re-exported at the
   root): 404 `WORKSPACE_NOT_FOUND`, with `.workspace` (the name sent) or
   `.workspace_id` (the id sent). Not retryable.

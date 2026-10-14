@@ -29,6 +29,7 @@ from .exceptions import (
     CollectionInOtherRegionError,
     AgentWorkspaceForbiddenError,
     WorkspaceNotFoundError,
+    NotFoundError,
     QuotaExceededError,
 )
 from .models import (
@@ -62,6 +63,7 @@ __all__ = [
     "CollectionInOtherRegionError",
     "AgentWorkspaceForbiddenError",
     "WorkspaceNotFoundError",
+    "NotFoundError",
     "QuotaExceededError",
     "SearchResult",
     "Point",

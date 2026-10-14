@@ -401,6 +401,16 @@ def parse_error_response(
                 details=details,
                 error_code=error_code,
             )
+        # A 404 whose code this SDK does not know: still a typed not-found.
+        from .exceptions import NotFoundError
+
+        return NotFoundError(
+            message,
+            request_id=request_id,
+            status_code=status_code,
+            details=details,
+            error_code=error_code,
+        )
     elif status_code == 400:
         if error_code == "COLLECTION_LIMIT_EXCEEDED":
             from .exceptions import QuotaExceededError

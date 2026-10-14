@@ -367,3 +367,32 @@ def test_control_a_namespace_still_names_a_missing_point(wired, op):
 
     with pytest.raises(PointNotFoundError):
         getattr(Namespace("kb", "kb", client), op)(1, arg)
+
+
+# ===========================================================================
+# NotFoundError: the parent of every not-found error, and the 404 fallback
+# ===========================================================================
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        COLLECTION_NOT_FOUND,
+        WORKSPACE_NOT_FOUND_BY_NAME,
+        body("SCHEMA_NOT_DEFINED"),
+        body("POINT_NOT_FOUND", point_id="1", collection_name="docs"),
+    ],
+)
+def test_every_not_found_error_is_a_not_found_error(payload):
+    from aetherfy_vectors import NotFoundError
+
+    assert isinstance(parse_error_response(payload, 404), NotFoundError)
+
+
+def test_an_unknown_404_code_is_a_typed_not_found_carrying_it():
+    from aetherfy_vectors import NotFoundError
+
+    err = parse_error_response(body("ALIAS_NOT_FOUND", alias_name="live"), 404)
+    assert type(err) is NotFoundError
+    assert err.error_code == "ALIAS_NOT_FOUND"
+    assert err.status_code == 404

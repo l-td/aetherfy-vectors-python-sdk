@@ -936,6 +936,7 @@ from aetherfy_vectors.exceptions import (
     CollectionInUseError,
     QuotaExceededError,
     WorkspaceNotFoundError,
+    NotFoundError,              # parent of every not-found error above
 )
 
 try:

@@ -77,7 +77,16 @@ class ValidationError(AetherfyVectorsException):
         super().__init__(message, **kwargs)
 
 
-class CollectionNotFoundError(AetherfyVectorsException):
+class NotFoundError(AetherfyVectorsException):
+    """Something the request named does not exist (HTTP 404).
+
+    The parent of every not-found error (collection, point, schema,
+    workspace), and what a 404 whose ``error_code`` this SDK does not know
+    arrives as, with that code. Catch it to handle any of them.
+    """
+
+
+class CollectionNotFoundError(NotFoundError):
     """Specified collection does not exist."""
 
     def __init__(self, collection_name: str, **kwargs):
@@ -86,7 +95,7 @@ class CollectionNotFoundError(AetherfyVectorsException):
         self.collection_name = collection_name
 
 
-class PointNotFoundError(AetherfyVectorsException):
+class PointNotFoundError(NotFoundError):
     """Specified point does not exist."""
 
     def __init__(self, point_id: str, collection_name: str, **kwargs):
@@ -218,7 +227,7 @@ class AgentWorkspaceForbiddenError(AetherfyVectorsException):
         self.workspace = workspace
 
 
-class WorkspaceNotFoundError(AetherfyVectorsException):
+class WorkspaceNotFoundError(NotFoundError):
     """No such workspace in this account (404 ``WORKSPACE_NOT_FOUND``).
 
     ``workspace`` is the name as sent, or None when it was addressed by id;
@@ -263,7 +272,7 @@ class QuotaExceededError(AetherfyVectorsException):
         self.limit = limit
 
 
-class SchemaNotFoundError(AetherfyVectorsException):
+class SchemaNotFoundError(NotFoundError):
     """No schema defined for collection."""
 
     def __init__(self, collection_name: str, **kwargs):
