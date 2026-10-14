@@ -38,7 +38,7 @@ from .exceptions import (
     WorkspaceNotFoundError,
 )
 from .qdrant_compat import check_qdrant_kwargs
-from .retry_policy import OPERATIONS, should_retry
+from .retry_policy import OPERATIONS
 from .chunking import chunk_points_by_bytes, MAX_REQUEST_BYTES, point_wire_bytes
 from .schema import (
     Schema,
@@ -603,13 +603,12 @@ class AetherfyVectorsClient:
         # One rule for every request (retry_policy): a refusal before
         # anything ran is retried for any operation; an ambiguous failure
         # only for an operation whose repeat gives the same result.
-        OPERATIONS[operation]  # an undeclared operation is a KeyError, here
         return retry_with_backoff(
             make_single_request,
+            OPERATIONS[operation],  # an undeclared operation is a KeyError
             max_retries=3,
             base_delay=1.0,
             deadline=deadline,
-            retry_condition=lambda e: should_retry(operation, e),
         )
 
     # Schema Cache Helpers

@@ -80,6 +80,9 @@ described here.
   other call (it was an `AetherfyVectorsException` saying "Failed to
   retrieve usage statistics"). `NetworkError` and `RequestTimeoutError`
   carry `request_sent` (False when the request never left).
+  `aetherfy_vectors.utils.retry_with_backoff` takes the operation's class
+  (`retry_policy.REPEATABLE` or `ONCE`, required) and decides through the
+  same rule; its `retry_condition` (type-only by default) is gone.
 
 ### Added
 

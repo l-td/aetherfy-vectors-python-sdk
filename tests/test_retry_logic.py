@@ -5,6 +5,7 @@ Tests for retry logic with HTTP errors.
 import pytest
 import time
 from unittest.mock import Mock, patch
+from aetherfy_vectors.retry_policy import ONCE, REPEATABLE
 from aetherfy_vectors.utils import retry_with_backoff
 from aetherfy_vectors.exceptions import (
     ServiceUnavailableError,
@@ -24,7 +25,7 @@ class TestRetryLogic:
             side_effect=[ServiceUnavailableError("Service Unavailable"), "success"]
         )
 
-        result = retry_with_backoff(mock_fn, max_retries=3, base_delay=0.01)
+        result = retry_with_backoff(mock_fn, REPEATABLE, max_retries=3, base_delay=0.01)
 
         assert result == "success"
         assert mock_fn.call_count == 2
@@ -35,7 +36,7 @@ class TestRetryLogic:
             side_effect=[ServiceUnavailableError("Bad Gateway"), "success"]
         )
 
-        result = retry_with_backoff(mock_fn, max_retries=3, base_delay=0.01)
+        result = retry_with_backoff(mock_fn, REPEATABLE, max_retries=3, base_delay=0.01)
         assert result == "success"
         assert mock_fn.call_count == 2
 
@@ -43,7 +44,7 @@ class TestRetryLogic:
         """Should retry on timeout errors"""
         mock_fn = Mock(side_effect=[RequestTimeoutError("Timeout"), "success"])
 
-        result = retry_with_backoff(mock_fn, max_retries=3, base_delay=0.01)
+        result = retry_with_backoff(mock_fn, REPEATABLE, max_retries=3, base_delay=0.01)
         assert result == "success"
         assert mock_fn.call_count == 2
 
@@ -51,7 +52,7 @@ class TestRetryLogic:
         """Should retry on network errors"""
         mock_fn = Mock(side_effect=[NetworkError("Network error"), "success"])
 
-        result = retry_with_backoff(mock_fn, max_retries=3, base_delay=0.01)
+        result = retry_with_backoff(mock_fn, REPEATABLE, max_retries=3, base_delay=0.01)
         assert result == "success"
         assert mock_fn.call_count == 2
 
@@ -60,7 +61,7 @@ class TestRetryLogic:
         mock_fn = Mock(side_effect=ValidationError("Bad request"))
 
         with pytest.raises(ValidationError):
-            retry_with_backoff(mock_fn, max_retries=3, base_delay=0.01)
+            retry_with_backoff(mock_fn, REPEATABLE, max_retries=3, base_delay=0.01)
 
         assert mock_fn.call_count == 1
 
@@ -69,7 +70,7 @@ class TestRetryLogic:
         mock_fn = Mock(side_effect=AuthenticationError("Unauthorized"))
 
         with pytest.raises(AuthenticationError):
-            retry_with_backoff(mock_fn, max_retries=3, base_delay=0.01)
+            retry_with_backoff(mock_fn, REPEATABLE, max_retries=3, base_delay=0.01)
 
         assert mock_fn.call_count == 1
 
@@ -79,7 +80,7 @@ class TestRetryLogic:
         mock_fn = Mock(side_effect=ServiceUnavailableError("Service Unavailable"))
 
         with pytest.raises(ServiceUnavailableError):
-            retry_with_backoff(mock_fn, max_retries=3, base_delay=0.1)
+            retry_with_backoff(mock_fn, REPEATABLE, max_retries=3, base_delay=0.1)
 
         # Should have 3 sleep calls (one per retry)
         assert mock_sleep.call_count == 3
@@ -102,27 +103,36 @@ class TestRetryLogic:
         mock_fn = Mock(side_effect=ServiceUnavailableError("Service Unavailable"))
 
         with pytest.raises(ServiceUnavailableError):
-            retry_with_backoff(mock_fn, max_retries=2, base_delay=0.01)
+            retry_with_backoff(mock_fn, REPEATABLE, max_retries=2, base_delay=0.01)
 
         assert mock_fn.call_count == 3  # Initial + 2 retries
 
-    def test_retry_condition_custom(self):
-        """Should respect custom retry condition"""
+    def test_a_once_operation_does_not_retry_an_ambiguous_failure(self):
+        """The class decides: an ambiguous failure (a 5xx) of a ONCE
+        operation is raised after one attempt."""
+        mock_fn = Mock(side_effect=ServiceUnavailableError("Service Unavailable"))
 
-        def custom_condition(error):
-            return "should_retry" in str(error)
-
-        mock_fn = Mock(side_effect=ValueError("do not retry"))
-
-        with pytest.raises(ValueError):
-            retry_with_backoff(
-                mock_fn,
-                max_retries=3,
-                base_delay=0.01,
-                retry_condition=custom_condition,
-            )
+        with pytest.raises(ServiceUnavailableError):
+            retry_with_backoff(mock_fn, ONCE, max_retries=3, base_delay=0.01)
 
         assert mock_fn.call_count == 1
+
+    def test_a_once_operation_retries_a_refusal_before_anything_ran(self):
+        refused = ServiceUnavailableError(
+            "x", error_code="WORKSPACE_LOOKUP_UNAVAILABLE"
+        )
+        mock_fn = Mock(side_effect=[refused, "success"])
+
+        assert retry_with_backoff(mock_fn, ONCE, base_delay=0.01) == "success"
+        assert mock_fn.call_count == 2
+
+    def test_the_class_is_required_and_checked(self):
+        with pytest.raises(TypeError):
+            retry_with_backoff(Mock())  # type: ignore[call-arg]
+        with pytest.raises(ValueError):
+            retry_with_backoff(
+                Mock(side_effect=ServiceUnavailableError("x")), "sometimes"
+            )
 
     @patch('time.sleep')
     def test_jitter_applied(self, mock_sleep):
@@ -130,7 +140,7 @@ class TestRetryLogic:
         mock_fn = Mock(side_effect=ServiceUnavailableError("Service Unavailable"))
 
         with pytest.raises(ServiceUnavailableError):
-            retry_with_backoff(mock_fn, max_retries=2, base_delay=0.1)
+            retry_with_backoff(mock_fn, REPEATABLE, max_retries=2, base_delay=0.1)
 
         # Should have 2 sleep calls (one per retry)
         assert mock_sleep.call_count == 2
@@ -154,7 +164,8 @@ class TestRetryLogic:
 
         with pytest.raises(ServiceUnavailableError):
             retry_with_backoff(
-                mock_fn, max_retries=10, base_delay=1.0, max_delay=0.5
+                mock_fn,
+                REPEATABLE, max_retries=10, base_delay=1.0, max_delay=0.5
             )
 
         # Should have 10 sleep calls (one per retry)
@@ -173,7 +184,7 @@ class TestRetryLogic:
         """Should return immediately on successful first attempt"""
         mock_fn = Mock(return_value="success")
 
-        result = retry_with_backoff(mock_fn, max_retries=3, base_delay=0.01)
+        result = retry_with_backoff(mock_fn, REPEATABLE, max_retries=3, base_delay=0.01)
 
         assert result == "success"
         assert mock_fn.call_count == 1
@@ -187,7 +198,7 @@ class TestRetryLogic:
             ]
         )
 
-        result = retry_with_backoff(mock_fn, max_retries=3, base_delay=0.01)
+        result = retry_with_backoff(mock_fn, REPEATABLE, max_retries=3, base_delay=0.01)
         assert result == "success"
         assert mock_fn.call_count == 2
 
@@ -196,7 +207,7 @@ class TestRetryLogic:
         mock_fn = Mock(side_effect=RateLimitExceededError("Rate limit"))
 
         with pytest.raises(RateLimitExceededError):
-            retry_with_backoff(mock_fn, max_retries=3, base_delay=0.01)
+            retry_with_backoff(mock_fn, REPEATABLE, max_retries=3, base_delay=0.01)
 
         assert mock_fn.call_count == 1
 

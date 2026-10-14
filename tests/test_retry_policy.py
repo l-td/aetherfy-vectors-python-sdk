@@ -237,3 +237,82 @@ def test_set_schema_is_repeatable_only_while_it_sends_no_if_match(client):
         assert OPERATIONS["set_schema"] == ONCE
     else:
         assert OPERATIONS["set_schema"] == REPEATABLE
+
+
+def _http_method_of_each_operation():
+    """{operation: HTTP method}, read from client.py's request call sites."""
+    source = (Path(__file__).parent.parent / "aetherfy_vectors" / "client.py").read_text(
+        encoding="utf-8"
+    )
+    methods = {}
+    for call in re.finditer(r"self\._make_request\((.*?)operation=\"([a-z_]+)\"", source, re.S):
+        verb = re.search(r'"(GET|POST|PUT|PATCH|DELETE)"', call.group(1))
+        methods.setdefault(call.group(2), set()).add(verb.group(1) if verb else "?")
+    return methods
+
+
+def test_a_delete_or_a_create_is_once_unless_listed_with_a_reason():
+    """The table guard catches a missing entry; this catches a wrong one."""
+    from aetherfy_vectors.retry_policy import REPEATABLE_DESPITE_ITS_NAME
+
+    methods = _http_method_of_each_operation()
+    assert set(methods) == set(OPERATIONS)
+    for op, verbs in methods.items():
+        risky = "DELETE" in verbs or op.startswith(("delete", "create"))
+        if risky and op not in REPEATABLE_DESPITE_ITS_NAME:
+            assert OPERATIONS[op] == ONCE, f"{op} sends {verbs}: class it ONCE"
+    for op, reason in REPEATABLE_DESPITE_ITS_NAME.items():
+        assert OPERATIONS[op] == REPEATABLE and reason.strip(), op
+
+
+# ===========================================================================
+# A connection never made, on a real network (no server, no mock transport)
+# ===========================================================================
+
+
+def _real_client(endpoint, timeout):
+    c = AetherfyVectorsClient(
+        api_key="afy_test_1234567890abcdef1234", endpoint=endpoint, workspace="w",
+        timeout=timeout,
+    )
+    real = c.session.request
+    c.session.request = Mock(side_effect=real)  # counts, sends for real
+    return c
+
+
+@pytest.mark.parametrize(
+    "endpoint,expected",
+    [
+        # TEST-NET-1 (RFC 5737): never routed, so the connect times out.
+        ("http://192.0.2.1", RequestTimeoutError),
+        # .invalid (RFC 2606) never resolves: a DNS failure.
+        ("http://no-such-host.invalid", NetworkError),
+    ],
+)
+def test_a_real_connection_never_made_is_retried_even_for_a_once_operation(
+    endpoint, expected
+):
+    client = _real_client(endpoint, timeout=0.3)
+
+    with pytest.raises(expected) as exc:
+        client.delete_collection("docs")  # ONCE: only a never-sent retries
+    assert exc.value.request_sent is False
+    assert client.session.request.call_count == 4
+
+
+def test_a_real_refused_connection_is_never_connected():
+    import socket
+
+    with socket.socket() as s:  # a port nothing listens on
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    try:
+        requests.get(f"http://127.0.0.1:{port}/", timeout=5)
+    except requests.ConnectTimeout:
+        pytest.skip("this host reports a refused port as a connect timeout")
+    except requests.ConnectionError as e:
+        from aetherfy_vectors.client import _never_connected
+
+        assert _never_connected(e)
+    else:
+        pytest.fail("a closed port answered")

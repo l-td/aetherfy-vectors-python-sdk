@@ -88,6 +88,14 @@ OPERATIONS: Dict[str, str] = {
     "delete_field_index": ONCE,
 }
 
+# The "wrong class" guard (tests/test_retry_policy.py): an operation that
+# sends DELETE, or whose name starts with delete/create, is ONCE unless it is
+# listed here, with the reason its repeat gives the same result.
+REPEATABLE_DESPITE_ITS_NAME: Dict[str, str] = {
+    "delete_payload": "removes keys from points; removing them again changes nothing",
+    "create_field_index": "re-creating an existing index with the same schema returns at once",
+}
+
 # 503s the server answers at its edge, before running anything.
 REFUSED_BEFORE_ANYTHING_CODES = frozenset(
     {
@@ -116,8 +124,15 @@ def ambiguous(error: Exception) -> bool:
     ) and not refused_before_anything(error)
 
 
-def should_retry(operation: str, error: Exception) -> bool:
-    """The rule. ``operation`` must be in OPERATIONS (KeyError otherwise)."""
+def should_retry_class(retry_class: str, error: Exception) -> bool:
+    """The rule, for an operation of ``retry_class`` (REPEATABLE or ONCE)."""
+    if retry_class not in (REPEATABLE, ONCE):
+        raise ValueError(f"retry_class must be {REPEATABLE!r} or {ONCE!r}")
     if refused_before_anything(error):
         return True
-    return OPERATIONS[operation] == REPEATABLE and ambiguous(error)
+    return retry_class == REPEATABLE and ambiguous(error)
+
+
+def should_retry(operation: str, error: Exception) -> bool:
+    """The rule. ``operation`` must be in OPERATIONS (KeyError otherwise)."""
+    return should_retry_class(OPERATIONS[operation], error)

@@ -558,20 +558,26 @@ def format_points_for_upsert(points: List[Dict[str, Any]]) -> List[Dict[str, Any
 
 def retry_with_backoff(
     func: Callable,
+    retry_class: str,
     max_retries: int = 3,
     base_delay: float = 1.0,
     max_delay: float = 30.0,
-    retry_condition: Optional[Callable[[Exception], bool]] = None,
     deadline: Optional[float] = None,
 ):
-    """Retry function with exponential backoff.
+    """Retry ``func`` with exponential backoff, under the retry rule.
+
+    Which failures are retried is decided by retry_policy for the
+    operation's class, never by the error's type alone: a refusal before
+    anything ran is retried for any class, an ambiguous failure only for
+    ``retry_policy.REPEATABLE``, a 4xx never.
 
     Args:
         func: Function to retry.
+        retry_class: ``retry_policy.REPEATABLE`` or ``retry_policy.ONCE``:
+            whether repeating the operation gives the same result.
         max_retries: Maximum number of retries.
         base_delay: Base delay between retries in seconds.
         max_delay: Maximum delay cap in seconds.
-        retry_condition: Optional function to determine if error is retryable.
         deadline: Optional ``time.monotonic()`` instant after which no retry
             may start. A backoff sleep that would end at or past it is not
             taken: the last error is raised instead. ``func`` owns bounding
@@ -583,7 +589,7 @@ def retry_with_backoff(
     Raises:
         Last exception if all retries fail.
     """
-    from .exceptions import is_retryable_error
+    from .retry_policy import should_retry_class
 
     last_exception = None
 
@@ -593,10 +599,7 @@ def retry_with_backoff(
         except Exception as e:
             last_exception = e
 
-            # Check if error is retryable
-            should_retry = (
-                retry_condition(e) if retry_condition else is_retryable_error(e)
-            )
+            should_retry = should_retry_class(retry_class, e)
 
             if should_retry and attempt < max_retries:
                 delay = min(base_delay * (2**attempt), max_delay)
