@@ -79,6 +79,7 @@ def fake_vectors_client():
     """A MagicMock AetherfyVectorsClient configured for MemoryClient's needs."""
     client = MagicMock()
     client.workspace = "my-bot"
+    client.workspace_id = None
     # collection_exists defaults to False — tests override as needed.
     client.collection_exists.return_value = False
     # get_collections defaults to empty.

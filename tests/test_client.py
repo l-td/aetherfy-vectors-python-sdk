@@ -353,7 +353,7 @@ class TestCollectionManagement:
         config = VectorConfig(size=384, distance=DistanceMetric.COSINE)
         client.create_collection("fresh_coll", config)
 
-        cached = client._get_cached_schema("fresh_coll")
+        cached = client._get_cached_schema(client._scope_collection("fresh_coll"))
         assert cached is not None
         assert cached["size"] == 384
         assert cached["distance"] == "Cosine"
@@ -414,18 +414,18 @@ class TestCollectionManagement:
         # Seed both caches as if the collection had been used before.
         config = VectorConfig(size=128, distance=DistanceMetric.COSINE)
         client.create_collection("doomed", config)
-        client._payload_schema_cache["doomed"] = {
+        client._payload_schema_cache[client._scope_collection("doomed")] = {
             "schema": {"fields": []},
             "etag": "v1",
             "enforcement_mode": "warn",
         }
-        assert client._get_cached_schema("doomed") is not None
-        assert "doomed" in client._payload_schema_cache
+        assert client._get_cached_schema(client._scope_collection("doomed")) is not None
+        assert client._scope_collection("doomed") in client._payload_schema_cache
 
         client.delete_collection("doomed")
 
-        assert client._get_cached_schema("doomed") is None
-        assert "doomed" not in client._payload_schema_cache
+        assert client._get_cached_schema(client._scope_collection("doomed")) is None
+        assert client._scope_collection("doomed") not in client._payload_schema_cache
 
     def test_collection_exists_fast_path_uses_cache(
         self, client, mock_requests, mock_successful_response
@@ -437,7 +437,7 @@ class TestCollectionManagement:
         races Qdrant's internal replication and can briefly 4xx.
         """
         # Seed the cache directly to isolate the fast path from create.
-        client._schema_cache["already_known"] = {
+        client._schema_cache[client._scope_collection("already_known")] = {
             "size": 128,
             "distance": "Cosine",
             "etag": None,
@@ -462,13 +462,13 @@ class TestCollectionManagement:
         next operation goes back to the network and gets the truth.
         """
         # Pre-seed both caches as if a prior create/upsert had populated them.
-        client._schema_cache["ghost"] = {
+        client._schema_cache[client._scope_collection("ghost")] = {
             "size": 4,
             "distance": "Cosine",
             "etag": None,
             "full_config": {},
         }
-        client._payload_schema_cache["ghost"] = {
+        client._payload_schema_cache[client._scope_collection("ghost")] = {
             "schema": None,
             "etag": None,
             "enforcement_mode": "off",
@@ -488,8 +488,8 @@ class TestCollectionManagement:
             client.upsert("ghost", sample_points)
 
         # Both caches must be dropped for the scoped name.
-        assert client._get_cached_schema("ghost") is None
-        assert "ghost" not in client._payload_schema_cache
+        assert client._get_cached_schema(client._scope_collection("ghost")) is None
+        assert client._scope_collection("ghost") not in client._payload_schema_cache
 
     def test_get_collection_404_evicts_cache(
         self, client, mock_requests, mock_error_response
@@ -498,13 +498,13 @@ class TestCollectionManagement:
 
         Same self-healing contract as upsert, exercised on the read path.
         """
-        client._schema_cache["ghost"] = {
+        client._schema_cache[client._scope_collection("ghost")] = {
             "size": 128,
             "distance": "Cosine",
             "etag": None,
             "full_config": {},
         }
-        client._payload_schema_cache["ghost"] = {
+        client._payload_schema_cache[client._scope_collection("ghost")] = {
             "schema": None,
             "etag": None,
             "enforcement_mode": "off",
@@ -518,8 +518,8 @@ class TestCollectionManagement:
         with pytest.raises(Exception):
             client.get_collection("ghost")
 
-        assert client._get_cached_schema("ghost") is None
-        assert "ghost" not in client._payload_schema_cache
+        assert client._get_cached_schema(client._scope_collection("ghost")) is None
+        assert client._scope_collection("ghost") not in client._payload_schema_cache
 
     def test_non_404_error_does_not_evict_cache(
         self, client, mock_requests, mock_error_response, sample_points
@@ -531,7 +531,7 @@ class TestCollectionManagement:
         collection intact upstream — wiping the cache here would force a
         round trip on the next call for no reason. Pin the contract.
         """
-        client._schema_cache["intact"] = {
+        client._schema_cache[client._scope_collection("intact")] = {
             "size": 4,
             "distance": "Cosine",
             "etag": None,
@@ -547,7 +547,7 @@ class TestCollectionManagement:
             client.upsert("intact", sample_points)
 
         # Cache survives the transient error.
-        assert client._get_cached_schema("intact") is not None
+        assert client._get_cached_schema(client._scope_collection("intact")) is not None
 
     def test_get_collection_success(
         self, client, mock_requests, mock_successful_response

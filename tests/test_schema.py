@@ -478,8 +478,8 @@ class TestClientSchemaOperations:
         assert schema.fields["name"].type == "string"
 
         # Verify it was cached
-        assert "test_collection" in client._payload_schema_cache
-        assert client._payload_schema_cache["test_collection"]["etag"] == "abc123"
+        assert client._scope_collection("test_collection") in client._payload_schema_cache
+        assert client._payload_schema_cache[client._scope_collection("test_collection")]["etag"] == "abc123"
 
     def test_get_schema_not_found(self, client, mock_requests, mock_error_response):
         """Test schema not found returns None."""
@@ -535,7 +535,7 @@ class TestClientSchemaOperations:
     ):
         """Test successful schema deletion."""
         # First cache a schema
-        client._payload_schema_cache["test_collection"] = {
+        client._payload_schema_cache[client._scope_collection("test_collection")] = {
             "schema": Schema(fields={}),
             "enforcement": "strict",
             "etag": "old_etag",
@@ -549,7 +549,7 @@ class TestClientSchemaOperations:
 
         assert result is True
         # Verify cache was cleared
-        assert "test_collection" not in client._payload_schema_cache
+        assert client._scope_collection("test_collection") not in client._payload_schema_cache
 
         # Verify request
         args, kwargs = mock_requests.request.call_args
@@ -601,7 +601,7 @@ class TestClientSchemaOperations:
         # Verify request
         args, kwargs = mock_requests.request.call_args
         assert kwargs["method"] == "POST"
-        assert "test_collection/analyze" in kwargs["url"]
+        assert "collections/test_collection/schema/analyze" in kwargs["url"]
         assert kwargs["json"]["sample_size"] == 100
 
     def test_analyze_schema_with_default_sample_size(
@@ -636,13 +636,13 @@ class TestClientSchemaOperations:
         the self-healing contract that matches the JS SDK.
         """
         # Pre-seed both caches as if the collection had been used before.
-        client._schema_cache["test_collection"] = {
+        client._schema_cache[client._scope_collection("test_collection")] = {
             "size": 4,
             "distance": "Cosine",
             "etag": None,
             "full_config": {},
         }
-        client._payload_schema_cache["test_collection"] = {
+        client._payload_schema_cache[client._scope_collection("test_collection")] = {
             "schema": None,
             "etag": None,
             "enforcement_mode": "off",
@@ -661,8 +661,8 @@ class TestClientSchemaOperations:
                 enforcement="off",
             )
 
-        assert client._get_cached_schema("test_collection") is None
-        assert "test_collection" not in client._payload_schema_cache
+        assert client._get_cached_schema(client._scope_collection("test_collection")) is None
+        assert client._scope_collection("test_collection") not in client._payload_schema_cache
 
     def test_analyze_schema_404_evicts_caches(
         self, client, mock_requests, mock_error_response
@@ -671,13 +671,13 @@ class TestClientSchemaOperations:
 
         Same contract as set_schema — analyze requires the collection.
         """
-        client._schema_cache["test_collection"] = {
+        client._schema_cache[client._scope_collection("test_collection")] = {
             "size": 4,
             "distance": "Cosine",
             "etag": None,
             "full_config": {},
         }
-        client._payload_schema_cache["test_collection"] = {
+        client._payload_schema_cache[client._scope_collection("test_collection")] = {
             "schema": None,
             "etag": None,
             "enforcement_mode": "off",
@@ -690,8 +690,8 @@ class TestClientSchemaOperations:
         with pytest.raises(Exception):
             client.analyze_schema("test_collection", sample_size=1000)
 
-        assert client._get_cached_schema("test_collection") is None
-        assert "test_collection" not in client._payload_schema_cache
+        assert client._get_cached_schema(client._scope_collection("test_collection")) is None
+        assert client._scope_collection("test_collection") not in client._payload_schema_cache
 
     def test_get_schema_404_collection_not_found_evicts_caches(
         self, client, mock_requests, mock_error_response
@@ -701,13 +701,13 @@ class TestClientSchemaOperations:
         error.code; on this code, the collection is gone and the SDK's
         cached state for it is stale.
         """
-        client._schema_cache["test_collection"] = {
+        client._schema_cache[client._scope_collection("test_collection")] = {
             "size": 4,
             "distance": "Cosine",
             "etag": None,
             "full_config": {},
         }
-        client._payload_schema_cache["test_collection"] = {
+        client._payload_schema_cache[client._scope_collection("test_collection")] = {
             "schema": None,
             "etag": None,
             "enforcement_mode": "off",
@@ -723,8 +723,8 @@ class TestClientSchemaOperations:
         # get_schema returns None on any 404 (legitimate "no schema" UX);
         # the difference is whether the caches were evicted.
         assert result is None
-        assert client._get_cached_schema("test_collection") is None
-        assert "test_collection" not in client._payload_schema_cache
+        assert client._get_cached_schema(client._scope_collection("test_collection")) is None
+        assert client._scope_collection("test_collection") not in client._payload_schema_cache
 
     def test_get_schema_404_schema_not_defined_keeps_caches(
         self, client, mock_requests, mock_error_response
@@ -735,13 +735,13 @@ class TestClientSchemaOperations:
         valid for that collection. Pin this so a future refactor can't
         accidentally over-evict.
         """
-        client._schema_cache["test_collection"] = {
+        client._schema_cache[client._scope_collection("test_collection")] = {
             "size": 4,
             "distance": "Cosine",
             "etag": None,
             "full_config": {},
         }
-        client._payload_schema_cache["test_collection"] = {
+        client._payload_schema_cache[client._scope_collection("test_collection")] = {
             "schema": None,
             "etag": None,
             "enforcement_mode": "off",
@@ -756,8 +756,8 @@ class TestClientSchemaOperations:
         result = client.get_schema("test_collection")
         assert result is None
         # Both caches survive — the collection is fine, just no schema set.
-        assert client._get_cached_schema("test_collection") is not None
-        assert "test_collection" in client._payload_schema_cache
+        assert client._get_cached_schema(client._scope_collection("test_collection")) is not None
+        assert client._scope_collection("test_collection") in client._payload_schema_cache
 
     def test_delete_schema_404_collection_not_found_evicts_caches(
         self, client, mock_requests, mock_error_response
@@ -769,13 +769,13 @@ class TestClientSchemaOperations:
         """
         from aetherfy_vectors.exceptions import SchemaNotFoundError
 
-        client._schema_cache["test_collection"] = {
+        client._schema_cache[client._scope_collection("test_collection")] = {
             "size": 4,
             "distance": "Cosine",
             "etag": None,
             "full_config": {},
         }
-        client._payload_schema_cache["test_collection"] = {
+        client._payload_schema_cache[client._scope_collection("test_collection")] = {
             "schema": None,
             "etag": None,
             "enforcement_mode": "off",
@@ -790,8 +790,8 @@ class TestClientSchemaOperations:
         with pytest.raises(SchemaNotFoundError):
             client.delete_schema("test_collection")
 
-        assert client._get_cached_schema("test_collection") is None
-        assert "test_collection" not in client._payload_schema_cache
+        assert client._get_cached_schema(client._scope_collection("test_collection")) is None
+        assert client._scope_collection("test_collection") not in client._payload_schema_cache
 
     def test_delete_schema_404_schema_not_defined_keeps_caches(
         self, client, mock_requests, mock_error_response
@@ -801,13 +801,13 @@ class TestClientSchemaOperations:
         """
         from aetherfy_vectors.exceptions import SchemaNotFoundError
 
-        client._schema_cache["test_collection"] = {
+        client._schema_cache[client._scope_collection("test_collection")] = {
             "size": 4,
             "distance": "Cosine",
             "etag": None,
             "full_config": {},
         }
-        client._payload_schema_cache["test_collection"] = {
+        client._payload_schema_cache[client._scope_collection("test_collection")] = {
             "schema": None,
             "etag": None,
             "enforcement_mode": "off",
@@ -823,13 +823,13 @@ class TestClientSchemaOperations:
             client.delete_schema("test_collection")
 
         # Caches preserved — collection is still around.
-        assert client._get_cached_schema("test_collection") is not None
-        assert "test_collection" in client._payload_schema_cache
+        assert client._get_cached_schema(client._scope_collection("test_collection")) is not None
+        assert client._scope_collection("test_collection") in client._payload_schema_cache
 
     def test_refresh_schema(self, client, mock_requests, mock_successful_response):
         """Test schema cache refresh."""
         # Cache an old schema
-        client._payload_schema_cache["test_collection"] = {
+        client._payload_schema_cache[client._scope_collection("test_collection")] = {
             "schema": Schema(
                 fields={"old": FieldDefinition(type="string", required=True)}
             ),
@@ -851,9 +851,9 @@ class TestClientSchemaOperations:
         client.refresh_schema("test_collection")
 
         # Verify cache was updated
-        assert "test_collection" in client._payload_schema_cache
-        assert client._payload_schema_cache["test_collection"]["etag"] == "new_etag"
-        assert "new" in client._payload_schema_cache["test_collection"]["schema"].fields
+        assert client._scope_collection("test_collection") in client._payload_schema_cache
+        assert client._payload_schema_cache[client._scope_collection("test_collection")]["etag"] == "new_etag"
+        assert "new" in client._payload_schema_cache[client._scope_collection("test_collection")]["schema"].fields
 
 
 class TestClientValidationIntegration:
@@ -1095,7 +1095,7 @@ class TestClientValidationIntegration:
         assert result is True
 
         # Verify schema was refreshed
-        assert client._payload_schema_cache["test_collection"]["etag"] == "new_etag"
+        assert client._payload_schema_cache[client._scope_collection("test_collection")]["etag"] == "new_etag"
 
     def test_upsert_with_off_enforcement_skips_validation(
         self, client, mock_requests, mock_successful_response

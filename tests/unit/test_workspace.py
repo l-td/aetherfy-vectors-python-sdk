@@ -1,106 +1,127 @@
 """
 Workspace functionality tests for Aetherfy Vectors Python SDK.
 
-Tests workspace auto-detection, collection scoping, and isolation.
+Every collection lives in a workspace: a name, or (workspace="auto") the
+agent's workspace id from AETHERFY_WORKSPACE_ID. There is no "no workspace".
 """
 
-import os
 import pytest
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock
 from aetherfy_vectors import AetherfyVectorsClient
 from aetherfy_vectors.models import Collection, VectorConfig, DistanceMetric
 
 
-class TestWorkspaceInitialization:
-    """Test workspace initialization and auto-detection."""
+WS_ID = "0f8e2b9a-7c41-4d2e-9b3a-5e6f7a8b9c0d"
+KEY = "afy_test_1234567890123456"
 
-    def test_workspace_manual_setting(self):
-        """Test setting workspace manually."""
-        client = AetherfyVectorsClient(
-            api_key="afy_test_1234567890123456", workspace="my-workspace"
-        )
+
+class TestWorkspaceInitialization:
+    """Every collection lives in a workspace: a name, or the agent's id."""
+
+    def test_workspace_by_name(self):
+        client = AetherfyVectorsClient(api_key=KEY, workspace="my-workspace")
 
         assert client.workspace == "my-workspace"
+        assert client.workspace_id is None
+        assert client._build_collections_list_path() == (
+            "workspaces/my-workspace/collections"
+        )
 
-    def test_workspace_auto_detection(self):
-        """Test workspace='auto' reads from environment."""
-        with patch.dict(os.environ, {"AETHERFY_WORKSPACE": "env-workspace"}):
-            client = AetherfyVectorsClient(
-                api_key="afy_test_1234567890123456", workspace="auto"
-            )
+    def test_auto_reads_the_workspace_id(self, monkeypatch):
+        monkeypatch.setenv("AETHERFY_WORKSPACE_ID", WS_ID)
+        client = AetherfyVectorsClient(api_key=KEY, workspace="auto")
 
-            assert client.workspace == "env-workspace"
+        assert client.workspace is None
+        assert client.workspace_id == WS_ID
+        assert client._build_collections_list_path() == (
+            f"workspace-ids/{WS_ID}/collections"
+        )
 
-    def test_workspace_auto_no_env_var(self):
-        """Test workspace='auto' when env var not set."""
-        with patch.dict(os.environ, {}, clear=True):
-            client = AetherfyVectorsClient(
-                api_key="afy_test_1234567890123456", workspace="auto"
-            )
+    def test_default_is_auto(self, monkeypatch):
+        monkeypatch.setenv("AETHERFY_WORKSPACE_ID", WS_ID)
+        client = AetherfyVectorsClient(api_key=KEY)
 
-            assert client.workspace is None
+        assert client.workspace_id == WS_ID
+        assert client._build_collection_path("docs", "/points") == (
+            f"workspace-ids/{WS_ID}/collections/docs/points"
+        )
 
-    def test_default_reads_the_environment(self):
-        """The default is 'auto': an injected workspace is picked up unasked.
+    def test_the_old_name_variable_is_not_read(self, monkeypatch):
+        """AETHERFY_WORKSPACE (the name) is gone; only the id is read."""
+        monkeypatch.delenv("AETHERFY_WORKSPACE_ID", raising=False)
+        monkeypatch.setenv("AETHERFY_WORKSPACE", "env-workspace")
 
-        This matches the JS SDK and what the README promises. It is only safe
-        because the control plane injects AETHERFY_WORKSPACE solely for an
-        agent that really has a workspace — it used to fabricate
-        `default-<user_id>`, a name no workspaces row holds, and every default
-        client in a deployed agent then took the workspaced path and got
-        404 WORKSPACE_NOT_FOUND.
-        """
-        with patch.dict(os.environ, {"AETHERFY_WORKSPACE": "env-workspace"}):
-            client = AetherfyVectorsClient(api_key="afy_test_1234567890123456")
+        with pytest.raises(ValueError, match="AETHERFY_WORKSPACE_ID"):
+            AetherfyVectorsClient(api_key=KEY)
 
-            assert client.workspace == "env-workspace"
-            assert client._build_collections_list_path() == (
-                "workspaces/env-workspace/collections"
-            )
+    @pytest.mark.parametrize("env", [None, ""])
+    def test_auto_outside_an_agent_is_refused(self, monkeypatch, env):
+        if env is None:
+            monkeypatch.delenv("AETHERFY_WORKSPACE_ID", raising=False)
+        else:
+            monkeypatch.setenv("AETHERFY_WORKSPACE_ID", env)
 
-    def test_default_with_env_unset_is_workspaceless(self):
-        """No AETHERFY_WORKSPACE → no workspace, and the flat path."""
-        with patch.dict(os.environ, {}, clear=True):
-            client = AetherfyVectorsClient(api_key="afy_test_1234567890123456")
+        with pytest.raises(ValueError) as exc:
+            AetherfyVectorsClient(api_key=KEY, workspace="auto")
 
-            assert client.workspace is None
-            assert client._build_collections_list_path() == "collections"
+        # Both fixes are named.
+        assert "workspace name" in str(exc.value)
+        assert "inside an Aetherfy agent" in str(exc.value)
 
-    def test_no_workspace(self):
-        """Explicit None forces workspaceless even when the env var is set."""
-        with patch.dict(os.environ, {"AETHERFY_WORKSPACE": "env-workspace"}):
-            client = AetherfyVectorsClient(
-                api_key="afy_test_1234567890123456", workspace=None
-            )
+    @pytest.mark.parametrize("workspace", [None, ""])
+    def test_no_workspace_is_refused(self, monkeypatch, workspace):
+        """None and "" are refused even inside an agent: no fallback."""
+        monkeypatch.setenv("AETHERFY_WORKSPACE_ID", WS_ID)
 
-            assert client.workspace is None
+        with pytest.raises(ValueError) as exc:
+            AetherfyVectorsClient(api_key=KEY, workspace=workspace)
+
+        assert "workspace name" in str(exc.value)
+        assert "inside an Aetherfy agent" in str(exc.value)
+
+    def test_workspace_is_read_only(self):
+        client = AetherfyVectorsClient(api_key=KEY, workspace="my-workspace")
+
+        with pytest.raises(AttributeError):
+            client.workspace = "other"  # type: ignore[misc]
+        with pytest.raises(AttributeError):
+            client.workspace_id = WS_ID  # type: ignore[misc]
 
 
 class TestCollectionScoping:
-    """Test collection name scoping with workspaces."""
+    """The local cache key never lets two workspaces share an entry."""
 
-    def test_scope_collection_with_workspace(self):
-        """Test scoping collection name with workspace."""
-        client = AetherfyVectorsClient(
-            api_key="afy_test_1234567890123456", workspace="my-workspace"
+    def test_scope_by_name(self):
+        client = AetherfyVectorsClient(api_key=KEY, workspace="my-workspace")
+
+        assert client._scope_collection("documents") == "my-workspace/documents"
+
+    def test_scope_by_id(self, monkeypatch):
+        monkeypatch.setenv("AETHERFY_WORKSPACE_ID", WS_ID)
+        client = AetherfyVectorsClient(api_key=KEY)
+
+        assert client._scope_collection("documents") == f"id:{WS_ID}/documents"
+
+    def test_name_and_id_forms_never_share_a_cache_entry(self, monkeypatch):
+        """A workspace NAMED like an id still gets a different key."""
+        monkeypatch.setenv("AETHERFY_WORKSPACE_ID", WS_ID)
+        by_id = AetherfyVectorsClient(api_key=KEY)
+        by_name = AetherfyVectorsClient(api_key=KEY, workspace=WS_ID)
+        other = AetherfyVectorsClient(api_key=KEY, workspace="other")
+
+        keys = {
+            by_id._scope_collection("documents"),
+            by_name._scope_collection("documents"),
+            other._scope_collection("documents"),
+        }
+        assert len(keys) == 3
+
+    def test_workspace_in_the_url_is_encoded(self):
+        client = AetherfyVectorsClient(api_key=KEY, workspace="a b")
+
+        assert client._build_collection_path("c/d") == (
+            "workspaces/a%20b/collections/c%2Fd"
         )
-
-        scoped = client._scope_collection("documents")
-        assert scoped == "my-workspace/documents"
-
-    def test_scope_collection_without_workspace(self):
-        """Test scoping collection name without workspace."""
-        client = AetherfyVectorsClient(
-            api_key="afy_test_1234567890123456", workspace=None
-        )
-
-        scoped = client._scope_collection("documents")
-        assert scoped == "documents"
-
-    # _unscope_collection was removed post-A/B (vectordb returns bare
-    # names; no client-side unscoping needed). The slash-form scoped
-    # name is now only used as a local schemaCache key — no read path
-    # needs the inverse. Tests for the deleted method removed.
 
 
 class TestVectorOperationsWithWorkspace:
@@ -109,9 +130,7 @@ class TestVectorOperationsWithWorkspace:
     @pytest.fixture
     def mock_client(self):
         """Create a client with mocked HTTP session."""
-        client = AetherfyVectorsClient(
-            api_key="afy_test_1234567890123456", workspace="test-workspace"
-        )
+        client = AetherfyVectorsClient(api_key=KEY, workspace="test-workspace")
         client._make_request = Mock()
         yield client
 
@@ -126,7 +145,6 @@ class TestVectorOperationsWithWorkspace:
         # Verify the request was made with scoped collection in URL
         call_args = mock_client._make_request.call_args
         assert call_args[0][0] == "POST"
-        # Post-A/B: nested URL form, not URL-encoded slash.
         assert "workspaces/test-workspace/collections/documents" in call_args[0][1]
         assert call_args[0][1].endswith("points/query")
 
@@ -143,7 +161,6 @@ class TestVectorOperationsWithWorkspace:
 
         # Verify the request was made with scoped collection in URL
         call_args = mock_client._make_request.call_args
-        # Post-A/B: nested URL form, not URL-encoded slash.
         assert "workspaces/test-workspace/collections/documents" in call_args[0][1]
         assert "points" in call_args[0][1]
 
@@ -155,7 +172,6 @@ class TestVectorOperationsWithWorkspace:
 
         # Verify the request was made with scoped collection in URL
         call_args = mock_client._make_request.call_args
-        # Post-A/B: nested URL form, not URL-encoded slash.
         assert "workspaces/test-workspace/collections/documents" in call_args[0][1]
         assert "points" in call_args[0][1]
 
@@ -167,7 +183,6 @@ class TestVectorOperationsWithWorkspace:
 
         # Verify the request was made with scoped collection in URL
         call_args = mock_client._make_request.call_args
-        # Post-A/B: nested URL form, not URL-encoded slash.
         assert "workspaces/test-workspace/collections/documents" in call_args[0][1]
         assert "points/delete" in call_args[0][1]
 
@@ -189,7 +204,6 @@ class TestVectorOperationsWithWorkspace:
 
         # Verify the request was made with scoped collection in URL
         call_args = mock_client._make_request.call_args
-        # Post-A/B: nested URL form, not URL-encoded slash.
         assert "workspaces/test-workspace/collections/documents" in call_args[0][1]
         assert result == 42
 
@@ -200,9 +214,7 @@ class TestCollectionManagementWithWorkspace:
     @pytest.fixture
     def mock_client(self):
         """Create a client with mocked HTTP session."""
-        client = AetherfyVectorsClient(
-            api_key="afy_test_1234567890123456", workspace="test-workspace"
-        )
+        client = AetherfyVectorsClient(api_key=KEY, workspace="test-workspace")
         client._make_request = Mock()
         yield client
 
@@ -235,7 +247,6 @@ class TestCollectionManagementWithWorkspace:
 
         # Verify the request was made with scoped collection in URL
         call_args = mock_client._make_request.call_args
-        # Post-A/B: nested URL form, not URL-encoded slash.
         assert "workspaces/test-workspace/collections/documents" in call_args[0][1]
 
     def test_collection_exists_with_workspace(self, mock_client):
@@ -246,7 +257,6 @@ class TestCollectionManagementWithWorkspace:
 
         # Verify the request was made with scoped collection in URL
         call_args = mock_client._make_request.call_args
-        # Post-A/B: nested URL form, not URL-encoded slash.
         assert "workspaces/test-workspace/collections/documents" in call_args[0][1]
 
     def test_get_collection_with_workspace(self, mock_client):
@@ -307,26 +317,17 @@ class TestCollectionManagementWithWorkspace:
 
 
 class TestSchemaOperationsWithWorkspace:
-    """Test schema operations with workspace."""
+    """Schema routes live under the collection, in its workspace."""
+
+    SCHEMA = "workspaces/test-workspace/collections/documents/schema"
 
     @pytest.fixture
     def mock_client(self):
-        """Create a client with mocked HTTP session."""
-        client = AetherfyVectorsClient(
-            api_key="afy_test_1234567890123456", workspace="test-workspace"
-        )
+        client = AetherfyVectorsClient(api_key=KEY, workspace="test-workspace")
         client._make_request = Mock()
         yield client
 
-    # Schema URLs stay in slash-form (vectordb's /api/v1/schema/:collection
-    # router is unchanged in PR 1 of the A/B refactor — only /collections
-    # got the nested route family). The SDK keeps using
-    # f"schema/{quote_collection_name(scoped_name)}" which URL-encodes
-    # the slash. Pinning that contract here so a future migration of
-    # schema endpoints to nested form is a visible test failure.
-
     def test_get_schema_with_workspace(self, mock_client):
-        """get_schema URL keeps slash-form (schema endpoints not nested)."""
         mock_client._make_request.return_value = {
             "schema": {"fields": {}},
             "etag": "schema-v1",
@@ -336,37 +337,33 @@ class TestSchemaOperationsWithWorkspace:
 
         mock_client.get_schema(collection_name="documents")
 
-        call_args = mock_client._make_request.call_args
-        assert "schema/test-workspace%2Fdocuments" in call_args[0][1]
+        assert mock_client._make_request.call_args[0][:2] == ("GET", self.SCHEMA)
 
     def test_set_schema_with_workspace(self, mock_client):
-        """set_schema URL keeps slash-form."""
         from aetherfy_vectors.schema import Schema, FieldDefinition
 
         mock_client._make_request.return_value = {"etag": "schema-v2"}
-
         schema = Schema(
             fields={"title": FieldDefinition(type="keyword", required=True)}
         )
 
         mock_client.set_schema(collection_name="documents", schema=schema)
 
-        call_args = mock_client._make_request.call_args
-        assert "schema/test-workspace%2Fdocuments" in call_args[0][1]
+        assert mock_client._make_request.call_args[0][:2] == ("PUT", self.SCHEMA)
 
     def test_delete_schema_with_workspace(self, mock_client):
-        """delete_schema URL keeps slash-form."""
         mock_client._make_request.return_value = {"status": "ok"}
 
         mock_client.delete_schema(collection_name="documents")
 
-        call_args = mock_client._make_request.call_args
-        assert "schema/test-workspace%2Fdocuments" in call_args[0][1]
+        assert mock_client._make_request.call_args[0][:2] == (
+            "DELETE",
+            self.SCHEMA,
+        )
 
     def test_analyze_schema_with_workspace(self, mock_client):
-        """analyze_schema URL keeps slash-form."""
         mock_client._make_request.return_value = {
-            "collection": "test-workspace/documents",
+            "collection": "documents",
             "sample_size": 1000,
             "total_points": 5000,
             "fields": {},
@@ -376,12 +373,12 @@ class TestSchemaOperationsWithWorkspace:
 
         mock_client.analyze_schema(collection_name="documents")
 
-        call_args = mock_client._make_request.call_args
-        assert "schema/test-workspace%2Fdocuments" in call_args[0][1]
-        assert "analyze" in call_args[0][1]
+        assert mock_client._make_request.call_args[0][:2] == (
+            "POST",
+            self.SCHEMA + "/analyze",
+        )
 
     def test_refresh_schema_with_workspace(self, mock_client):
-        """Test refresh_schema scopes collection name."""
         mock_client._make_request.return_value = {
             "schema": {"fields": {}},
             "etag": "schema-v3",
@@ -391,57 +388,23 @@ class TestSchemaOperationsWithWorkspace:
 
         mock_client.refresh_schema(collection_name="documents")
 
-        call_args = mock_client._make_request.call_args
-        assert "schema/test-workspace%2Fdocuments" in call_args[0][1]
+        assert mock_client._make_request.call_args[0][:2] == ("GET", self.SCHEMA)
 
+    def test_schema_by_workspace_id(self, monkeypatch):
+        monkeypatch.setenv("AETHERFY_WORKSPACE_ID", WS_ID)
+        client = AetherfyVectorsClient(api_key=KEY)
+        client._make_request = Mock(return_value={"status": "ok"})
 
-class TestBackwardCompatibility:
-    """Test backward compatibility without workspace."""
+        client.delete_schema(collection_name="documents")
 
-    @pytest.fixture
-    def mock_client(self):
-        """Create a client without workspace."""
-        client = AetherfyVectorsClient(
-            api_key="afy_test_1234567890123456", workspace=None
+        assert client._make_request.call_args[0][1] == (
+            f"workspace-ids/{WS_ID}/collections/documents/schema"
         )
-        client._make_request = Mock()
-        yield client
 
-    def test_operations_without_workspace(self, mock_client):
-        """Test operations work without workspace (backward compat)."""
-        mock_client._make_request.return_value = {"result": []}
+    def test_clear_schema_cache_takes_the_bare_name(self, mock_client):
+        key = mock_client._scope_collection("documents")
+        mock_client._schema_cache[key] = {"size": 3}
 
-        # Should work without workspace scoping
-        mock_client.search(collection_name="documents", query_vector=[0.1, 0.2, 0.3])
+        mock_client.clear_schema_cache("documents")
 
-        call_args = mock_client._make_request.call_args
-        # Collection should NOT be scoped (no workspace prefix)
-        assert "collections/documents" in call_args[0][1]
-        assert "test-workspace" not in call_args[0][1]
-
-    def test_get_collections_without_workspace(self, mock_client):
-        """Test get_collections returns all collections without workspace."""
-        mock_client._make_request.return_value = {
-            "collections": [
-                {
-                    "name": "documents",
-                    "config": {
-                        "params": {"vectors": {"size": 384, "distance": "Cosine"}}
-                    },
-                },
-                {
-                    "name": "images",
-                    "config": {
-                        "params": {"vectors": {"size": 512, "distance": "Cosine"}}
-                    },
-                },
-            ]
-        }
-
-        result = mock_client.get_collections()
-
-        # Should return all collections as-is
-        assert len(result) == 2
-        names = [c.name for c in result]
-        assert "documents" in names
-        assert "images" in names
+        assert key not in mock_client._schema_cache

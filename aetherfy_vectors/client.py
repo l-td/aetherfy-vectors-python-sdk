@@ -50,8 +50,20 @@ from .utils import (
     build_api_url,
     parse_error_response,
     format_points_for_upsert,
-    quote_collection_name,
     serialize_filter,
+)
+
+# Every collection lives in a workspace, so a client without one is refused
+# at construction rather than on its first request.
+NO_WORKSPACE_MESSAGE = (
+    "A workspace is required: every collection lives in one. Pass a workspace "
+    "name (workspace='my-workspace'), or run inside an Aetherfy agent and keep "
+    "the default workspace='auto'."
+)
+NO_WORKSPACE_MESSAGE_AUTO = (
+    "workspace='auto' reads AETHERFY_WORKSPACE_ID, which is not set: it is set "
+    "only inside an Aetherfy agent. Pass a workspace name "
+    "(workspace='my-workspace'), or run inside an Aetherfy agent."
 )
 
 
@@ -148,15 +160,16 @@ class AetherfyVectorsClient:
                 retried up to 3 times with exponential backoff, so one call
                 can take several times this long. A method's own ``timeout=``
                 is different: a deadline for that whole call.
-            workspace: Workspace name for multi-agent coordination.
-                Defaults to ``'auto'``: read ``AETHERFY_WORKSPACE`` from the
-                environment, and fall back to no workspace when it is unset.
-                The control plane sets that variable only on an agent that
-                really has a workspace, so 'auto' can only ever resolve to a
-                name the workspaces table holds.
-                - Set to a string to use a specific workspace
-                - Pass None to force no workspace (collections are not
-                  namespaced) even inside a workspaced agent
+            workspace: The workspace every collection of this client lives
+                in. Every collection lives in exactly one workspace, and
+                collection names are unique per workspace.
+                - ``'auto'`` (the default): the workspace of the Aetherfy agent
+                  this code runs in, by id, from ``AETHERFY_WORKSPACE_ID``
+                  (the control plane injects it on every agent). Requests go
+                  to ``/workspace-ids/{id}/...``.
+                - A workspace name: requests go to ``/workspaces/{name}/...``.
+                There is no "no workspace": ``None``, an empty name, and
+                ``'auto'`` outside an agent are refused here.
 
         There is deliberately no ``**kwargs``: an argument this constructor
         does not name raises TypeError. It used to be accepted and dropped, so
@@ -167,7 +180,8 @@ class AetherfyVectorsClient:
 
         Raises:
             AuthenticationError: If API key is invalid or missing.
-            ValueError: If ``api_region`` is not one of us-east-1/eu-central-1/ap-southeast-1.
+            ValueError: If ``api_region`` is not one of us-east-1/eu-central-1/ap-southeast-1,
+                or no workspace is given (see ``workspace``).
             AetherfyVectorsException: If region discovery fails.
         """
         # Validate the API-region override eagerly so a typo fails at
@@ -218,11 +232,18 @@ class AetherfyVectorsClient:
 
         self.endpoint = resolved_endpoint.rstrip("/")
 
-        # Initialize workspace (auto-detect or explicit)
+        # The workspace: a name, or (for 'auto') the agent's workspace id.
+        # Exactly one of the two is set; there is no workspaceless client.
+        self._workspace: Optional[str] = None
+        self._workspace_id: Optional[str] = None
         if workspace == "auto":
-            self.workspace = os.getenv("AETHERFY_WORKSPACE")
+            self._workspace_id = os.getenv("AETHERFY_WORKSPACE_ID") or None
+            if self._workspace_id is None:
+                raise ValueError(NO_WORKSPACE_MESSAGE_AUTO)
+        elif isinstance(workspace, str) and workspace:
+            self._workspace = workspace
         else:
-            self.workspace = workspace
+            raise ValueError(NO_WORKSPACE_MESSAGE)
 
         # auth_manager is initialized above (before endpoint resolution).
         # Build the standard header bundle now that the endpoint is known.
@@ -367,48 +388,51 @@ class AetherfyVectorsClient:
 
         return session
 
-    def _scope_collection(self, collection_name: str) -> str:
-        """Local cache-key for a collection name, with workspace prefix when set.
+    @property
+    def workspace(self) -> Optional[str]:
+        """The workspace name, or None when the client addresses it by id."""
+        return self._workspace
 
-        NOT sent on the wire anymore — the canonical vectordb wire form
-        post-A/B is the nested URL `/workspaces/{ws}/collections/{name}`
-        with a bare name in the URL/body (see `_build_collection_path`).
-        Kept as a stable schema-cache key so same-name collections in
-        different workspaces don't collide.
+    @property
+    def workspace_id(self) -> Optional[str]:
+        """The workspace id (``workspace='auto'``), or None when given a name."""
+        return self._workspace_id
+
+    def _scope_collection(self, collection_name: str) -> str:
+        """Local cache-key for a collection name, never sent on the wire.
+
+        Prefixed ``name/`` or ``id:<uuid>/`` so that same-name collections
+        in different workspaces, and the two ways of addressing a
+        workspace, never share a cache entry.
         """
-        if self.workspace:
-            return f"{self.workspace}/{collection_name}"
-        return collection_name
+        if self._workspace_id is not None:
+            return f"id:{self._workspace_id}/{collection_name}"
+        return f"{self._workspace}/{collection_name}"
+
+    def _workspace_path(self) -> str:
+        """``workspace-ids/{id}`` for 'auto', else ``workspaces/{name}``."""
+        from urllib.parse import quote
+
+        if self._workspace_id is not None:
+            return f"workspace-ids/{quote(self._workspace_id, safe='')}"
+        return f"workspaces/{quote(self._workspace or '', safe='')}"
 
     def _build_collection_path(self, collection_name: str, suffix: str = "") -> str:
-        """Build the canonical URL path for a collection.
-
-        Workspaced operations use the nested
-        form `workspaces/{ws}/collections/{name}` instead of the old
-        slash-in-name encoding. Workspaceless calls continue to use the
-        flat form.
+        """The URL path of a collection in this client's workspace.
 
         Args:
-            collection_name: BARE (unscoped) collection name.
+            collection_name: BARE collection name.
             suffix: Optional path suffix (e.g. ``"/points/query"``).
                 Must already begin with ``/`` when non-empty.
         """
         from urllib.parse import quote
 
         enc_name = quote(collection_name, safe="")
-        if self.workspace:
-            enc_ws = quote(self.workspace, safe="")
-            return f"workspaces/{enc_ws}/collections/{enc_name}{suffix}"
-        return f"collections/{enc_name}{suffix}"
+        return f"{self._workspace_path()}/collections/{enc_name}{suffix}"
 
     def _build_collections_list_path(self) -> str:
-        """Workspaced list/create endpoint or workspaceless."""
-        if self.workspace:
-            from urllib.parse import quote
-
-            enc_ws = quote(self.workspace, safe="")
-            return f"workspaces/{enc_ws}/collections"
-        return "collections"
+        """The list/create endpoint of this client's workspace."""
+        return f"{self._workspace_path()}/collections"
 
     def _make_request(
         self,
@@ -436,7 +460,7 @@ class AetherfyVectorsClient:
                 the response is HTTP 404. Use for collection-scoped ops
                 where 404 unambiguously means "the collection is gone"
                 (cross-client delete or pre-existence check). Don't pass
-                for /schema/<name> reads, where 404 also covers the
+                for schema reads, where 404 also covers the
                 legitimate "no payload schema set" state.
             timeout: A DEADLINE in seconds for the whole call, retries and
                 backoff included, from a public method's ``timeout=``
@@ -544,11 +568,10 @@ class AetherfyVectorsClient:
     def _fetch_and_cache_schema(self, collection_name: str) -> Dict[str, Any]:
         """Fetch collection schema from API and cache it with ETag.
 
-        Caller passes the BARE collection name (no workspace slash).
-        The wire URL uses the nested form via _build_collection_path
-        when workspaced; the local _schema_cache key uses the slash-
-        form scoped_name for collision-free lookups across workspaces
-        with same-name collections.
+        Caller passes the BARE collection name. The wire URL comes from
+        _build_collection_path; the local _schema_cache key is the
+        workspace-scoped name (_scope_collection), so same-name
+        collections in different workspaces never share an entry.
         """
         scoped_name = self._scope_collection(collection_name)
         response = self._make_request(
@@ -575,9 +598,13 @@ class AetherfyVectorsClient:
         return schema
 
     def clear_schema_cache(self, collection_name: Optional[str] = None) -> None:
-        """Clear schema cache for a collection or all collections."""
+        """Clear schema cache for a collection or all collections.
+
+        ``collection_name`` is the bare name; the cache is keyed by the
+        workspace-scoped name (``_scope_collection``).
+        """
         if collection_name:
-            self._schema_cache.pop(collection_name, None)
+            self._schema_cache.pop(self._scope_collection(collection_name), None)
         else:
             self._schema_cache.clear()
 
@@ -703,10 +730,8 @@ class AetherfyVectorsClient:
 
         scoped_name = self._scope_collection(collection_name)
 
-        # Post-A/B: workspace lives in URL path, body name is bare.
-        # POST /workspaces/{ws}/collections {name: bare, ...} for workspaced;
-        # POST /collections {name: bare, ...} for workspaceless. vectordb
-        # rejects any "/" in the body name.
+        # The workspace is in the URL; the body name is bare (vectordb
+        # rejects any "/" in it).
         data: Dict[str, Any] = {
             "name": collection_name,
             "vectors": config.to_dict(),
@@ -796,10 +821,8 @@ class AetherfyVectorsClient:
         Returns:
             List of Collection objects.
         """
-        # Post-A/B: GET /workspaces/{ws}/collections returns ONLY this
-        # workspace's collections with bare names; GET /collections returns
-        # workspaceless collections (also bare). No client-side filtering
-        # or name-unscoping needed.
+        # The workspace's list holds only its own collections, with bare
+        # names: nothing to filter or unscope.
         response = self._make_request("GET", self._build_collections_list_path())
         collections = response.get("collections", [])
         return [Collection.from_dict(col) for col in collections]
@@ -863,9 +886,7 @@ class AetherfyVectorsClient:
             self._build_collection_path(collection_name),
             evict_caches_on_404=scoped_name,
         )
-        # Post-A/B: vectordb returns the bare collection name (PG stores
-        # `name` without workspace prefix; workspace is the workspace_id
-        # join key). No client-side unscope needed.
+        # vectordb returns the bare collection name: nothing to unscope.
         collection_data = response.get("result", response)
         return Collection.from_dict(collection_data)
 
@@ -1109,16 +1130,14 @@ class AetherfyVectorsClient:
         except ValidationError as e:
             # Handle 412 Precondition Failed (schema changed)
             if e.status_code == 412:
-                self.clear_schema_cache(scoped_name)
-                self._payload_schema_cache.pop(original_collection_name, None)
+                self._schema_cache.pop(scoped_name, None)
+                self._payload_schema_cache.pop(scoped_name, None)
 
                 # Fetch updated schema and re-validate
                 updated_schema = None
                 try:
                     self.get_schema(original_collection_name)
-                    updated_schema = self._payload_schema_cache.get(
-                        original_collection_name
-                    )
+                    updated_schema = self._payload_schema_cache.get(scoped_name)
                     if updated_schema and updated_schema["schema"]:
                         enforcement_mode = updated_schema.get("enforcement_mode", "off")
                         if enforcement_mode != "off":
@@ -1133,9 +1152,7 @@ class AetherfyVectorsClient:
                     raise
                 except Exception:
                     # Ignore other errors during schema refresh
-                    updated_schema = self._payload_schema_cache.get(
-                        original_collection_name
-                    )
+                    updated_schema = self._payload_schema_cache.get(scoped_name)
 
                 # Retry the upsert with updated schema
                 try:
@@ -1954,7 +1971,7 @@ class AetherfyVectorsClient:
 
         try:
             response = self._make_request(
-                "GET", f"schema/{quote_collection_name(scoped_name)}"
+                "GET", self._build_collection_path(collection_name, "/schema")
             )
 
             schema = Schema.from_dict(response["schema"])
@@ -2043,7 +2060,7 @@ class AetherfyVectorsClient:
 
         response = self._make_request(
             "PUT",
-            f"schema/{quote_collection_name(scoped_name)}",
+            self._build_collection_path(collection_name, "/schema"),
             data,
             evict_caches_on_404=scoped_name,
         )
@@ -2075,7 +2092,9 @@ class AetherfyVectorsClient:
         scoped_name = self._scope_collection(collection_name)
 
         try:
-            self._make_request("DELETE", f"schema/{quote_collection_name(scoped_name)}")
+            self._make_request(
+                "DELETE", self._build_collection_path(collection_name, "/schema")
+            )
 
             # Clear from cache (use scoped name)
             self._payload_schema_cache.pop(scoped_name, None)
@@ -2122,7 +2141,7 @@ class AetherfyVectorsClient:
         data = {"sample_size": sample_size}
         response = self._make_request(
             "POST",
-            f"schema/{quote_collection_name(scoped_name)}/analyze",
+            self._build_collection_path(collection_name, "/schema/analyze"),
             data,
             evict_caches_on_404=scoped_name,
         )

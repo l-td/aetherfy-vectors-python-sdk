@@ -10,7 +10,7 @@ import random
 import re
 import time
 from typing import Any, Dict, List, Optional, Union, Callable
-from urllib.parse import quote, urlparse
+from urllib.parse import urlparse
 
 from .exceptions import ValidationError, AetherfyVectorsException
 
@@ -223,19 +223,6 @@ def build_api_url(base_url: str, endpoint: str) -> str:
     base = base_url.rstrip("/")
     path = endpoint.lstrip("/")
     return f"{base}/api/v1/{path}"
-
-
-def quote_collection_name(name: str) -> str:
-    """URL-quote a collection name for safe use as a path segment.
-
-    Workspace-scoped collection names contain ``/`` (the separator
-    between workspace and collection, e.g. ``"my-bot/customer-42"``).
-    Embedded literally in a URL path the slash splits the segment and
-    the request reaches the wrong route. ``quote(name, safe='')``
-    percent-encodes every reserved character (including ``/``) so the
-    segment lands intact at the server.
-    """
-    return quote(name, safe="")
 
 
 def parse_error_response(

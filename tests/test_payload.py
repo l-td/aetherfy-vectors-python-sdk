@@ -28,7 +28,8 @@ MISSING = "550e8400-e29b-41d4-a716-446655440099"
 
 def _make_client():
     client = AetherfyVectorsClient.__new__(AetherfyVectorsClient)
-    client.workspace = None
+    client._workspace = "ws"
+    client._workspace_id = None
     client._make_request = MagicMock(return_value={"result": {"status": "ok"}})
     return client
 
@@ -43,7 +44,7 @@ def test_set_payload_posts_to_payload_endpoint_with_correct_body():
     method, path = client._make_request.call_args.args[:2]
     body = client._make_request.call_args.args[2]
     assert method == "POST"
-    assert path == "collections/col/points/payload"
+    assert path == "workspaces/ws/collections/col/points/payload"
     assert body == {"payload": {"tag": "new"}, "points": [P1, P2]}
     assert out == {"status": "ok"}
 
@@ -58,7 +59,7 @@ def test_overwrite_payload_uses_put():
     method, path = client._make_request.call_args.args[:2]
     body = client._make_request.call_args.args[2]
     assert method == "PUT"
-    assert path == "collections/col/points/payload"
+    assert path == "workspaces/ws/collections/col/points/payload"
     assert body == {"payload": {"only": "this"}, "points": [P1]}
 
 
@@ -72,7 +73,7 @@ def test_delete_payload_posts_to_payload_delete_with_keys_and_points_body():
     method, path = client._make_request.call_args.args[:2]
     body = client._make_request.call_args.args[2]
     assert method == "POST"
-    assert path == "collections/col/points/payload/delete"
+    assert path == "workspaces/ws/collections/col/points/payload/delete"
     assert body == {"keys": ["old_tag", "old_meta"], "points": [P1, P2]}
 
 
@@ -137,7 +138,7 @@ def test_merge_metadata_calls_set_payload_with_metadata_key():
     method, path = client._make_request.call_args.args[:2]
     body = client._make_request.call_args.args[2]
     assert method == "POST"
-    assert path == "collections/col/points/payload"
+    assert path == "workspaces/ws/collections/col/points/payload"
     assert body == {"payload": {"tag": "x"}, "points": [P1], "key": "metadata"}
 
 
@@ -168,7 +169,7 @@ def test_delete_metadata_keys_dotted_path_and_body():
     method, path = client._make_request.call_args.args[:2]
     body = client._make_request.call_args.args[2]
     assert method == "POST"
-    assert path == "collections/col/points/payload/delete"
+    assert path == "workspaces/ws/collections/col/points/payload/delete"
     assert body == {
         "keys": ["metadata.k1", "metadata.k2"],
         "points": [P1],

@@ -71,10 +71,9 @@ class MemoryClient:
     """Agent memory client — opinionated wrapper over AetherfyVectorsClient.
 
     Construction mirrors AetherfyVectorsClient, `workspace="auto"` included
-    (it picks up `AETHERFY_WORKSPACE`, which the control plane injects on an
-    agent that has a workspace, and resolves to no workspace when unset).
-    Override with `workspace=None` for a shared-namespace dev flow, or pass an
-    explicit name.
+    (inside an Aetherfy agent it addresses the agent's workspace by id, from
+    `AETHERFY_WORKSPACE_ID`). Outside an agent, pass a workspace name: there
+    is no "no workspace".
     """
 
     DEFAULT_ENDPOINT = AetherfyVectorsClient.DEFAULT_ENDPOINT
@@ -126,10 +125,10 @@ class MemoryClient:
                 MemoryClientConfig extends ClientConfig and has always
                 accepted `apiRegion`.
             timeout: Request timeout in seconds. Ignored if `client` is provided.
-            workspace: Workspace name. Defaults to "auto" (reads
-                AETHERFY_WORKSPACE). Pass None to disable workspace scoping
-                (collections land in a shared namespace — not recommended
-                outside local dev). Ignored if `client` is provided.
+            workspace: Workspace name. Defaults to "auto" (the agent's
+                workspace, by id, from AETHERFY_WORKSPACE_ID). None, an empty
+                name and "auto" outside an agent raise ValueError. Ignored if
+                `client` is provided.
             thread_vector_size: Embedding dimension for THREADS. Every thread
                 in a workspace lives in one collection and therefore shares
                 one dimension, fixed when that collection is first created;
@@ -177,8 +176,13 @@ class MemoryClient:
 
     @property
     def workspace(self) -> Optional[str]:
-        """The active workspace, or None if workspace scoping is disabled."""
+        """The workspace name, or None when it is addressed by id ("auto")."""
         return self._client.workspace
+
+    @property
+    def workspace_id(self) -> Optional[str]:
+        """The workspace id ("auto"), or None when given a name."""
+        return self._client.workspace_id
 
     @property
     def _threads(self) -> str:
@@ -196,7 +200,7 @@ class MemoryClient:
 
         Use this as the low-level escape hatch for any operation not exposed
         on MemoryClient. Every collection it reaches is in this client's
-        workspace (collection NAMES are unique per account).
+        workspace (collection names are unique per workspace).
         """
         return self._client
 
@@ -524,5 +528,6 @@ class MemoryClient:
         self.close()
 
     def __repr__(self) -> str:
-        ws = self.workspace or "<unscoped>"
-        return f"MemoryClient(workspace={ws!r})"
+        if self.workspace_id is not None:
+            return f"MemoryClient(workspace_id={self.workspace_id!r})"
+        return f"MemoryClient(workspace={self.workspace!r})"
