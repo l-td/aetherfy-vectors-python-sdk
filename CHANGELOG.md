@@ -5,16 +5,97 @@ All notable changes to the Aetherfy Vectors Python SDK will be documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.2.1] - not yet released
+
+This release contains changes marked BREAKING below: every collection now
+lives in a workspace. They ship in a patch version, not 2.0.0, because the
+package has no users yet (owner ruling, 2026-10-14); the labels stay because
+they are true, and they are why code written against 1.2.0 needs the changes
+described here.
+
+### Changed (breaking)
+
+- **BREAKING: every collection lives in a workspace; there is no workspaceless
+  client.** `workspace="auto"` (the default) now addresses the agent's
+  workspace by **id**, from `AETHERFY_WORKSPACE_ID`, at
+  `/api/v1/workspace-ids/{id}/...`; a workspace name goes to
+  `/api/v1/workspaces/{name}/...`. `workspace=None`, an empty name, and
+  `"auto"` outside an agent (`AETHERFY_WORKSPACE_ID` unset) raise `ValueError`
+  at construction, saying to pass a workspace name or run inside an Aetherfy
+  agent. Before, `"auto"` read `AETHERFY_WORKSPACE` (the name), which is no
+  longer read or injected, and fell back to no workspace; every request
+  without a workspace now answers 400 `WORKSPACE_REQUIRED`. Every account
+  starts with a workspace named `default`.
+- **BREAKING: `workspace` and the new `workspace_id` are read-only
+  properties** on `AetherfyVectorsClient` and `MemoryClient`. `workspace` is
+  the name, or None when the client was built from the id.
+- **BREAKING: collection names are unique per workspace, not per account.**
+  `invoices` in two workspaces are two collections.
+- **BREAKING: schema calls use the collection's own routes**
+  (`.../collections/{name}/schema[/analyze]`); the old `/api/v1/schema/...`
+  mount answers 400 `WORKSPACE_REQUIRED`.
+- **BREAKING: an unknown workspace raises `WorkspaceNotFoundError` instead of
+  reading as empty.** `collection_exists()` and `delete_field_index()` return
+  False only for 404 `COLLECTION_NOT_FOUND`; `get_schema()` returns None, and
+  `delete_schema()` raises `SchemaNotFoundError`, only for
+  `COLLECTION_NOT_FOUND` or `SCHEMA_NOT_DEFINED`; `merge_metadata()` /
+  `delete_metadata_keys()` (client and memory) no longer turn it into
+  `PointNotFoundError`; and the memory layer's `namespace()` raises
+  `NamespaceNotFoundError` only for a missing collection. Each decided on
+  the 404 status alone, so a mistyped workspace read as "not there".
+- **BREAKING: a 403 other than `AGENT_KEY_WORKSPACE_FORBIDDEN` is an
+  `AuthenticationError`** (it was the base `AetherfyVectorsException`), as in
+  the JS SDK: e.g. 403 `AUTH_AGENT_KEY_OUT_OF_SCOPE` from
+  `get_usage_stats()` with an agent's key (an account-only route).
+- **BREAKING: any 422 is a `ValidationError`** (it was the base class), e.g.
+  `COLLECTION_SDK_MANAGED`; and 404 `SCHEMA_NOT_DEFINED` is a
+  `SchemaNotFoundError`.
+- **BREAKING: `AgentWorkspaceForbiddenError.workspace` is None only for a
+  workspace addressed by id** (`workspace="auto"`); there are no "collections
+  in no workspace" any more.
+- **BREAKING (`aetherfy_agent`): `Spawn.workspace` is a required `str`**, the
+  spawned agent's workspace name; it is never None.
+- **The memory layer's threads collection is `__threads__` in each
+  workspace**, as in 1.2.0 (`aetherfy_memory.models.THREADS_COLLECTION`). The
+  per-workspace `__threads__<workspace>` name, `THREADS_COLLECTION_PREFIX` and
+  `threads_collection_name()` that were briefly on the unreleased branch are
+  gone and never shipped. Aetherfy refuses to move or rename a threads
+  collection (`COLLECTION_SDK_MANAGED`); an agent that moves to another
+  workspace leaves its conversations in the old one's `__threads__`.
 
 ### Added
 
-- **`AgentWorkspaceForbiddenError` (`aetherfy_vectors`, re-exported at the root), with `.workspace`** — the vector API now refuses an agent's injected key a workspace
-  it was not granted (403 `AGENT_KEY_WORKSPACE_FORBIDDEN`; `workspace` names it,
-  or is null for the collections in no workspace). The error says how to grant
-  access (the agent's page in the dashboard, or `afy access <agent> --add`). Not
-  retryable. `AGENT_ACCESS_UNAVAILABLE` (503) arrives as the existing retryable
-  service-unavailable error.
+- **`WorkspaceNotFoundError`** (`aetherfy_vectors`, re-exported at the
+  root): 404 `WORKSPACE_NOT_FOUND`, with `.workspace` (the name sent) or
+  `.workspace_id` (the id sent). Not retryable.
+- **`AgentWorkspaceForbiddenError` (`aetherfy_vectors`, re-exported at the
+  root), with `.workspace`**: the vector API refuses an agent's injected key a
+  workspace it was not granted (403 `AGENT_KEY_WORKSPACE_FORBIDDEN`;
+  `workspace` names it, or is None when it was addressed by id). The error
+  says how to grant access (the agent's page in the dashboard, or
+  `afy access <agent> --add <workspace>`). Not retryable.
+  `AGENT_ACCESS_UNAVAILABLE` (503) arrives as the existing retryable
+  `ServiceUnavailableError`.
+- The workspace-required codes, mapped on `code`: 400 `WORKSPACE_REQUIRED`
+  (`ValidationError`); 409 `ADDRESSED_AN_ALIAS`, `COLLECTION_NAME_TAKEN`,
+  `COLLECTION_NAME_IS_AN_ALIAS` (`ConflictError`); and the retryable 503s
+  `WORKSPACE_LOOKUP_UNAVAILABLE`, `COLLECTION_LOOKUP_UNAVAILABLE` and
+  `PLACEMENT_UNAVAILABLE` (`ServiceUnavailableError`, retried with backoff).
+
+### Not in the SDK
+
+- Renaming a collection, and moving one to another workspace: the dashboard
+  or the CLI (`afy collections update`). The SDK exposes no collection
+  update; code still using a collection's old name gets
+  `CollectionNotFoundError`.
+
+### Fixed
+
+- `clear_schema_cache(name)` cleared nothing on a workspaced client: it
+  removed the bare name, and the cache is keyed by the workspace-scoped one.
+- After a 412 (the schema changed), strict schema re-validation before the
+  retry was skipped on a workspaced client: the refreshed schema was looked up
+  by the bare name and not found.
 
 ### Changed
 - `PartialUpsertError`'s message no longer counts the points of a failed chunk
@@ -24,26 +105,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   message now says so, and that retrying the upsert is safe because it
   replaces points by id. Only the message changed: the class, `.saved`,
   `.total` and `.failed` are as before.
-- **BREAKING: the memory layer's threads collection is named for its
-  workspace** — `__threads__<workspace>` in a workspace, `__threads__` outside
-  one. Collection names are unique per account, so the single `__threads__`
-  every workspace used could exist in one workspace only: a second workspace's
-  first `create_thread` was refused 409 `COLLECTION_NAME_TAKEN`. A
-  `MemoryClient` derives the name from its own workspace on every use, so it
-  never opens another workspace's threads collection. A `__threads__` created
-  inside a workspace by an earlier version is not read: create the threads
-  again (there is no migration shim).
-- **BREAKING (import): `aetherfy_memory.models.THREADS_COLLECTION` is
-  replaced by `THREADS_COLLECTION_PREFIX` (`"__threads__"`) and
-  `threads_collection_name(workspace)`.**
-- The control plane now refuses to move a threads collection to another
-  workspace (`COLLECTION_SDK_MANAGED`); the prefix it refuses on is held equal
-  to `THREADS_COLLECTION_PREFIX` by an e2e pair test.
 
 ### Documentation
-- The README no longer says workspaces avoid name collisions: collection names
-  are unique per account, and a workspace decides where a collection is
-  reachable from, not what it may be called.
 - **BREAKING (platform): an agent's injected `AETHERFY_API_KEY` is no longer
   the account on the Aetherfy agents API.** The control plane now answers it
   403 `AUTH_AGENT_KEY_OUT_OF_SCOPE` on every route outside the routes listed at

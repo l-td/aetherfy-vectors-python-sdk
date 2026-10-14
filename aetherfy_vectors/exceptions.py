@@ -180,7 +180,7 @@ class CollectionInOtherRegionError(AetherfyVectorsException):
             message = (
                 f"Collection '{collection_name}' already exists in region "
                 f"{', '.join(existing_regions)}. Collection names are unique "
-                f"per account; pick a different name or use the existing one."
+                f"per workspace; pick a different name or use the existing one."
             )
         super().__init__(message, **kwargs)
         self.collection_name = collection_name

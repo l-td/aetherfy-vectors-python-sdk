@@ -131,6 +131,8 @@ EXPECTED_CLAIMS: List[str] = [
     "QuotaExceededError.quota_type",
     "RateLimitExceededError.retry_after",
     "SchemaValidationError.errors",
+    "WorkspaceNotFoundError.workspace",
+    "WorkspaceNotFoundError.workspace_id",
 ]
 
 FENCE_RE = re.compile(r"^```(\w+)\n(.*?)^```", re.MULTILINE | re.DOTALL)

@@ -219,8 +219,8 @@ class TestCollectionManagementWithWorkspace:
         yield client
 
     def test_create_collection_with_workspace(self, mock_client):
-        """Post-A/B: workspace lives in URL path, body name is bare.
-        vectordb rejects body name containing "/" with 400
+        """The workspace is in the URL path; the body name is bare.
+        vectordb rejects a body name containing "/" with 400
         INVALID_COLLECTION_NAME."""
         mock_client._make_request.return_value = {"status": "ok"}
 
@@ -260,9 +260,7 @@ class TestCollectionManagementWithWorkspace:
         assert "workspaces/test-workspace/collections/documents" in call_args[0][1]
 
     def test_get_collection_with_workspace(self, mock_client):
-        """Post-A/B: vectordb returns the bare collection name (PG
-        stores name without workspace prefix; workspace_id is the join
-        key). The SDK no longer needs to unscope client-side."""
+        """vectordb returns the bare collection name: nothing to unscope."""
         mock_client._make_request.return_value = {
             "name": "documents",
             "config": {"params": {"vectors": {"size": 384, "distance": "Cosine"}}},
@@ -278,13 +276,8 @@ class TestCollectionManagementWithWorkspace:
         assert result.name == "documents"
 
     def test_get_collections_with_workspace(self, mock_client):
-        """Post-A/B: GET /workspaces/{ws}/collections returns ONLY this
-        workspace's collections (server-side filter by workspace_id),
-        with bare names (PG schema). The SDK no longer filters or
-        unscopes client-side — pinning that contract here.
-
-        The OLD mock returned mixed-workspace names and verified
-        client-side prefix-matching; that's gone."""
+        """The workspace's list holds only its own collections, with bare
+        names: the SDK neither filters nor unscopes."""
         mock_client._make_request.return_value = {
             "collections": [
                 {
