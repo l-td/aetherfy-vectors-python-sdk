@@ -106,17 +106,38 @@ class PointNotFoundError(NotFoundError):
 
 
 class RequestTimeoutError(AetherfyVectorsException):
-    """Request timed out."""
+    """Request timed out.
 
-    def __init__(self, message: str = "Request timed out", **kwargs):
+    ``request_sent`` is False for a connect timeout (the request never left),
+    None when it may have been sent (a read timeout). See retry_policy.
+    """
+
+    def __init__(
+        self,
+        message: str = "Request timed out",
+        request_sent: Optional[bool] = None,
+        **kwargs,
+    ):
         super().__init__(message, **kwargs)
+        self.request_sent = request_sent
 
 
 class NetworkError(AetherfyVectorsException):
-    """Network connection error."""
+    """Network connection error.
 
-    def __init__(self, message: str = "Network connection error", **kwargs):
+    ``request_sent`` is False when the connection was never made (DNS,
+    connection refused), None when it may have been sent (a reset after
+    sending). See retry_policy.
+    """
+
+    def __init__(
+        self,
+        message: str = "Network connection error",
+        request_sent: Optional[bool] = None,
+        **kwargs,
+    ):
         super().__init__(message, **kwargs)
+        self.request_sent = request_sent
 
 
 class ConflictError(AetherfyVectorsException):

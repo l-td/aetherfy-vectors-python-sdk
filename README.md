@@ -538,10 +538,27 @@ except WorkspaceNotFoundError as e:
 ```
 
 `collection_exists()` returns False only when the workspace exists and the
-collection is not in it; an unknown workspace raises. A workspace or
-collection lookup the server cannot complete right now (503
-`WORKSPACE_LOOKUP_UNAVAILABLE`, `COLLECTION_LOOKUP_UNAVAILABLE`,
-`PLACEMENT_UNAVAILABLE`) is retried, then raised as `ServiceUnavailableError`.
+collection is not in it; an unknown workspace raises.
+
+### When a request is retried
+
+One rule, the same in the Python and JS SDKs (`aetherfy_vectors/retry_policy.py`). Up to 3
+retries, waiting about 1 s, 2 s, then 4 s (each jittered to 50-100%), within
+a call's timeout.
+
+| Failure | Retried for |
+|---|---|
+| Refused before anything ran: 503 `WORKSPACE_LOOKUP_UNAVAILABLE`, `COLLECTION_LOOKUP_UNAVAILABLE`, `PLACEMENT_UNAVAILABLE`; a connection never made (DNS, refused, connect timeout); 429 with a Retry-After | every operation |
+| Ambiguous, the request may have run: a read timeout, a reset after sending, any other 5xx | only operations whose repeat gives the same result (below) |
+| Any other 4xx | never |
+
+| Operations | Class |
+|---|---|
+| `get_collections`, `get_collection`, `collection_exists`, `get_schema`, `analyze_schema`, `search`, `retrieve`, `scroll`, `count`, `get_usage_stats` | reads: repeatable |
+| `upsert`, `set_payload`, `overwrite_payload`, `delete_payload`, `create_field_index`, `set_schema` | writes keyed by id: repeatable |
+| `create_collection`, `delete_collection`, `delete` (points), `delete_schema`, `delete_field_index` | once: a repeat after a hidden success reports a false error, so an ambiguous failure is raised after one attempt |
+
+When the retries run out, the last error is raised (`ServiceUnavailableError`, `RequestTimeoutError` or `NetworkError`).
 
 Renaming a collection, and moving one to another workspace, are done from the
 dashboard or the CLI (`afy collections update`), not from the SDK. Code still

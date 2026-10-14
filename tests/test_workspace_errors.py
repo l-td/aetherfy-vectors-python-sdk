@@ -305,7 +305,7 @@ def test_usage_stats_with_an_agent_key_is_the_typed_scope_refusal(wired):
     """GET /analytics/usage is account-only: an agent key gets 403
     AUTH_AGENT_KEY_OUT_OF_SCOPE (vectordb utils/agentRoutePolicy.js)."""
     client, _ = wired
-    client.session.get = Mock(
+    client.session.request = Mock(
         return_value=_response(
             403, body("AUTH_AGENT_KEY_OUT_OF_SCOPE", agent_id="a1", required_scope=None)
         )

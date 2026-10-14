@@ -63,6 +63,24 @@ described here.
   collection (`COLLECTION_SDK_MANAGED`); an agent that moves to another
   workspace leaves its conversations in the old one's `__threads__`.
 
+- **BREAKING: when a request is retried follows one rule, the same as the JS
+  SDK** (`aetherfy_vectors/retry_policy.py`, and the README's table). A
+  refusal before anything ran (503 `WORKSPACE_LOOKUP_UNAVAILABLE`,
+  `COLLECTION_LOOKUP_UNAVAILABLE`, `PLACEMENT_UNAVAILABLE`; a connection
+  never made; 429 with a Retry-After) is retried for every operation. An
+  ambiguous failure (a read timeout, a reset after sending, any other 5xx) is
+  retried only for reads and writes keyed by id; `create_collection`,
+  `delete_collection`, `delete`, `delete_schema` and `delete_field_index`
+  raise it after one attempt. A 4xx is never retried. Before, only POST and
+  PUT requests were retried, on any 5xx or transport error, so reads by GET
+  (`get_collection`, `collection_exists`, `get_schema`, ...) never were, and
+  `create_collection` and point deletes were repeated after an ambiguous
+  failure. `get_usage_stats` now goes through the same request path: a
+  transport failure is a `NetworkError` / `RequestTimeoutError` like every
+  other call (it was an `AetherfyVectorsException` saying "Failed to
+  retrieve usage statistics"). `NetworkError` and `RequestTimeoutError`
+  carry `request_sent` (False when the request never left).
+
 ### Added
 
 - **`NotFoundError`** (`aetherfy_vectors`, re-exported at the root): the

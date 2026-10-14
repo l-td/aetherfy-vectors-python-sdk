@@ -13,6 +13,7 @@ import time
 from typing import List, Dict, Any, Iterator, Optional, Sequence, Union
 import requests
 from requests.adapters import HTTPAdapter
+from requests.exceptions import ConnectTimeout
 
 from .auth import APIKeyManager
 from .models import (
@@ -37,6 +38,7 @@ from .exceptions import (
     WorkspaceNotFoundError,
 )
 from .qdrant_compat import check_qdrant_kwargs
+from .retry_policy import OPERATIONS, should_retry
 from .chunking import chunk_points_by_bytes, MAX_REQUEST_BYTES, point_wire_bytes
 from .schema import (
     Schema,
@@ -53,6 +55,37 @@ from .utils import (
     format_points_for_upsert,
     serialize_filter,
 )
+
+
+def _never_connected(error: Exception) -> bool:
+    """True when a requests ConnectionError failed before connecting.
+
+    urllib3 reports DNS failures and refused connections as a
+    NewConnectionError (NameResolutionError is one) somewhere in the cause
+    chain; anything else (a reset, a dropped connection) may have come after
+    the request was sent.
+    """
+    from urllib3.exceptions import NewConnectionError
+
+    seen = set()
+    stack: List[BaseException] = [error]
+    while stack:
+        current = stack.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        if isinstance(current, NewConnectionError):
+            return True
+        for nested in (
+            getattr(current, "reason", None),
+            current.__cause__,
+            current.__context__,
+            *[a for a in getattr(current, "args", ()) if isinstance(a, Exception)],
+        ):
+            if isinstance(nested, BaseException):
+                stack.append(nested)
+    return False
+
 
 # Every collection lives in a workspace, so a client without one is refused
 # at construction rather than on its first request.
@@ -442,7 +475,8 @@ class AetherfyVectorsClient:
         endpoint: str,
         data: Optional[Dict[str, Any]] = None,
         params: Optional[Dict[str, Any]] = None,
-        enable_retry: bool = True,
+        *,
+        operation: str,
         headers: Optional[Dict[str, str]] = None,
         evict_caches_on_404: Optional[str] = None,
         timeout: Optional[float] = None,
@@ -455,7 +489,9 @@ class AetherfyVectorsClient:
             endpoint: API endpoint path.
             data: Request body data.
             params: Query parameters.
-            enable_retry: Whether to enable retry logic (default: True).
+            operation: The public operation this request serves, a key of
+                retry_policy.OPERATIONS. It decides when the request is
+                retried (retry_policy.should_retry).
             headers: Additional headers to include in request.
             evict_caches_on_404: If set, the scoped collection name whose
                 schema and payload-schema caches should be dropped when
@@ -541,6 +577,12 @@ class AetherfyVectorsClient:
                         self._payload_schema_cache.pop(evict_caches_on_404, None)
                     raise error
 
+            except ConnectTimeout:
+                # The connection was never made: the request was not sent.
+                raise RequestTimeoutError(
+                    f"Connecting for {endpoint} timed out after {this_attempt} seconds",
+                    request_sent=False,
+                )
             except requests.Timeout:
                 if deadline is not None and time.monotonic() >= deadline:
                     raise RequestTimeoutError(
@@ -550,19 +592,25 @@ class AetherfyVectorsClient:
                     f"Request to {endpoint} timed out after {this_attempt} seconds"
                 )
             except requests.ConnectionError as e:
-                # Network connection errors should be retryable
-                raise NetworkError(f"Network connection failed: {str(e)}")
+                raise NetworkError(
+                    f"Network connection failed: {str(e)}",
+                    request_sent=False if _never_connected(e) else None,
+                )
             except requests.RequestException as e:
                 # Other request errors - generic exception
                 raise AetherfyVectorsException(f"Request failed: {str(e)}")
 
-        # Apply retry logic only for write operations (POST, PUT)
-        if enable_retry and method in ["POST", "PUT"]:
-            return retry_with_backoff(
-                make_single_request, max_retries=3, base_delay=1.0, deadline=deadline
-            )
-        else:
-            return make_single_request()
+        # One rule for every request (retry_policy): a refusal before
+        # anything ran is retried for any operation; an ambiguous failure
+        # only for an operation whose repeat gives the same result.
+        OPERATIONS[operation]  # an undeclared operation is a KeyError, here
+        return retry_with_backoff(
+            make_single_request,
+            max_retries=3,
+            base_delay=1.0,
+            deadline=deadline,
+            retry_condition=lambda e: should_retry(operation, e),
+        )
 
     # Schema Cache Helpers
 
@@ -583,6 +631,7 @@ class AetherfyVectorsClient:
             "GET",
             self._build_collection_path(collection_name),
             evict_caches_on_404=scoped_name,
+            operation="get_schema",
         )
 
         # Extract schema info
@@ -751,7 +800,11 @@ class AetherfyVectorsClient:
             data["regions"] = regions
 
         response = self._make_request(
-            "POST", self._build_collections_list_path(), data, timeout=timeout
+            "POST",
+            self._build_collections_list_path(),
+            data,
+            timeout=timeout,
+            operation="create_collection",
         )
 
         # Prepopulate the schema cache from the request we just authored.
@@ -813,6 +866,7 @@ class AetherfyVectorsClient:
             self._build_collection_path(collection_name),
             evict_caches_on_404=scoped_name,
             timeout=timeout,
+            operation="delete_collection",
         )
         # Drop both caches so a subsequent recreate-with-different-shape
         # doesn't see stale size/distance/etag/payload-schema entries.
@@ -828,7 +882,9 @@ class AetherfyVectorsClient:
         """
         # The workspace's list holds only its own collections, with bare
         # names: nothing to filter or unscope.
-        response = self._make_request("GET", self._build_collections_list_path())
+        response = self._make_request(
+            "GET", self._build_collections_list_path(), operation="get_collections"
+        )
         collections = response.get("collections", [])
         return [Collection.from_dict(col) for col in collections]
 
@@ -868,6 +924,7 @@ class AetherfyVectorsClient:
                 "GET",
                 self._build_collection_path(collection_name),
                 evict_caches_on_404=scoped_name,
+                operation="collection_exists",
             )
             return True
         except CollectionNotFoundError:
@@ -890,6 +947,7 @@ class AetherfyVectorsClient:
             "GET",
             self._build_collection_path(collection_name),
             evict_caches_on_404=scoped_name,
+            operation="get_collection",
         )
         # vectordb returns the bare collection name: nothing to unscope.
         collection_data = response.get("result", response)
@@ -1129,6 +1187,7 @@ class AetherfyVectorsClient:
                 data,
                 headers=extra_headers if extra_headers else None,
                 evict_caches_on_404=scoped_name,
+                operation="upsert",
             )
             return True
 
@@ -1175,6 +1234,7 @@ class AetherfyVectorsClient:
                         data,
                         headers=(extra_headers_retry if extra_headers_retry else None),
                         evict_caches_on_404=scoped_name,
+                        operation="upsert",
                     )
                     return True
                 except Exception:
@@ -1234,6 +1294,7 @@ class AetherfyVectorsClient:
             self._build_collection_path(collection_name, "/points/delete"),
             data,
             evict_caches_on_404=scoped_name,
+            operation="delete",
         )
         return True
 
@@ -1290,6 +1351,7 @@ class AetherfyVectorsClient:
             self._build_collection_path(collection_name, "/points/payload"),
             data,
             evict_caches_on_404=scoped_name,
+            operation="set_payload",
         )
         return response.get("result", response) if response else {}
 
@@ -1327,6 +1389,7 @@ class AetherfyVectorsClient:
             self._build_collection_path(collection_name, "/points/payload"),
             data,
             evict_caches_on_404=scoped_name,
+            operation="overwrite_payload",
         )
         return response.get("result", response) if response else {}
 
@@ -1363,6 +1426,7 @@ class AetherfyVectorsClient:
             self._build_collection_path(collection_name, "/points/payload/delete"),
             data,
             evict_caches_on_404=scoped_name,
+            operation="delete_payload",
         )
         return response.get("result", response) if response else {}
 
@@ -1473,6 +1537,7 @@ class AetherfyVectorsClient:
                     evict_caches_on_404=scoped_name,
                     timeout=remaining,
                     attempt_timeout=attempt_timeout,
+                    operation="create_field_index",
                 )
             except RequestTimeoutError:
                 # Before the deadline, this is one create outliving its own
@@ -1528,6 +1593,7 @@ class AetherfyVectorsClient:
                 ),
                 evict_caches_on_404=scoped_name,
                 attempt_timeout=max(self.timeout, self.INDEX_ATTEMPT_TIMEOUT_S),
+                operation="delete_field_index",
             )
             return True
         except CollectionNotFoundError:
@@ -1645,6 +1711,7 @@ class AetherfyVectorsClient:
             data,
             evict_caches_on_404=scoped_name,
             timeout=timeout,
+            operation="retrieve",
         )
         return response.get("result", [])
 
@@ -1747,6 +1814,7 @@ class AetherfyVectorsClient:
             data,
             evict_caches_on_404=scoped_name,
             timeout=timeout,
+            operation="search",
         )
 
         results = []
@@ -1833,6 +1901,7 @@ class AetherfyVectorsClient:
             data,
             evict_caches_on_404=scoped_name,
             timeout=timeout,
+            operation="scroll",
         )
 
         # Scroll response shape: {"result": {"points": [...], "next_page_offset": ...}, ...}
@@ -1945,6 +2014,7 @@ class AetherfyVectorsClient:
             data,
             evict_caches_on_404=scoped_name,
             timeout=timeout,
+            operation="count",
         )
         # The wire response is `{"result": {"count": N}, "status": "ok"}`,
         # not flat — the count lives under `result`. Mirrors the JS SDK.
@@ -1978,7 +2048,9 @@ class AetherfyVectorsClient:
 
         try:
             response = self._make_request(
-                "GET", self._build_collection_path(collection_name, "/schema")
+                "GET",
+                self._build_collection_path(collection_name, "/schema"),
+                operation="get_schema",
             )
 
             schema = Schema.from_dict(response["schema"])
@@ -2067,6 +2139,7 @@ class AetherfyVectorsClient:
             self._build_collection_path(collection_name, "/schema"),
             data,
             evict_caches_on_404=scoped_name,
+            operation="set_schema",
         )
         etag = response["etag"]
 
@@ -2097,7 +2170,9 @@ class AetherfyVectorsClient:
 
         try:
             self._make_request(
-                "DELETE", self._build_collection_path(collection_name, "/schema")
+                "DELETE",
+                self._build_collection_path(collection_name, "/schema"),
+                operation="delete_schema",
             )
 
             # Clear from cache (use scoped name)
@@ -2152,6 +2227,7 @@ class AetherfyVectorsClient:
             self._build_collection_path(collection_name, "/schema/analyze"),
             data,
             evict_caches_on_404=scoped_name,
+            operation="analyze_schema",
         )
 
         # Return with unscoped collection name
@@ -2195,23 +2271,10 @@ class AetherfyVectorsClient:
         Raises:
             AetherfyVectorsException: If request fails.
         """
-        url = build_api_url(self.endpoint, "analytics/usage")
-
-        try:
-            response = self.session.get(
-                url, headers=self.auth_headers, timeout=self.timeout
-            )
-
-            if response.status_code == 200:
-                return UsageStats.from_dict(response.json())
-
-            error_data = response.json() if response.content else {}
-            raise parse_error_response(error_data, response.status_code)
-
-        except requests.RequestException as e:
-            raise AetherfyVectorsException(
-                f"Failed to retrieve usage statistics: {str(e)}"
-            )
+        response = self._make_request(
+            "GET", "analytics/usage", operation="get_usage_stats"
+        )
+        return UsageStats.from_dict(response)
 
     # Utility Methods
 
