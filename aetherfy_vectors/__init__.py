@@ -6,7 +6,7 @@ aetherfy_vectors.qdrant_compat for the exact contract) that provides global
 vector database operations with automatic replication, caching, and sub-50ms latency worldwide.
 """
 
-__version__ = "1.2.0"
+__version__ = "1.2.1"
 __author__ = "Aetherfy"
 __email__ = "developers@aetherfy.com"
 

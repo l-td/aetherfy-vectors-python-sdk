@@ -38,6 +38,9 @@ from .exceptions import (
 )
 from .qdrant_compat import check_qdrant_kwargs
 from .retry_policy import OPERATIONS
+
+# Set in __init__.py before this module is imported: one version, one place.
+from . import __version__
 from .chunking import chunk_points_by_bytes, MAX_REQUEST_BYTES, point_wire_bytes
 from .schema import (
     Schema,
@@ -284,7 +287,7 @@ class AetherfyVectorsClient:
         self.auth_headers = {
             **self.auth_manager.get_auth_headers(),
             "Content-Type": "application/json",
-            "User-Agent": "aetherfy-vectors-python/1.0.0",
+            "User-Agent": f"aetherfy-vectors-python/{__version__}",
         }
 
         # Initialize HTTP session with connection pooling
@@ -319,7 +322,7 @@ class AetherfyVectorsClient:
             headers = {
                 **self.auth_manager.get_auth_headers(),
                 "Content-Type": "application/json",
-                "User-Agent": "aetherfy-vectors-python/1.0.0",
+                "User-Agent": f"aetherfy-vectors-python/{__version__}",
             }
             try:
                 resp = requests.get(url, headers=headers, timeout=self.timeout)

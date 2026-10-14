@@ -289,3 +289,16 @@ def test_every_exception_in_its_hierarchy_is_importable(package: str) -> None:
         if issubclass(d.exception, bases) and id(d.exception) not in exported
     ]
     assert not failures, "\n" + "\n".join(failures)
+
+
+def test_the_user_agent_carries_the_one_version():
+    """The client's User-Agent is the package version, not a copy of it
+    (it said 1.0.0 through 1.2.0)."""
+    import aetherfy_vectors
+    from aetherfy_vectors import AetherfyVectorsClient
+
+    client = AetherfyVectorsClient(api_key="afy_test_1234567890abcdef1234", workspace="w")
+    assert client.auth_headers["User-Agent"] == (
+        f"aetherfy-vectors-python/{aetherfy_vectors.__version__}"
+    )
+    assert aetherfy_vectors.__version__ == "1.2.1"
