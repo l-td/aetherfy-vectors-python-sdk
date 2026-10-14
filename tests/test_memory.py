@@ -9,7 +9,7 @@ the correct calls and enforces its own contracts:
 - Required-scope rule (no root-level add/search)
 - Required-create rule (add/search before create → error)
 - Reserved-name rule (a namespace can never take the `__threads__` prefix)
-- Threads as payload rows in one shared `__threads__<workspace>` collection
+- Threads as payload rows in one shared `__threads__` collection per workspace
 - Forward-compat error when vector is omitted
 - Operations parity with AetherfyVectorsClient
 - Thread.history() ordering
@@ -22,12 +22,10 @@ import pytest
 from aetherfy_memory.models import (
     THREAD_ID_KEY,
     THREAD_MARKER_KEY,
-    THREADS_COLLECTION_PREFIX,
-    threads_collection_name,
+    THREADS_COLLECTION,
 )
 
-# The fake client below is in workspace "my-bot".
-THREADS = threads_collection_name("my-bot")
+THREADS = THREADS_COLLECTION
 from aetherfy_memory import (
     MemoryClient,
     Message,
@@ -175,7 +173,7 @@ class TestNameValidation:
 # Thread-prefix isolation
 # =============================================================================
 #
-# The shared threads collection is named `__threads__<workspace>`, and the
+# The shared threads collection is named `__threads__`, and the
 # user-name regex forbids a leading `_`. So user-facing APIs can never accept a name
 # that collides with it — it's rejected at the regex gate with
 # InvalidNameError. This test pins that contract so a future relaxation of
@@ -197,7 +195,6 @@ class TestThreadsCollectionNameIsolation:
         import re
 
         assert re.match(r"^[a-zA-Z0-9_-]{1,100}$", THREADS)
-        assert THREADS.startswith(THREADS_COLLECTION_PREFIX)
 
 
 # =============================================================================

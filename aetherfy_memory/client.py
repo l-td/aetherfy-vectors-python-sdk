@@ -43,7 +43,7 @@ from .models import (
     DEFAULT_VECTOR_SIZE,
     THREAD_ID_KEY,
     THREAD_MARKER_KEY,
-    threads_collection_name,
+    THREADS_COLLECTION,
 )
 from .namespace import Namespace
 from .thread import Thread
@@ -186,13 +186,10 @@ class MemoryClient:
 
     @property
     def _threads(self) -> str:
-        """This workspace's threads collection (models.threads_collection_name).
-
-        Derived from this client's own workspace every time, so it can only
-        ever name this workspace's collection: a threads collection of another
-        workspace is never opened or adopted.
+        """This workspace's threads collection: `__threads__`, addressed in
+        this client's own workspace, so another workspace's is never opened.
         """
-        return threads_collection_name(self.workspace)
+        return THREADS_COLLECTION
 
     @property
     def vectors(self) -> AetherfyVectorsClient:
