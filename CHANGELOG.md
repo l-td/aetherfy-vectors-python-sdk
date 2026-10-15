@@ -5,7 +5,7 @@ All notable changes to the Aetherfy Vectors Python SDK will be documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.2.1] - not yet released
+## [1.2.1] - 2026-10-15
 
 This release contains changes marked BREAKING below: every collection now
 lives in a workspace. They ship in a patch version, not 2.0.0, because the
