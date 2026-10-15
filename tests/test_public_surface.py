@@ -302,3 +302,23 @@ def test_the_user_agent_carries_the_one_version():
         f"aetherfy-vectors-python/{aetherfy_vectors.__version__}"
     )
     assert aetherfy_vectors.__version__ == "1.2.1"
+
+
+def test_the_retry_helper_and_its_classes_are_public():
+    """The JS root exports retryWithBackoff and the classes; so does this one.
+    A yes/no "is this error retryable?" is not public: whether to retry
+    depends on the operation's class and on request_sent, so only the helper
+    that takes the class decides."""
+    import aetherfy_vectors as root
+    from aetherfy_vectors import exceptions, retry_policy, utils
+
+    for name, obj in [
+        ("retry_with_backoff", utils.retry_with_backoff),
+        ("REPEATABLE", retry_policy.REPEATABLE),
+        ("ONCE", retry_policy.ONCE),
+    ]:
+        assert name in root.__all__, name
+        assert getattr(root, name) is obj, name
+
+    assert not hasattr(root, "is_retryable_error")
+    assert not hasattr(exceptions, "is_retryable_error")

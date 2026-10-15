@@ -85,6 +85,10 @@ described here.
   same rule; its `retry_condition` (type-only by default) is gone.
   `aetherfy_vectors.exceptions.is_retryable_error`, which classified by type
   alone and which nothing used any more, is removed: `retry_policy` decides.
+  `retry_with_backoff` and the classes it takes, `REPEATABLE` and `ONCE`, are
+  exported from `aetherfy_vectors` itself, as the JS root exports
+  `retryWithBackoff` and `RetryClass`; the README shows the same example in
+  both languages.
 
 - **BREAKING: a missing point on the payload routes is `PointNotFoundError`
   by code.** vectordb re-wraps Qdrant's own 404 (a point that does not

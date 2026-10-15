@@ -564,6 +564,22 @@ after a hidden success, so it would be classed once.
 
 When the retries run out, the last error is raised (`ServiceUnavailableError`, `RequestTimeoutError` or `NetworkError`).
 
+The client already retries under this rule. To retry more around your own
+operation, say whether repeating it gives the same result: `REPEATABLE` (a
+read, a write keyed by id) or `ONCE` (a create, a delete). The same failures
+are retried as above; a 4xx never is.
+
+```python
+from aetherfy_vectors import retry_with_backoff, REPEATABLE
+
+results = retry_with_backoff(
+    lambda: client.search("collection", vector),
+    REPEATABLE,
+    max_retries=3,
+    base_delay=1.0,
+)
+```
+
 Renaming a collection, and moving one to another workspace, are done from the
 dashboard or the CLI (`afy collections update`), not from the SDK. Code still
 using the old name gets `CollectionNotFoundError`.

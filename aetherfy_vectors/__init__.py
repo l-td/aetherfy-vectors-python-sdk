@@ -43,6 +43,8 @@ from .schema import (
     FieldDefinition,
     AnalysisResult,
 )
+from .retry_policy import REPEATABLE, ONCE
+from .utils import retry_with_backoff
 
 __all__ = [
     "AetherfyVectorsClient",
@@ -72,4 +74,8 @@ __all__ = [
     "Schema",
     "FieldDefinition",
     "AnalysisResult",
+    # The retry helper and the operation classes it takes (retry_policy.py).
+    "retry_with_backoff",
+    "REPEATABLE",
+    "ONCE",
 ]
