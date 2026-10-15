@@ -3,9 +3,10 @@ Tests for retry logic with HTTP errors.
 """
 
 import pytest
+
 import time
 from unittest.mock import Mock, patch
-from aetherfy_vectors.retry_policy import ONCE, REPEATABLE
+from aetherfy_vectors.retry_policy import ONCE, REPEATABLE, should_retry_class
 from aetherfy_vectors.utils import retry_with_backoff
 from aetherfy_vectors.exceptions import (
     ServiceUnavailableError,
@@ -14,7 +15,6 @@ from aetherfy_vectors.exceptions import (
     RateLimitExceededError,
     ValidationError,
     AuthenticationError,
-    is_retryable_error,
 )
 
 
@@ -214,33 +214,33 @@ class TestRetryLogic:
 
 class TestIsRetryableError:
     def test_service_unavailable_is_retryable(self):
-        assert is_retryable_error(ServiceUnavailableError()) is True
+        assert should_retry_class(REPEATABLE, ServiceUnavailableError()) is True
 
     def test_timeout_is_retryable(self):
-        assert is_retryable_error(RequestTimeoutError()) is True
+        assert should_retry_class(REPEATABLE, RequestTimeoutError()) is True
 
     def test_network_error_is_retryable(self):
-        assert is_retryable_error(NetworkError()) is True
+        assert should_retry_class(REPEATABLE, NetworkError()) is True
 
     def test_rate_limit_with_retry_after_is_retryable(self):
         error = RateLimitExceededError("Rate limit", retry_after=2)
-        assert is_retryable_error(error) is True
+        assert should_retry_class(REPEATABLE, error) is True
 
     def test_rate_limit_without_retry_after_is_not_retryable(self):
         error = RateLimitExceededError("Rate limit")
-        assert is_retryable_error(error) is False
+        assert should_retry_class(REPEATABLE, error) is False
 
     def test_validation_error_is_not_retryable(self):
-        assert is_retryable_error(ValidationError()) is False
+        assert should_retry_class(REPEATABLE, ValidationError()) is False
 
     def test_auth_error_is_not_retryable(self):
-        assert is_retryable_error(AuthenticationError()) is False
+        assert should_retry_class(REPEATABLE, AuthenticationError()) is False
 
     def test_generic_exception_is_not_retryable(self):
         """Should not retry on generic exceptions"""
-        assert is_retryable_error(ValueError("Generic error")) is False
+        assert should_retry_class(REPEATABLE, ValueError("Generic error")) is False
 
     def test_rate_limit_with_none_retry_after_is_not_retryable(self):
         """Should not retry on rate limit with explicit None retry_after"""
         error = RateLimitExceededError("Rate limit", retry_after=None)
-        assert is_retryable_error(error) is False
+        assert should_retry_class(REPEATABLE, error) is False

@@ -493,7 +493,7 @@ class AetherfyVectorsClient:
             params: Query parameters.
             operation: The public operation this request serves, a key of
                 retry_policy.OPERATIONS. It decides when the request is
-                retried (retry_policy.should_retry).
+                retried (retry_policy.should_retry_class).
             headers: Additional headers to include in request.
             evict_caches_on_404: If set, the scoped collection name whose
                 schema and payload-schema caches should be dropped when

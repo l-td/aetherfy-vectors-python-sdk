@@ -10,6 +10,8 @@ from unittest.mock import Mock, patch
 
 import pytest
 
+from aetherfy_vectors.retry_policy import REPEATABLE, should_retry_class
+
 from aetherfy_memory import MemoryClient, NamespaceNotFoundError
 from aetherfy_vectors import AetherfyVectorsClient, WorkspaceNotFoundError
 from aetherfy_vectors.exceptions import (
@@ -21,7 +23,6 @@ from aetherfy_vectors.exceptions import (
     SchemaNotFoundError,
     ServiceUnavailableError,
     ValidationError,
-    is_retryable_error,
 )
 from aetherfy_vectors.utils import parse_error_response
 
@@ -104,7 +105,7 @@ def test_each_code_maps_to_a_typed_error_carrying_it(status, payload, cls):
     ["WORKSPACE_LOOKUP_UNAVAILABLE", "COLLECTION_LOOKUP_UNAVAILABLE", "PLACEMENT_UNAVAILABLE"],
 )
 def test_the_lookup_outages_are_retryable(code):
-    assert is_retryable_error(parse_error_response(body(code), 503))
+    assert should_retry_class(REPEATABLE, parse_error_response(body(code), 503))
 
 
 @pytest.mark.parametrize(
@@ -112,7 +113,7 @@ def test_the_lookup_outages_are_retryable(code):
     [(404, "WORKSPACE_NOT_FOUND"), (400, "WORKSPACE_REQUIRED"), (409, "ADDRESSED_AN_ALIAS")],
 )
 def test_control_the_refusals_are_not_retryable(status, code):
-    assert not is_retryable_error(parse_error_response(body(code), status))
+    assert not should_retry_class(REPEATABLE, parse_error_response(body(code), status))
 
 
 def test_the_workspace_not_found_names_what_was_sent():

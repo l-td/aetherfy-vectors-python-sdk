@@ -131,8 +131,3 @@ def should_retry_class(retry_class: str, error: Exception) -> bool:
     if refused_before_anything(error):
         return True
     return retry_class == REPEATABLE and ambiguous(error)
-
-
-def should_retry(operation: str, error: Exception) -> bool:
-    """The rule. ``operation`` must be in OPERATIONS (KeyError otherwise)."""
-    return should_retry_class(OPERATIONS[operation], error)

@@ -350,26 +350,3 @@ class PartialUpsertError(AetherfyVectorsException):
         self.saved = saved
         self.total = total
         self.failed = failed
-
-
-def is_retryable_error(error: Exception) -> bool:
-    """True when the error's KIND may be retried: a 5xx, a timeout, a network
-    failure, or a 429 with a Retry-After.
-
-    It does not know the operation, so it decides no retry: the client's
-    retries (and utils.retry_with_backoff) follow retry_policy, which weighs
-    the operation's class. Retrying an ambiguous failure is safe only for an
-    operation retry_policy classes REPEATABLE.
-
-    Args:
-        error: The exception to check.
-
-    Returns:
-        True if error is retryable, False otherwise.
-    """
-    return (
-        isinstance(error, ServiceUnavailableError)
-        or isinstance(error, RequestTimeoutError)
-        or isinstance(error, NetworkError)
-        or (isinstance(error, RateLimitExceededError) and error.retry_after is not None)
-    )

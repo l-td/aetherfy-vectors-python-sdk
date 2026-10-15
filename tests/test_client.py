@@ -477,7 +477,7 @@ class TestCollectionManagement:
         }
 
         # The PUT returns 404. retry_with_backoff treats 404 as
-        # non-retryable (is_retryable_error → False), so a single 404
+        # never retried (a 4xx; retry_policy), so a single 404
         # response is enough to surface the exception immediately.
         mock_requests.request.return_value = mock_error_response(
             message="Collection not found",
