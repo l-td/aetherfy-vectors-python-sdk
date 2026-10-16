@@ -5,6 +5,26 @@ All notable changes to the Aetherfy Vectors Python SDK will be documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.2] - 2026-10-16
+
+### Fixed
+
+- **An exception rebuilt from a server's answer lost its code.** `delete_schema()`
+  caught the server's 404 and raised a fresh `SchemaNotFoundError` with
+  `error_code` None (the server said `SCHEMA_NOT_DEFINED` or
+  `COLLECTION_NOT_FOUND`), so code branching on `e.error_code` never matched. It,
+  and every other place that raised a different exception in place of a server
+  error, now carries the server's `error_code`, `status_code`, `request_id` and
+  `details` (`utils.server_fields`): the 412 "Schema changed" `ValidationError`
+  of an upsert whose retry failed (code `SCHEMA_VERSION_MISMATCH`), the
+  `ValidationError` in a `PartialUpsertError`'s failed list for a rejected
+  chunk, and the region-discovery error for a non-200 answer. The single-chunk
+  400 is still a `ValueError` (its documented type); the server's error, with
+  its code, is now its `__cause__`.
+- A test reads the package and fails when an `except` block raises an SDK
+  exception that does not carry the code, unless the case is listed with a
+  reason (transport failures and client-side checks have no server answer).
+
 ## [1.2.1] - 2026-10-15
 
 This release contains changes marked BREAKING below: every collection now

@@ -11,7 +11,7 @@ jobs:
     steps:
     - uses: actions/checkout@v7
 
-    # Before anything is built: the tag (v1.2.1) must be this package's
+    # Before anything is built: the tag (v1.2.2) must be this package's
     # version (aetherfy_vectors/__init__.py). scripts/check_tag_version.py,
     # tested by tests/test_tag_version.py.
     - name: The tag is the package version

@@ -301,7 +301,7 @@ def test_the_user_agent_carries_the_one_version():
     assert client.auth_headers["User-Agent"] == (
         f"aetherfy-vectors-python/{aetherfy_vectors.__version__}"
     )
-    assert aetherfy_vectors.__version__ == "1.2.1"
+    assert aetherfy_vectors.__version__ == "1.2.2"
 
 
 def test_the_retry_helper_and_its_classes_are_public():

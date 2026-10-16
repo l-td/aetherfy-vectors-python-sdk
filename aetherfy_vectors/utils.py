@@ -14,6 +14,27 @@ from typing import Any, Dict, List, Optional, Union, Callable
 from .exceptions import ValidationError, AetherfyVectorsException
 
 
+def server_fields(error: Optional[BaseException]) -> Dict[str, Any]:
+    """What an exception built from a server's answer must carry on.
+
+    When code catches a server error and raises another exception in its
+    place (a more specific class, a clearer message), the new one is built
+    from the same answer, so it carries the same ``error_code``,
+    ``status_code``, ``request_id`` and ``details``: ``raise
+    SchemaNotFoundError(name, **server_fields(e))``. A branch on ``code``
+    must see the server's code whichever class it arrives as. Anything that
+    is not an SDK error (or None) carries nothing.
+    """
+    if not isinstance(error, AetherfyVectorsException):
+        return {}
+    return {
+        "request_id": error.request_id,
+        "status_code": error.status_code,
+        "details": error.details,
+        "error_code": error.error_code,
+    }
+
+
 def validate_vector(
     vector: List[float], expected_dimension: Optional[int] = None
 ) -> None:

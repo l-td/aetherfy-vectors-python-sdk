@@ -56,6 +56,7 @@ from .utils import (
     parse_error_response,
     format_points_for_upsert,
     serialize_filter,
+    server_fields,
 )
 
 
@@ -333,9 +334,14 @@ class AetherfyVectorsClient:
                     "endpoint= directly."
                 )
             if resp.status_code != 200:
+                try:
+                    answer = resp.json() if resp.content else {}
+                except ValueError:
+                    answer = {}
                 raise AetherfyVectorsException(
                     f"Region discovery returned {resp.status_code} from {url}. "
-                    "Check that your API key is valid for the discovery endpoint."
+                    "Check that your API key is valid for the discovery endpoint.",
+                    **server_fields(parse_error_response(answer, resp.status_code)),
                 )
             try:
                 self._regions_discovery_cache = _json.loads(resp.content or b"{}")
@@ -1137,7 +1143,7 @@ class AetherfyVectorsClient:
                 failed.append(
                     {
                         "point_ids": [p["id"] for p in chunk],
-                        "error": ValidationError(str(e)),
+                        "error": ValidationError(str(e), **server_fields(e.__cause__)),
                     }
                 )
             # Programming errors (TypeError, AttributeError, etc.)
@@ -1242,12 +1248,12 @@ class AetherfyVectorsClient:
                     # If retry also fails, raise the original 412 error
                     raise ValidationError(
                         f"Schema changed for collection '{original_collection_name}'. Please retry your request.",
-                        status_code=412,
-                    )
+                        **server_fields(e),
+                    ) from e
 
             # Handle 400 Bad Request (validation error from backend or client-side)
             # Re-raise as ValueError for backward compatibility
-            raise ValueError(str(e))
+            raise ValueError(str(e)) from e
 
         except AetherfyVectorsException:
             # Re-raise other errors
@@ -2223,7 +2229,7 @@ class AetherfyVectorsClient:
             if error_code == "COLLECTION_NOT_FOUND":
                 self._schema_cache.pop(scoped_name, None)
                 self._payload_schema_cache.pop(scoped_name, None)
-            raise SchemaNotFoundError(collection_name)
+            raise SchemaNotFoundError(collection_name, **server_fields(e)) from e
 
     def analyze_schema(
         self, collection_name: str, sample_size: int = 1000
