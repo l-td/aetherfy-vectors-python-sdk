@@ -168,6 +168,11 @@ described here.
   Refusals are typed: `ConnectionNotFound`, `ConnectionNeedsReauth`,
   `ConnectionUnavailable` (retryable) and `ConnectionAccessDenied`, all under
   `ConnectionTokenError`. Only an agent machine's own key is answered.
+  A name that is not the agent's own connection or its workspace's (unknown,
+  or someone else's) is refused `403 AUTH_AGENT_KEY_OUT_OF_SCOPE`, with
+  `required_scope` `connections:token`, and arrives as the generic
+  `ConnectionTokenError`; `ConnectionNotFound` is only a connection removed
+  mid-request.
 
 ### Changed
 - `PartialUpsertError`'s message no longer counts the points of a failed chunk

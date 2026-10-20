@@ -93,11 +93,19 @@ def connection(
 
     :raises ValueError: ``min_valid_seconds`` is out of range.
     :raises NotRunningOnAgent: ``AETHERFY_API_URL`` or ``AETHERFY_API_KEY`` is unset.
-    :raises ConnectionNotFound: no connection by that name here.
+    :raises ConnectionNotFound: ``404 CONNECTION_NOT_FOUND``. An agent's key does
+        NOT get this for an unknown or unpermitted name (see the last entry);
+        it is only the answer for a connection removed while the request was
+        being checked.
     :raises ConnectionNeedsReauth: the provider refused the grant; reconnect it.
     :raises ConnectionUnavailable: the provider did not answer; retry shortly.
     :raises ConnectionAccessDenied: the key is not this agent's own.
-    :raises ConnectionTokenError: any other refusal — read ``error_code``.
+    :raises ConnectionTokenError: any other refusal — read ``error_code``. A name
+        that is not one of this agent's own connections or its workspace's
+        (unknown, or someone else's) is ``403 AUTH_AGENT_KEY_OUT_OF_SCOPE``
+        (``details["required_scope"]`` is ``connections:token``) and arrives as
+        this class, not a subclass: the control plane does not say which names
+        exist.
     :raises AgentTransportError: the request never reached the control plane.
     """
     if isinstance(min_valid_seconds, bool) or not isinstance(min_valid_seconds, int):

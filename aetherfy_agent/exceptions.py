@@ -373,8 +373,12 @@ class ConnectionTokenError(AgentError):
 
 class ConnectionNotFound(ConnectionTokenError):
     """
-    Raised on ``404 CONNECTION_NOT_FOUND`` — no connection by that name on this
-    agent or its workspace. Connect it on the dashboard, or check the name.
+    Raised on ``404 CONNECTION_NOT_FOUND``. An agent's key is never answered
+    this for an unknown or unpermitted name: the control plane refuses that
+    with ``403 AUTH_AGENT_KEY_OUT_OF_SCOPE`` (it does not reveal which names
+    exist), which arrives as the generic :class:`ConnectionTokenError`. This
+    class is what is left for a connection removed while the request was being
+    checked. Connect it on the dashboard, or check the name.
     """
 
     def __init__(self, message: str, *, details: Optional[Dict[str, Any]] = None):

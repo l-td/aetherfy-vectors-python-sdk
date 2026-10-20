@@ -166,6 +166,31 @@ def test_each_refusal_gets_its_type(transport, status, code, exc, retryable):
     assert str(raised.value).startswith("said the server")
 
 
+def test_an_unknown_or_unpermitted_name_is_the_generic_error_with_the_403(transport):
+    # The control plane's route policy refuses an agent key a name that is not
+    # its own or its workspace's with 403 AUTH_AGENT_KEY_OUT_OF_SCOPE, whether
+    # the name exists or not. That is NOT "no such connection": it must arrive as
+    # the generic ConnectionTokenError, never as ConnectionNotFound.
+    transport.replies = [
+        (
+            403,
+            {
+                "detail": {
+                    "code": "AUTH_AGENT_KEY_OUT_OF_SCOPE",
+                    "message": "this key cannot do that",
+                    "required_scope": "connections:token",
+                }
+            },
+        )
+    ]
+    with pytest.raises(ConnectionTokenError) as raised:
+        connection("someone-elses")
+    assert type(raised.value) is ConnectionTokenError
+    assert raised.value.status_code == 403
+    assert raised.value.error_code == "AUTH_AGENT_KEY_OUT_OF_SCOPE"
+    assert not isinstance(raised.value, ConnectionNotFound)
+
+
 def test_an_unrecognised_pairing_is_reported_as_it_came(transport):
     # A 404 with another code (the key's agent was deleted) is not "no such
     # connection", and must not wear that type.
