@@ -111,6 +111,11 @@ _REPLICATION = (
     "consistency this asks for are not provided"
 )
 _SHARDING = "sharding is managed by the service and cannot be configured"
+# update_collection: the same fixed settings, changed after the fact.
+_UPDATE_FIXED = (
+    "the service fixes every storage, index and optimizer setting; "
+    "choose a layout with update_collection(performance_mode=...)"
+)
 
 
 def _refuse(reason: str) -> QdrantArgRule:
@@ -151,19 +156,13 @@ QDRANT_COMPAT: Dict[str, Dict[str, QdrantArgRule]] = {
         ),
     },
     "update_collection": {
-        name: _refuse(
-            "the service fixes every storage, index and optimizer setting; "
-            "choose a layout with update_collection(performance_mode=...)"
-        )
-        for name in (
-            "optimizers_config",
-            "collection_params",
-            "vectors_config",
-            "hnsw_config",
-            "quantization_config",
-            "sparse_vectors_config",
-            "strict_mode_config",
-        )
+        "optimizers_config": _refuse(_UPDATE_FIXED),
+        "collection_params": _refuse(_UPDATE_FIXED),
+        "vectors_config": _refuse(_UPDATE_FIXED),
+        "hnsw_config": _refuse(_UPDATE_FIXED),
+        "quantization_config": _refuse(_UPDATE_FIXED),
+        "sparse_vectors_config": _refuse(_UPDATE_FIXED),
+        "strict_mode_config": _refuse(_UPDATE_FIXED),
     },
     "delete": dict(_WRITE_ARGS),
     "delete_payload": dict(_WRITE_ARGS),
