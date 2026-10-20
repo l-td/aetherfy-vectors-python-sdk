@@ -111,6 +111,11 @@ _REPLICATION = (
     "consistency this asks for are not provided"
 )
 _SHARDING = "sharding is managed by the service and cannot be configured"
+# update_collection: the same fixed settings, changed after the fact.
+_UPDATE_FIXED = (
+    "the service fixes every storage, index and optimizer setting; "
+    "choose a layout with update_collection(storage_mode=...)"
+)
 
 
 def _refuse(reason: str) -> QdrantArgRule:
@@ -140,12 +145,23 @@ QDRANT_COMPAT: Dict[str, Dict[str, QdrantArgRule]] = {
         "hnsw_config": _refuse(_NOT_APPLIED),
         "optimizers_config": _refuse(_NOT_APPLIED),
         "wal_config": _refuse(_NOT_APPLIED),
-        "quantization_config": _refuse(_NOT_APPLIED),
+        "quantization_config": _refuse(
+            _NOT_APPLIED + "; choose a layout with create_collection(storage_mode=...)"
+        ),
         "strict_mode_config": _refuse(_NOT_APPLIED),
         "init_from": _refuse(
             "creating a collection from another one is not supported; it "
             "would be created empty"
         ),
+    },
+    "update_collection": {
+        "optimizers_config": _refuse(_UPDATE_FIXED),
+        "collection_params": _refuse(_UPDATE_FIXED),
+        "vectors_config": _refuse(_UPDATE_FIXED),
+        "hnsw_config": _refuse(_UPDATE_FIXED),
+        "quantization_config": _refuse(_UPDATE_FIXED),
+        "sparse_vectors_config": _refuse(_UPDATE_FIXED),
+        "strict_mode_config": _refuse(_UPDATE_FIXED),
     },
     "delete": dict(_WRITE_ARGS),
     "delete_payload": dict(_WRITE_ARGS),

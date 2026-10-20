@@ -19,6 +19,21 @@ would hide the defect instead of catching it.
 from typing import Any, Dict, List, Optional, Union
 
 from aetherfy_vectors.models import Collection, DistanceMetric, VectorConfig
+from aetherfy_vectors.storage_modes import StorageMode
+from aetherfy_vectors.utils import parse_error_response
+
+# vectordb's STORAGE_MODE_COOLDOWN_SECONDS (backend/utils/storageModes.js).
+# Copied, not imported: the server is another repo, and
+# tests/test_storage_mode.py pins the behaviour.
+COOLDOWN_SECONDS = 900
+
+
+def _wire_error(status: int, code: str, message: str, **details: Any):
+    """The exception the SDK raises for vectordb's authored envelope
+    ``{"error": {"code", "message", <extras>}}``: every extra sits on the error
+    object, as ``field`` and ``max`` do on its other validation errors."""
+    error: Dict[str, Any] = {"code": code, "message": message, **details}
+    return parse_error_response({"error": error}, status)
 
 
 def _lookup(payload: Dict[str, Any], key: str) -> Any:
@@ -101,6 +116,11 @@ class FakeVectorsClient:
 
     def __init__(self, workspace: Optional[str] = "my-bot"):
         self.workspace = workspace
+        # A test advances this to cross the storage-mode cooldown.
+        self.now = 0.0
+        # The storage modes the fake's plan allows (the service's `exact` and
+        # `balanced` on every plan, `fast` from Performance up).
+        self.plan_modes = ["exact", "balanced", "fast"]
         self.collections: Dict[str, Dict[str, Any]] = {}
         self.indexes: List[tuple] = []
         # Flip to make every read behave as if the must_not clause had been
@@ -109,10 +129,82 @@ class FakeVectorsClient:
 
     # -- collections --------------------------------------------------------
 
-    def create_collection(self, name: str, config: VectorConfig, **kwargs):
+    def create_collection(
+        self,
+        name: str,
+        config: VectorConfig,
+        storage_mode: Optional[Union[StorageMode, str]] = None,
+        **kwargs,
+    ):
         assert name not in self.collections, f"{name} already exists"
-        self.collections[name] = {"config": config, "points": {}}
-        return Collection(name=name, config=config)
+        mode = self._valid_mode(storage_mode) or StorageMode.EXACT
+        self._check_in_plan(mode)
+        self.collections[name] = {
+            "config": config,
+            "points": {},
+            "mode": mode,
+            "mode_changed_at": None,
+        }
+        return Collection(name=name, config=config, storage_mode=mode)
+
+    # vectordb's answers, in the order it gives them: an unknown mode is a 400
+    # before anything is read, a mode outside the plan a 403.
+    @staticmethod
+    def _valid_mode(value) -> Optional[StorageMode]:
+        if value is None:
+            return None
+        try:
+            return StorageMode(getattr(value, "value", value))
+        except ValueError:
+            raise _wire_error(
+                400,
+                "VALIDATION_ERROR",
+                "storage_mode must be one of: exact, balanced, fast",
+                field="storage_mode",
+            )
+
+    def _check_in_plan(self, mode: StorageMode) -> None:
+        """A test sets ``plan_modes`` to the modes its plan allows."""
+        if mode.value not in self.plan_modes:
+            raise _wire_error(
+                403,
+                "STORAGE_MODE_NOT_IN_PLAN",
+                f"The '{mode.value}' storage mode is not part of your plan.",
+                field="storage_mode",
+                storage_mode=mode.value,
+                plan="starter",
+                required_plan="performance",
+                allowed_modes=list(self.plan_modes),
+            )
+
+    def update_collection(
+        self,
+        name: str,
+        *,
+        description: Any = None,
+        storage_mode: Optional[Union[StorageMode, str]] = None,
+        **kwargs,
+    ) -> bool:
+        col = self.collections[name]
+        mode = self._valid_mode(storage_mode)
+        if mode is None:
+            return True
+        self._check_in_plan(mode)
+        if mode is col["mode"]:
+            return True  # a no-op: no cooldown consumed
+        changed = col["mode_changed_at"]
+        if changed is not None and self.now - changed < COOLDOWN_SECONDS:
+            raise _wire_error(
+                409,
+                "STORAGE_MODE_CHANGE_TOO_SOON",
+                "The storage mode was changed less than 15 minutes ago.",
+                field="storage_mode",
+                retry_after_seconds=int(COOLDOWN_SECONDS - (self.now - changed)),
+                cooldown_seconds=COOLDOWN_SECONDS,
+            )
+        col["mode"] = mode
+        col["mode_changed_at"] = self.now
+        return True
 
     def collection_exists(self, name: str, **kwargs) -> bool:
         return name in self.collections
@@ -124,6 +216,7 @@ class FakeVectorsClient:
             config=col["config"],
             points_count=len(col["points"]),
             status="green",
+            storage_mode=col["mode"],
         )
 
     def get_collections(self, **kwargs) -> List[Collection]:

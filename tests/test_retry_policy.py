@@ -229,7 +229,8 @@ def test_the_ruling_s_once_operations_are_once():
     ]:
         assert OPERATIONS[op] == ONCE, op
     for op in ["search", "count", "scroll", "retrieve", "upsert", "set_payload",
-               "overwrite_payload", "create_field_index", "get_collection"]:
+               "overwrite_payload", "create_field_index", "get_collection",
+               "update_collection"]:
         assert OPERATIONS[op] == REPEATABLE, op
 
 

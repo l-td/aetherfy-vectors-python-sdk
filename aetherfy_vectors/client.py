@@ -36,6 +36,11 @@ from .exceptions import (
     SchemaNotFoundError,
     PartialUpsertError,
 )
+from .storage_modes import (
+    StorageMode,
+    coerce_storage_mode,
+    parse_storage_mode,
+)
 from .qdrant_compat import check_qdrant_kwargs
 from .retry_policy import OPERATIONS
 
@@ -102,6 +107,11 @@ NO_WORKSPACE_MESSAGE_AUTO = (
     "only inside an Aetherfy agent. Pass a workspace name "
     "(workspace='my-workspace'), or run inside an Aetherfy agent."
 )
+
+
+# update_collection(description=None) clears the description, so "not given"
+# needs a value of its own.
+_UNSET: Any = object()
 
 
 class AetherfyVectorsClient:
@@ -718,6 +728,7 @@ class AetherfyVectorsClient:
         distance: Optional[DistanceMetric] = None,
         description: Optional[str] = None,
         regions: Optional[List[str]] = None,
+        storage_mode: Optional[Union[StorageMode, str]] = None,
         timeout: Optional[float] = None,
         **kwargs,
     ) -> "Collection":
@@ -737,6 +748,15 @@ class AetherfyVectorsClient:
                 server (422). Subset/empty validation is server-side. Distinct
                 from the client constructor's ``api_region``, which selects the
                 endpoint to connect to rather than where the collection lives.
+            storage_mode: How the collection's vectors are stored and
+                searched: a ``StorageMode`` or its name (``"exact"``,
+                ``"balanced"``, ``"fast"``). Omit for
+                ``exact``, the layout every collection had before modes
+                existed. ``fast`` needs the Performance plan or above
+                (StorageModeNotInPlanError otherwise). See
+                ``aetherfy_vectors.storage_modes`` for what each costs.
+                Re-creating a collection that exists never changes its mode;
+                use ``update_collection(storage_mode=...)``.
             timeout: Deadline in seconds for this whole call, retries and
                 backoff included, like qdrant-client's ``timeout``. Raises
                 RequestTimeoutError once it passes. None keeps the client's
@@ -745,18 +765,24 @@ class AetherfyVectorsClient:
                 against ``aetherfy_vectors.qdrant_compat``. None of its
                 storage, index or replication settings can be applied, so each
                 raises TypeError unless passed as None; any other name raises
-                TypeError too.
+                TypeError too. ``storage_mode`` is the supported way to
+                choose a storage layout.
 
         Returns:
-            The created Collection, including its resolved ``regions`` list.
+            The created Collection, including its resolved ``regions`` list
+            and its ``storage_mode``.
 
         Raises:
+            ValueError: If ``storage_mode`` is not one of the three modes.
             ValidationError: If parameters are invalid.
+            StorageModeNotInPlanError: If the mode is not part of your plan
+                (``error_code`` ``STORAGE_MODE_NOT_IN_PLAN``).
             TypeError: For an unknown or unsupported keyword argument.
             AetherfyVectorsException: If creation fails.
         """
         check_qdrant_kwargs("create_collection", kwargs)
         validate_collection_name(collection_name)
+        mode = coerce_storage_mode(storage_mode) if storage_mode is not None else None
 
         # Handle different input formats for compatibility
         if isinstance(vectors_config, dict):
@@ -805,6 +831,10 @@ class AetherfyVectorsClient:
         # [] as "all regions". Subset enforcement is the server's job.
         if regions is not None:
             data["regions"] = regions
+        # Same rule: omitted means the server default (exact), so a caller who
+        # never names a mode sends the body this SDK always sent.
+        if mode is not None:
+            data["storage_mode"] = mode.value
 
         response = self._make_request(
             "POST",
@@ -841,12 +871,89 @@ class AetherfyVectorsClient:
         resolved_regions = (
             response.get("regions") if isinstance(response, dict) else None
         )
+        # The create response echoes the stored mode (the existing row's, on
+        # an idempotent re-create), so the caller sees what the collection
+        # has, not what they asked for. None from a server that omits it.
+        resolved_mode = (
+            parse_storage_mode(response.get("storage_mode"))
+            if isinstance(response, dict)
+            else None
+        )
         return Collection(
             name=collection_name,
             config=config,
             description=description,
             regions=resolved_regions,
+            storage_mode=resolved_mode,
         )
+
+    def update_collection(
+        self,
+        collection_name: str,
+        *,
+        description: Any = _UNSET,
+        storage_mode: Optional[Union[StorageMode, str]] = None,
+        timeout: Optional[float] = None,
+        **kwargs,
+    ) -> bool:
+        """Change a collection's description or storage mode.
+
+        Args:
+            collection_name: Name of the collection.
+            description: The new description (max 500 characters); ``None``
+                clears it. Omit to leave it alone.
+            storage_mode: The mode to move the collection to: a
+                ``StorageMode`` or its name. Omit to leave it alone. The
+                collection stays usable while the engine rewrites its storage
+                in the background (its status reads ``yellow`` until that
+                finishes), and a collection can change mode once every 15
+                minutes. Asking for the mode it already has does nothing and
+                does not start the wait.
+            timeout: Deadline in seconds for this whole call, retries and
+                backoff included, like qdrant-client's ``timeout``.
+            **kwargs: qdrant-client ``update_collection`` arguments, checked
+                against ``aetherfy_vectors.qdrant_compat``. The service fixes
+                every storage, index and optimizer setting, so each raises
+                TypeError unless passed as None. ``storage_mode`` is the
+                supported way to change a storage layout.
+
+        Returns:
+            True when the change was applied.
+
+        Raises:
+            ValueError: If neither argument is given, or ``storage_mode``
+                is not one of the three modes.
+            ValidationError: If a value is invalid.
+            StorageModeNotInPlanError: If the mode is not part of your plan
+                (``error_code`` ``STORAGE_MODE_NOT_IN_PLAN``); ``required_plan``
+                names the plan that has it. Not retried.
+            ConflictError: If the mode changed less than 15 minutes ago
+                (``error_code`` ``STORAGE_MODE_CHANGE_TOO_SOON``). The
+                seconds left are ``details["retry_after_seconds"]``.
+                It is not retried: waiting inside the call cannot help.
+            CollectionNotFoundError: If the collection does not exist.
+        """
+        check_qdrant_kwargs("update_collection", kwargs)
+        validate_collection_name(collection_name)
+        data: Dict[str, Any] = {}
+        if description is not _UNSET:
+            data["description"] = description
+        if storage_mode is not None:
+            data["storage_mode"] = coerce_storage_mode(storage_mode).value
+        if not data:
+            raise ValueError(
+                "update_collection() needs description= or storage_mode=: "
+                "there is nothing to change"
+            )
+        self._make_request(
+            "PATCH",
+            self._build_collection_path(collection_name),
+            data,
+            evict_caches_on_404=self._scope_collection(collection_name),
+            timeout=timeout,
+            operation="update_collection",
+        )
+        return True
 
     def delete_collection(
         self, collection_name: str, timeout: Optional[float] = None

@@ -248,6 +248,34 @@ class AgentWorkspaceForbiddenError(AetherfyVectorsException):
         self.workspace = workspace
 
 
+class StorageModeNotInPlanError(AetherfyVectorsException):
+    """The storage mode asked for is not part of the account's plan (403
+    ``STORAGE_MODE_NOT_IN_PLAN``).
+
+    ``storage_mode`` is the mode asked for, ``plan`` the account's plan,
+    ``required_plan`` the cheapest plan that has the mode (None when none
+    does) and ``allowed_modes`` the modes the account's plan allows. Not
+    retryable: the plan decides, so change the plan or choose an allowed mode.
+    Collections already in a mode a later downgrade removes are switched to
+    ``exact`` by the service.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        storage_mode: Optional[str] = None,
+        plan: Optional[str] = None,
+        required_plan: Optional[str] = None,
+        allowed_modes: Optional[list] = None,
+        **kwargs,
+    ):
+        super().__init__(message, **kwargs)
+        self.storage_mode = storage_mode
+        self.plan = plan
+        self.required_plan = required_plan
+        self.allowed_modes = list(allowed_modes) if allowed_modes else []
+
+
 class WorkspaceNotFoundError(NotFoundError):
     """No such workspace in this account (404 ``WORKSPACE_NOT_FOUND``).
 

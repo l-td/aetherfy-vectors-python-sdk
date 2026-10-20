@@ -5,6 +5,36 @@ All notable changes to the Aetherfy Vectors Python SDK will be documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Storage modes.** `create_collection(..., storage_mode=)` takes a
+  `StorageMode` (or its name): `exact` (the default, the layout every
+  collection had), `balanced` or `fast`. `Collection.storage_mode`
+  reports it on create, `get_collection` and `get_collections`.
+  `aetherfy_vectors.StorageMode` and `aetherfy_vectors.storage_modes`
+  are new. An unknown mode is a `ValueError` before any request.
+- **`update_collection(name, *, description=, storage_mode=, timeout=)`**
+  (new, qdrant-client's name) changes a collection's description or storage
+  mode and returns `True`. A change inside the 15-minute cooldown is a
+  `ConflictError` with `error_code` `STORAGE_MODE_CHANGE_TOO_SOON`.
+  Past the plan's storage-mode changes per period (across the account) it is a
+  `RateLimitExceededError` with `error_code`
+  `STORAGE_MODE_CHANGE_LIMIT_REACHED` and `limit`, `period`, `resets_at` and
+  `retry_after_seconds` in `details`; neither is retried. It is classed
+  repeatable for retries (`retry_policy.OPERATIONS`).
+- **`StorageModeNotInPlanError`** (403 `STORAGE_MODE_NOT_IN_PLAN`), raised by
+  `create_collection` and `update_collection` when the plan does not include
+  the mode: `fast` is part of the Performance plan and above. It carries
+  `storage_mode`, `plan`, `required_plan` and `allowed_modes`, and is not
+  retried.
+- qdrant-client's `update_collection` parameters (`optimizers_config`,
+  `collection_params`, `vectors_config`, `hnsw_config`, `quantization_config`,
+  `sparse_vectors_config`, `strict_mode_config`) are refused unless `None`, in
+  `qdrant_compat` and the README table. The refusal of `create_collection`'s
+  `quantization_config` now points at `storage_mode=`.
+
 ## [1.2.2] - 2026-10-16
 
 ### Fixed

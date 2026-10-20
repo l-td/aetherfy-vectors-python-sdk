@@ -31,6 +31,7 @@ from .exceptions import (
     WorkspaceNotFoundError,
     NotFoundError,
     QuotaExceededError,
+    StorageModeNotInPlanError,
 )
 from .models import (
     SearchResult,
@@ -38,6 +39,7 @@ from .models import (
     Collection,
     UsageStats,
 )
+from .storage_modes import StorageMode
 from .schema import (
     Schema,
     FieldDefinition,
@@ -67,10 +69,12 @@ __all__ = [
     "WorkspaceNotFoundError",
     "NotFoundError",
     "QuotaExceededError",
+    "StorageModeNotInPlanError",
     "SearchResult",
     "Point",
     "Collection",
     "UsageStats",
+    "StorageMode",
     "Schema",
     "FieldDefinition",
     "AnalysisResult",

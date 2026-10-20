@@ -40,6 +40,7 @@ overwrite_payload          REPEATABLE  write keyed by point id
 delete_payload             REPEATABLE  removing the same keys again changes nothing
 create_field_index         REPEATABLE  creating the same index again changes nothing
 set_schema                 REPEATABLE  BECAUSE it is sent without If-Match (below)
+update_collection          REPEATABLE  a repeat finds the mode already changed: a 200 no-op
 create_collection          ONCE        a repeat finds the collection it just made
 delete_collection          ONCE        a repeat finds nothing to delete
 delete                     ONCE        deleting points; a repeat reports a false error
@@ -81,6 +82,10 @@ OPERATIONS: Dict[str, str] = {
     # hidden success gets a false 412, and it must move to ONCE
     # (tests/test_retry_policy.py holds the two together).
     "set_schema": REPEATABLE,
+    # A repeat after a hidden success asks for the mode the collection now has,
+    # which the server answers with a 200 that starts no cooldown; a repeated
+    # description writes the same text.
+    "update_collection": REPEATABLE,
     "create_collection": ONCE,
     "delete_collection": ONCE,
     "delete": ONCE,

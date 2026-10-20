@@ -253,6 +253,18 @@ EXPECTED: Dict[str, Dict[str, str]] = {
             "init_from",
         )
     },
+    "update_collection": {
+        name: REFUSE
+        for name in (
+            "optimizers_config",
+            "collection_params",
+            "vectors_config",
+            "hnsw_config",
+            "quantization_config",
+            "sparse_vectors_config",
+            "strict_mode_config",
+        )
+    },
     **{
         m: {"wait": IGNORE, "ordering": REFUSE, "shard_key_selector": REFUSE}
         for m in ("delete", "delete_payload", "overwrite_payload", "set_payload", "upsert")
@@ -292,7 +304,14 @@ CALL_ARGS: Dict[str, Tuple[Any, ...]] = {
     "scroll": ("c",),
     "search": ("c", [0.1, 0.2]),
     "set_payload": ("c", {"k": "v"}, [1]),
+    "update_collection": ("c",),
     "upsert": ("c", [POINT]),
+}
+
+# Keyword arguments a method needs beside its positionals to do anything:
+# update_collection with nothing to change is a ValueError, not a request.
+CALL_KWARGS: Dict[str, Dict[str, Any]] = {
+    "update_collection": {"description": "d"},
 }
 
 
@@ -333,6 +352,7 @@ def wired(client, mock_requests):
 
 
 def _call(client, method, **kwargs):
+    kwargs = {**CALL_KWARGS.get(method, {}), **kwargs}
     return getattr(client, method)(*CALL_ARGS[method], **kwargs)
 
 
@@ -478,7 +498,16 @@ class TestReadmeStatesTheContract:
 
 class TestHonouredQdrantParameters:
     @pytest.mark.parametrize(
-        "method", ["create_collection", "delete_collection", "retrieve", "scroll", "count", "search"]
+        "method",
+        [
+            "create_collection",
+            "delete_collection",
+            "retrieve",
+            "scroll",
+            "count",
+            "search",
+            "update_collection",
+        ],
     )
     def test_timeout_bounds_the_request(self, wired, method):
         client, mock_requests = wired
@@ -488,7 +517,16 @@ class TestHonouredQdrantParameters:
         assert len(timeouts) == 1 and 6.5 < timeouts[0] <= 7, timeouts
 
     @pytest.mark.parametrize(
-        "method", ["create_collection", "delete_collection", "retrieve", "scroll", "count", "search"]
+        "method",
+        [
+            "create_collection",
+            "delete_collection",
+            "retrieve",
+            "scroll",
+            "count",
+            "search",
+            "update_collection",
+        ],
     )
     def test_no_timeout_keeps_the_client_policy(self, wired, method):
         client, mock_requests = wired

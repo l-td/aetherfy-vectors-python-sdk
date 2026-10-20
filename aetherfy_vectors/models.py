@@ -9,6 +9,8 @@ from typing import List, Dict, Any, Optional, Union
 from dataclasses import dataclass
 from enum import Enum
 
+from .storage_modes import parse_storage_mode
+
 
 class DistanceMetric(Enum):
     """Supported distance metrics for vector similarity."""
@@ -85,6 +87,11 @@ class Collection:
     # list the server echoes) and on get_collection. None when the server
     # didn't report it (older backend / non-regional response).
     regions: Optional[List[str]] = None
+    # The collection's storage mode (aetherfy_vectors.storage_modes):
+    # a StorageMode (a str, so it compares equal to its name), or the plain
+    # string of a mode this SDK does not know yet. None when the server did not
+    # report one (an older backend).
+    storage_mode: Optional[str] = None
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Collection":
@@ -104,6 +111,7 @@ class Collection:
             points_count=data.get("points_count"),
             status=data.get("status"),
             regions=data.get("regions"),
+            storage_mode=parse_storage_mode(data.get("storage_mode")),
         )
 
 
