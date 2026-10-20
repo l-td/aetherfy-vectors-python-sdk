@@ -9,7 +9,7 @@ from typing import List, Dict, Any, Optional, Union
 from dataclasses import dataclass
 from enum import Enum
 
-from .performance_modes import PerformanceMode, parse_performance_mode
+from .performance_modes import parse_performance_mode
 
 
 class DistanceMetric(Enum):
@@ -88,9 +88,10 @@ class Collection:
     # didn't report it (older backend / non-regional response).
     regions: Optional[List[str]] = None
     # The collection's performance mode (aetherfy_vectors.performance_modes):
-    # the PerformanceMode, or the plain string of a mode this SDK does not know
-    # yet. None when the server did not report one (an older backend).
-    performance_mode: Optional[Union[PerformanceMode, str]] = None
+    # a PerformanceMode (a str, so it compares equal to its name), or the plain
+    # string of a mode this SDK does not know yet. None when the server did not
+    # report one (an older backend).
+    performance_mode: Optional[str] = None
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Collection":

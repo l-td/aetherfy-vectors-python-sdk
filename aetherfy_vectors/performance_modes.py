@@ -21,7 +21,7 @@ The same names are accepted by the JS SDK (``performanceMode``).
 """
 
 from enum import Enum
-from typing import Union
+from typing import Optional, Union
 
 
 class PerformanceMode(str, Enum):
@@ -57,7 +57,7 @@ def coerce_performance_mode(value: Union[PerformanceMode, str]) -> PerformanceMo
     )
 
 
-def parse_performance_mode(value: object) -> Union[PerformanceMode, str, None]:
+def parse_performance_mode(value: object) -> Optional[str]:
     """Read a mode off a server response.
 
     A known mode becomes the enum. A name this SDK has not heard of (a newer
