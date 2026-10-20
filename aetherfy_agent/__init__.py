@@ -40,7 +40,7 @@ from . import _http
 from .exceptions import (
     AGENT_RUN_CONCURRENCY_LIMIT_EXCEEDED,
     ConnectionAccessDenied,
-    ConnectionNameAmbiguous,
+    ConnectionGrantNotEnabled,
     ConnectionNeedsReauth,
     ConnectionNotFound,
     ConnectionTokenError,
@@ -62,7 +62,7 @@ from .exceptions import (
     TooManyRunsInFlight,
     WaitTimeoutInvalid,
 )
-from .models import ConnectionToken, MachineShape, Run, Spawn
+from .models import ConnectionInfo, ConnectionToken, MachineShape, Run, Spawn
 
 # ONE distribution, ONE version. `aetherfy_vectors.__version__` is what
 # setup.py reads to stamp the wheel, so re-exporting it here means the
@@ -80,6 +80,7 @@ __all__ = [
     "result",
     "wait",
     "connection",
+    "list_connections",
     # PUBLIC IN BOTH LANGUAGES OR NEITHER. The JavaScript helper exports these
     # three from its entry point, so a task ported between the two would find
     # the bound readable in one and not the other. A caller sizing its own
@@ -90,6 +91,7 @@ __all__ = [
     "MachineShape",
     "Run",
     "Spawn",
+    "ConnectionInfo",
     "ConnectionToken",
     "AgentError",
     "AgentTransportError",
@@ -105,7 +107,7 @@ __all__ = [
     "WaitTimeoutInvalid",
     "ConnectionTokenError",
     "ConnectionNotFound",
-    "ConnectionNameAmbiguous",
+    "ConnectionGrantNotEnabled",
     "ConnectionNeedsReauth",
     "ConnectionUnavailable",
     "ConnectionAccessDenied",
@@ -727,4 +729,4 @@ def _message_of(body: Any) -> Optional[str]:
 
 # At the END, not with the imports above: connections.py reads _require and
 # _user_agent from this module at call time, and both are defined above.
-from .connections import connection  # noqa: E402
+from .connections import connection, list_connections  # noqa: E402

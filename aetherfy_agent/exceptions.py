@@ -341,7 +341,7 @@ CONNECTION_NOT_FOUND = "CONNECTION_NOT_FOUND"
 CONNECTION_NEEDS_REAUTH = "CONNECTION_NEEDS_REAUTH"
 CONNECTION_PROVIDER_UNAVAILABLE = "CONNECTION_PROVIDER_UNAVAILABLE"
 CONNECTION_REQUIRES_AGENT_KEY = "CONNECTION_REQUIRES_AGENT_KEY"
-CONNECTION_NAME_AMBIGUOUS = "CONNECTION_NAME_AMBIGUOUS"
+CONNECTION_GRANT_NOT_ENABLED = "CONNECTION_GRANT_NOT_ENABLED"
 
 
 class ConnectionTokenError(AgentError):
@@ -374,12 +374,11 @@ class ConnectionTokenError(AgentError):
 
 class ConnectionNotFound(ConnectionTokenError):
     """
-    Raised on ``404 CONNECTION_NOT_FOUND``. An agent's key is never answered
-    this for an unknown or unpermitted name: the control plane refuses that
-    with ``403 AUTH_AGENT_KEY_OUT_OF_SCOPE`` (it does not reveal which names
-    exist), which arrives as the generic :class:`ConnectionTokenError`. This
-    class is what is left for a connection removed while the request was being
-    checked. Connect it on the dashboard, or check the name.
+    Raised on ``404 CONNECTION_NOT_FOUND`` — no connection with this id is
+    available to this agent: it does not exist (it may have been disconnected),
+    or it is not one of the agent's own, its workspace's or an enabled granted
+    workspace's. The control plane does not say which. List the ids the agent
+    may use with :func:`aetherfy_agent.connections`.
     """
 
     def __init__(self, message: str, *, details: Optional[Dict[str, Any]] = None):
@@ -388,28 +387,23 @@ class ConnectionNotFound(ConnectionTokenError):
         )
 
 
-class ConnectionNameAmbiguous(ConnectionTokenError):
+class ConnectionGrantNotEnabled(ConnectionTokenError):
     """
-    Raised on ``409 CONNECTION_NAME_AMBIGUOUS`` — two or more workspaces this
-    agent is granted (at a level that lets it use their connections) hold a
-    connection of this name, and the agent has neither an own nor a home
-    workspace connection of it to take precedence. Aetherfy never picks one:
-    :attr:`workspaces` lists them. Connect the name on the agent itself, or
-    rename one of them, on the dashboard.
+    Raised on ``403 CONNECTION_GRANT_NOT_ENABLED`` — the connection is in a
+    workspace this agent is granted, but that grant's connections switch is off.
+    A grant is data access; a connection token acts at the provider, so the
+    account owner turns it on per grant (on the agent's page in the dashboard,
+    ``afy access <agent> --connections-on <workspace>``). Asking again cannot
+    help until they do.
     """
 
     def __init__(self, message: str, *, details: Optional[Dict[str, Any]] = None):
         super().__init__(
             message,
-            status_code=409,
-            error_code=CONNECTION_NAME_AMBIGUOUS,
+            status_code=403,
+            error_code=CONNECTION_GRANT_NOT_ENABLED,
             details=details,
         )
-
-    @property
-    def workspaces(self) -> List[str]:
-        """The names of the workspaces that tie, sorted."""
-        return [str(w) for w in (self.details or {}).get("workspaces", [])]
 
 
 class ConnectionNeedsReauth(ConnectionTokenError):

@@ -159,24 +159,25 @@ described here.
   by the bare name and not found.
 
 ### Added
-- **`aetherfy_agent.connection(name, *, min_valid_seconds=300)`** returns a
-  fresh OAuth access token (`ConnectionToken`) for a Google, Slack, Notion, Microsoft 365, HubSpot or Atlassian
-  connection made on the Aetherfy dashboard, from the control plane's
-  `POST /connections/{name}/token`. Tokens are cached per name in the process
-  until they would have less than `max(min_valid_seconds, 60)` seconds left;
-  a token with no expiry (Notion) is asked for again after five minutes.
-  Refusals are typed: `ConnectionNotFound`, `ConnectionNeedsReauth`,
+- **`aetherfy_agent.connection(connection_id, *, min_valid_seconds=300)`** returns
+  a fresh OAuth access token (`ConnectionToken`) for a Google, Slack, Notion,
+  Microsoft 365, HubSpot or Atlassian connection made on the Aetherfy dashboard,
+  from the control plane's `POST /connections/{connection_id}/token`. A connection
+  is addressed by its **id** (a malformed one raises `ValueError` before any
+  request). Tokens are cached per id in the process until they would have less
+  than `max(min_valid_seconds, 60)` seconds left; a token with no expiry (Notion)
+  is asked for again after five minutes.
+  **`aetherfy_agent.list_connections()`** returns the connections this agent's key
+  may use (`ConnectionInfo`: `id`, `name`, `provider`, `scope`, `account_label`,
+  `status`, `scopes`), from `GET /connections/usable`.
+  Refusals are typed: `ConnectionNotFound` (`404`: no such connection, or not one
+  the agent may use), `ConnectionGrantNotEnabled` (`403
+  CONNECTION_GRANT_NOT_ENABLED`: the connection is in a granted workspace whose
+  grant's connections switch is off), `ConnectionNeedsReauth`,
   `ConnectionUnavailable` (retryable) and `ConnectionAccessDenied`, all under
-  `ConnectionTokenError`. Only an agent machine's own key is answered.
-  A name that is not the agent's own connection or its workspace's (unknown,
-  or someone else's) is refused `403 AUTH_AGENT_KEY_OUT_OF_SCOPE`, with
-  `required_scope` `connections:token`, and arrives as the generic
-  `ConnectionTokenError`; `ConnectionNotFound` is only a connection removed
-  mid-request.
-  A name that two workspaces the agent is granted (at a level that lets it use
-  their connections) both hold, with no own or home connection of it, is
-  `ConnectionNameAmbiguous` (`409 CONNECTION_NAME_AMBIGUOUS`); `.workspaces`
-  lists the tie.
+  `ConnectionTokenError`. Only an agent machine's own key is answered. A malformed
+  id is refused by the key's policy, `403 AUTH_AGENT_KEY_OUT_OF_SCOPE`, as the
+  generic `ConnectionTokenError`.
 
 ### Changed
 - `PartialUpsertError`'s message no longer counts the points of a failed chunk
