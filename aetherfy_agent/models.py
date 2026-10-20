@@ -41,7 +41,8 @@ class Spawn:
     child_agent_id: str
     region: str
     status: str
-    workspace: Optional[str] = None
+    # The spawned agent's own workspace, by name. Every agent lives in one.
+    workspace: str
     estimated_start: Optional[str] = None
 
 

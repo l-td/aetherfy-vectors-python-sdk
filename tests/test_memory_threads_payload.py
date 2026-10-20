@@ -25,8 +25,7 @@ from aetherfy_memory.models import (
     DEFAULT_VECTOR_SIZE,
     THREAD_ID_KEY,
     THREAD_MARKER_KEY,
-    THREADS_COLLECTION_PREFIX,
-    threads_collection_name,
+    THREADS_COLLECTION,
 )
 from aetherfy_vectors.exceptions import PointNotFoundError
 from aetherfy_vectors.models import DistanceMetric, VectorConfig
@@ -57,7 +56,7 @@ def _msgs(thread, n, prefix="m", axis=0):
     ]
 
 
-THREADS = threads_collection_name("my-bot")
+THREADS = THREADS_COLLECTION
 
 
 # ===========================================================================
@@ -70,59 +69,46 @@ def test_the_threads_collection_name_is_the_pinned_literal():
     literal should be a literal there, so a rename is caught rather than
     followed. This is the other half of that pin. Without it a rename goes
     green here and reds in a repo that cannot explain why — so the gate
-    lives where the rename would happen. The control plane's SDK-managed
-    prefix (which it refuses to move) is held equal to it by an e2e pair test.
+    lives where the rename would happen. The server's SDK-managed name
+    (which it refuses to move or rename) is held equal to it by an e2e pair
+    test.
     """
-    assert THREADS_COLLECTION_PREFIX == "__threads__"
+    assert THREADS_COLLECTION == "__threads__"
     assert THREAD_ID_KEY == "thread_id"
     assert THREAD_MARKER_KEY == "thread_marker"
 
 
 # ===========================================================================
-# One threads collection per workspace, named for it
+# One plain `__threads__` in each workspace
 # ===========================================================================
 
 
-def test_the_threads_collection_is_named_for_its_workspace():
-    """Collection names are unique per ACCOUNT, so a single `__threads__` in
-    every workspace could exist in one workspace only: the server answered
-    the second workspace's create 409 COLLECTION_NAME_TAKEN."""
-    assert threads_collection_name(None) == "__threads__"
-    assert threads_collection_name("my-bot") == "__threads__my-bot"
-
-
-def test_two_workspaces_of_one_account_get_two_collections():
+def test_every_workspace_gets_its_own_plain_threads_collection():
+    """Collection names are unique per workspace, so each workspace holds
+    its own `__threads__`; the name carries no workspace suffix."""
     a, b = FakeVectorsClient(workspace="support"), FakeVectorsClient(workspace="sales")
     MemoryClient(client=a).create_thread("conv-1")
     MemoryClient(client=b).create_thread("conv-1")
-    assert list(a.collections) == ["__threads__support"]
-    assert list(b.collections) == ["__threads__sales"]
+    assert list(a.collections) == ["__threads__"]
+    assert list(b.collections) == ["__threads__"]
 
 
-def test_outside_any_workspace_it_is_the_bare_prefix():
-    store = FakeVectorsClient(workspace=None)
-    MemoryClient(client=store).create_thread("conv-1")
-    assert list(store.collections) == ["__threads__"]
+def test_the_threads_collection_name_fits_the_server_rule():
+    assert re.fullmatch(r"[a-zA-Z0-9_-]{1,100}", THREADS_COLLECTION)
 
 
-def test_every_workspace_name_the_product_accepts_fits_the_server_rule():
-    """Workspace names are `^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`, 3 to 63
-    characters (control plane api/routes/workspaces.py). With the prefix the
-    longest is 74 characters, inside vectordb's `[a-zA-Z0-9_-]{1,100}`."""
-    for ws in ["abc", "a" * 63, "my-bot-2", "0" * 63]:
-        assert re.fullmatch(r"[a-zA-Z0-9_-]{1,100}", threads_collection_name(ws)), ws
-
-
-def test_another_workspaces_threads_collection_is_never_opened():
-    """The name is derived from the client's own workspace on every use, so a
-    `__threads__` of another workspace — or the bare one from before this
-    rule — is never read or written as this workspace's."""
+def test_a_suffixed_threads_collection_is_not_adopted():
+    """`__threads__<workspace>` (the name before every collection lived in a
+    workspace) is neither read nor written: threads go to `__threads__`."""
     store = FakeVectorsClient(workspace="support")
-    store.create_collection("__threads__", VectorConfig(size=DEFAULT_VECTOR_SIZE, distance=DistanceMetric.COSINE))
-    memory = MemoryClient(client=store)
+    store.create_collection(
+        "__threads__support",
+        VectorConfig(size=DEFAULT_VECTOR_SIZE, distance=DistanceMetric.COSINE),
+    )
+    memory = MemoryClient(client=store, thread_vector_size=DIM)
     memory.create_thread("conv-1")
     assert sorted(store.collections) == ["__threads__", "__threads__support"]
-    assert store.collections["__threads__"]["points"] == {}
+    assert store.collections["__threads__support"]["points"] == {}
 
 
 # ===========================================================================

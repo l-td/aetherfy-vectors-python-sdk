@@ -289,3 +289,36 @@ def test_every_exception_in_its_hierarchy_is_importable(package: str) -> None:
         if issubclass(d.exception, bases) and id(d.exception) not in exported
     ]
     assert not failures, "\n" + "\n".join(failures)
+
+
+def test_the_user_agent_carries_the_one_version():
+    """The client's User-Agent is the package version, not a copy of it
+    (it said 1.0.0 through 1.2.0)."""
+    import aetherfy_vectors
+    from aetherfy_vectors import AetherfyVectorsClient
+
+    client = AetherfyVectorsClient(api_key="afy_test_1234567890abcdef1234", workspace="w")
+    assert client.auth_headers["User-Agent"] == (
+        f"aetherfy-vectors-python/{aetherfy_vectors.__version__}"
+    )
+    assert aetherfy_vectors.__version__ == "1.2.2"
+
+
+def test_the_retry_helper_and_its_classes_are_public():
+    """The JS root exports retryWithBackoff and the classes; so does this one.
+    A yes/no "is this error retryable?" is not public: whether to retry
+    depends on the operation's class and on request_sent, so only the helper
+    that takes the class decides."""
+    import aetherfy_vectors as root
+    from aetherfy_vectors import exceptions, retry_policy, utils
+
+    for name, obj in [
+        ("retry_with_backoff", utils.retry_with_backoff),
+        ("REPEATABLE", retry_policy.REPEATABLE),
+        ("ONCE", retry_policy.ONCE),
+    ]:
+        assert name in root.__all__, name
+        assert getattr(root, name) is obj, name
+
+    assert not hasattr(root, "is_retryable_error")
+    assert not hasattr(exceptions, "is_retryable_error")

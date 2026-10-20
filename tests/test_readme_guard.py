@@ -605,11 +605,17 @@ def test_ci_actually_runs_this_guard_on_readme_changes():
     trigger is asserted here, where a red is visible.
     """
     workflow = (REPO_ROOT / ".github" / "workflows" / "test.yml").read_text(encoding="utf-8")
+    # CI runs only on pushes to the integration branches (owner ruling
+    # 2026-10-13): there is no pull_request trigger, so the push block is
+    # the one filter that must list the README.
+    assert "\n  pull_request:" not in workflow.replace("\r\n", "\n"), (
+        "test.yml has a pull_request trigger again; CI runs on pushes only"
+    )
     blocks = workflow.count("- 'README.md'")
-    assert blocks >= 2, (
-        f"README.md appears in {blocks} of the workflow's path filters; both the "
-        f"push and pull_request blocks need it, or a README-only change runs no "
-        f"CI and this guard is decoration"
+    assert blocks >= 1, (
+        f"README.md appears in {blocks} of the workflow's path filters; the "
+        f"push block needs it, or a README-only change runs no CI and this "
+        f"guard is decoration"
     )
 
 

@@ -13,6 +13,7 @@ import time
 from typing import List, Dict, Any, Iterator, Optional, Sequence, Union
 import requests
 from requests.adapters import HTTPAdapter
+from requests.exceptions import ConnectTimeout
 
 from .auth import APIKeyManager
 from .models import (
@@ -36,6 +37,10 @@ from .exceptions import (
     PartialUpsertError,
 )
 from .qdrant_compat import check_qdrant_kwargs
+from .retry_policy import OPERATIONS
+
+# Set in __init__.py before this module is imported: one version, one place.
+from . import __version__
 from .chunking import chunk_points_by_bytes, MAX_REQUEST_BYTES, point_wire_bytes
 from .schema import (
     Schema,
@@ -50,8 +55,52 @@ from .utils import (
     build_api_url,
     parse_error_response,
     format_points_for_upsert,
-    quote_collection_name,
     serialize_filter,
+    server_fields,
+)
+
+
+def _never_connected(error: Exception) -> bool:
+    """True when a requests ConnectionError failed before connecting.
+
+    urllib3 reports DNS failures and refused connections as a
+    NewConnectionError (NameResolutionError is one) somewhere in the cause
+    chain; anything else (a reset, a dropped connection) may have come after
+    the request was sent.
+    """
+    from urllib3.exceptions import NewConnectionError
+
+    seen = set()
+    stack: List[BaseException] = [error]
+    while stack:
+        current = stack.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        if isinstance(current, NewConnectionError):
+            return True
+        for nested in (
+            getattr(current, "reason", None),
+            current.__cause__,
+            current.__context__,
+            *[a for a in getattr(current, "args", ()) if isinstance(a, Exception)],
+        ):
+            if isinstance(nested, BaseException):
+                stack.append(nested)
+    return False
+
+
+# Every collection lives in a workspace, so a client without one is refused
+# at construction rather than on its first request.
+NO_WORKSPACE_MESSAGE = (
+    "A workspace is required: every collection lives in one. Pass a workspace "
+    "name (workspace='my-workspace'), or run inside an Aetherfy agent and keep "
+    "the default workspace='auto'."
+)
+NO_WORKSPACE_MESSAGE_AUTO = (
+    "workspace='auto' reads AETHERFY_WORKSPACE_ID, which is not set: it is set "
+    "only inside an Aetherfy agent. Pass a workspace name "
+    "(workspace='my-workspace'), or run inside an Aetherfy agent."
 )
 
 
@@ -148,15 +197,16 @@ class AetherfyVectorsClient:
                 retried up to 3 times with exponential backoff, so one call
                 can take several times this long. A method's own ``timeout=``
                 is different: a deadline for that whole call.
-            workspace: Workspace name for multi-agent coordination.
-                Defaults to ``'auto'``: read ``AETHERFY_WORKSPACE`` from the
-                environment, and fall back to no workspace when it is unset.
-                The control plane sets that variable only on an agent that
-                really has a workspace, so 'auto' can only ever resolve to a
-                name the workspaces table holds.
-                - Set to a string to use a specific workspace
-                - Pass None to force no workspace (collections are not
-                  namespaced) even inside a workspaced agent
+            workspace: The workspace every collection of this client lives
+                in. Every collection lives in exactly one workspace, and
+                collection names are unique per workspace.
+                - ``'auto'`` (the default): the workspace of the Aetherfy agent
+                  this code runs in, by id, from ``AETHERFY_WORKSPACE_ID``
+                  (the control plane injects it on every agent). Requests go
+                  to ``/workspace-ids/{id}/...``.
+                - A workspace name: requests go to ``/workspaces/{name}/...``.
+                There is no "no workspace": ``None``, an empty name, and
+                ``'auto'`` outside an agent are refused here.
 
         There is deliberately no ``**kwargs``: an argument this constructor
         does not name raises TypeError. It used to be accepted and dropped, so
@@ -167,9 +217,24 @@ class AetherfyVectorsClient:
 
         Raises:
             AuthenticationError: If API key is invalid or missing.
-            ValueError: If ``api_region`` is not one of us-east-1/eu-central-1/ap-southeast-1.
+            ValueError: If ``api_region`` is not one of us-east-1/eu-central-1/ap-southeast-1,
+                or no workspace is given (see ``workspace``).
             AetherfyVectorsException: If region discovery fails.
         """
+        # The workspace: a name, or (for 'auto') the agent's workspace id.
+        # Exactly one of the two is set; there is no workspaceless client.
+        # Decided first, before region discovery makes a request.
+        self._workspace: Optional[str] = None
+        self._workspace_id: Optional[str] = None
+        if workspace == "auto":
+            self._workspace_id = os.getenv("AETHERFY_WORKSPACE_ID") or None
+            if self._workspace_id is None:
+                raise ValueError(NO_WORKSPACE_MESSAGE_AUTO)
+        elif isinstance(workspace, str) and workspace:
+            self._workspace = workspace
+        else:
+            raise ValueError(NO_WORKSPACE_MESSAGE)
+
         # Validate the API-region override eagerly so a typo fails at
         # construction, not on the first network round trip.
         env_region = os.getenv("AETHERFY_VECTORS_API_REGION")
@@ -218,18 +283,12 @@ class AetherfyVectorsClient:
 
         self.endpoint = resolved_endpoint.rstrip("/")
 
-        # Initialize workspace (auto-detect or explicit)
-        if workspace == "auto":
-            self.workspace = os.getenv("AETHERFY_WORKSPACE")
-        else:
-            self.workspace = workspace
-
         # auth_manager is initialized above (before endpoint resolution).
         # Build the standard header bundle now that the endpoint is known.
         self.auth_headers = {
             **self.auth_manager.get_auth_headers(),
             "Content-Type": "application/json",
-            "User-Agent": "aetherfy-vectors-python/1.0.0",
+            "User-Agent": f"aetherfy-vectors-python/{__version__}",
         }
 
         # Initialize HTTP session with connection pooling
@@ -264,7 +323,7 @@ class AetherfyVectorsClient:
             headers = {
                 **self.auth_manager.get_auth_headers(),
                 "Content-Type": "application/json",
-                "User-Agent": "aetherfy-vectors-python/1.0.0",
+                "User-Agent": f"aetherfy-vectors-python/{__version__}",
             }
             try:
                 resp = requests.get(url, headers=headers, timeout=self.timeout)
@@ -275,9 +334,14 @@ class AetherfyVectorsClient:
                     "endpoint= directly."
                 )
             if resp.status_code != 200:
+                try:
+                    answer = resp.json() if resp.content else {}
+                except ValueError:
+                    answer = {}
                 raise AetherfyVectorsException(
                     f"Region discovery returned {resp.status_code} from {url}. "
-                    "Check that your API key is valid for the discovery endpoint."
+                    "Check that your API key is valid for the discovery endpoint.",
+                    **server_fields(parse_error_response(answer, resp.status_code)),
                 )
             try:
                 self._regions_discovery_cache = _json.loads(resp.content or b"{}")
@@ -367,48 +431,51 @@ class AetherfyVectorsClient:
 
         return session
 
-    def _scope_collection(self, collection_name: str) -> str:
-        """Local cache-key for a collection name, with workspace prefix when set.
+    @property
+    def workspace(self) -> Optional[str]:
+        """The workspace name, or None when the client addresses it by id."""
+        return self._workspace
 
-        NOT sent on the wire anymore — the canonical vectordb wire form
-        post-A/B is the nested URL `/workspaces/{ws}/collections/{name}`
-        with a bare name in the URL/body (see `_build_collection_path`).
-        Kept as a stable schema-cache key so same-name collections in
-        different workspaces don't collide.
+    @property
+    def workspace_id(self) -> Optional[str]:
+        """The workspace id (``workspace='auto'``), or None when given a name."""
+        return self._workspace_id
+
+    def _scope_collection(self, collection_name: str) -> str:
+        """Local cache-key for a collection name, never sent on the wire.
+
+        Prefixed ``name/`` or ``id:<uuid>/`` so that same-name collections
+        in different workspaces, and the two ways of addressing a
+        workspace, never share a cache entry.
         """
-        if self.workspace:
-            return f"{self.workspace}/{collection_name}"
-        return collection_name
+        if self._workspace_id is not None:
+            return f"id:{self._workspace_id}/{collection_name}"
+        return f"{self._workspace}/{collection_name}"
+
+    def _workspace_path(self) -> str:
+        """``workspace-ids/{id}`` for 'auto', else ``workspaces/{name}``."""
+        from urllib.parse import quote
+
+        if self._workspace_id is not None:
+            return f"workspace-ids/{quote(self._workspace_id, safe='')}"
+        return f"workspaces/{quote(self._workspace or '', safe='')}"
 
     def _build_collection_path(self, collection_name: str, suffix: str = "") -> str:
-        """Build the canonical URL path for a collection.
-
-        Workspaced operations use the nested
-        form `workspaces/{ws}/collections/{name}` instead of the old
-        slash-in-name encoding. Workspaceless calls continue to use the
-        flat form.
+        """The URL path of a collection in this client's workspace.
 
         Args:
-            collection_name: BARE (unscoped) collection name.
+            collection_name: BARE collection name.
             suffix: Optional path suffix (e.g. ``"/points/query"``).
                 Must already begin with ``/`` when non-empty.
         """
         from urllib.parse import quote
 
         enc_name = quote(collection_name, safe="")
-        if self.workspace:
-            enc_ws = quote(self.workspace, safe="")
-            return f"workspaces/{enc_ws}/collections/{enc_name}{suffix}"
-        return f"collections/{enc_name}{suffix}"
+        return f"{self._workspace_path()}/collections/{enc_name}{suffix}"
 
     def _build_collections_list_path(self) -> str:
-        """Workspaced list/create endpoint or workspaceless."""
-        if self.workspace:
-            from urllib.parse import quote
-
-            enc_ws = quote(self.workspace, safe="")
-            return f"workspaces/{enc_ws}/collections"
-        return "collections"
+        """The list/create endpoint of this client's workspace."""
+        return f"{self._workspace_path()}/collections"
 
     def _make_request(
         self,
@@ -416,7 +483,8 @@ class AetherfyVectorsClient:
         endpoint: str,
         data: Optional[Dict[str, Any]] = None,
         params: Optional[Dict[str, Any]] = None,
-        enable_retry: bool = True,
+        *,
+        operation: str,
         headers: Optional[Dict[str, str]] = None,
         evict_caches_on_404: Optional[str] = None,
         timeout: Optional[float] = None,
@@ -429,14 +497,16 @@ class AetherfyVectorsClient:
             endpoint: API endpoint path.
             data: Request body data.
             params: Query parameters.
-            enable_retry: Whether to enable retry logic (default: True).
+            operation: The public operation this request serves, a key of
+                retry_policy.OPERATIONS. It decides when the request is
+                retried (retry_policy.should_retry_class).
             headers: Additional headers to include in request.
             evict_caches_on_404: If set, the scoped collection name whose
                 schema and payload-schema caches should be dropped when
                 the response is HTTP 404. Use for collection-scoped ops
                 where 404 unambiguously means "the collection is gone"
                 (cross-client delete or pre-existence check). Don't pass
-                for /schema/<name> reads, where 404 also covers the
+                for schema reads, where 404 also covers the
                 legitimate "no payload schema set" state.
             timeout: A DEADLINE in seconds for the whole call, retries and
                 backoff included, from a public method's ``timeout=``
@@ -507,11 +577,20 @@ class AetherfyVectorsClient:
                     # the collection no longer exists upstream (e.g. a
                     # cross-client delete). Drop the local caches so the
                     # next call doesn't keep believing the cached entry.
-                    if evict_caches_on_404 is not None and response.status_code == 404:
+                    error = parse_error_response(error_data, response.status_code)
+                    if evict_caches_on_404 is not None and isinstance(
+                        error, CollectionNotFoundError
+                    ):
                         self._schema_cache.pop(evict_caches_on_404, None)
                         self._payload_schema_cache.pop(evict_caches_on_404, None)
-                    raise parse_error_response(error_data, response.status_code)
+                    raise error
 
+            except ConnectTimeout:
+                # The connection was never made: the request was not sent.
+                raise RequestTimeoutError(
+                    f"Connecting for {endpoint} timed out after {this_attempt} seconds",
+                    request_sent=False,
+                )
             except requests.Timeout:
                 if deadline is not None and time.monotonic() >= deadline:
                     raise RequestTimeoutError(
@@ -521,19 +600,24 @@ class AetherfyVectorsClient:
                     f"Request to {endpoint} timed out after {this_attempt} seconds"
                 )
             except requests.ConnectionError as e:
-                # Network connection errors should be retryable
-                raise NetworkError(f"Network connection failed: {str(e)}")
+                raise NetworkError(
+                    f"Network connection failed: {str(e)}",
+                    request_sent=False if _never_connected(e) else None,
+                )
             except requests.RequestException as e:
                 # Other request errors - generic exception
                 raise AetherfyVectorsException(f"Request failed: {str(e)}")
 
-        # Apply retry logic only for write operations (POST, PUT)
-        if enable_retry and method in ["POST", "PUT"]:
-            return retry_with_backoff(
-                make_single_request, max_retries=3, base_delay=1.0, deadline=deadline
-            )
-        else:
-            return make_single_request()
+        # One rule for every request (retry_policy): a refusal before
+        # anything ran is retried for any operation; an ambiguous failure
+        # only for an operation whose repeat gives the same result.
+        return retry_with_backoff(
+            make_single_request,
+            OPERATIONS[operation],  # an undeclared operation is a KeyError
+            max_retries=3,
+            base_delay=1.0,
+            deadline=deadline,
+        )
 
     # Schema Cache Helpers
 
@@ -544,17 +628,17 @@ class AetherfyVectorsClient:
     def _fetch_and_cache_schema(self, collection_name: str) -> Dict[str, Any]:
         """Fetch collection schema from API and cache it with ETag.
 
-        Caller passes the BARE collection name (no workspace slash).
-        The wire URL uses the nested form via _build_collection_path
-        when workspaced; the local _schema_cache key uses the slash-
-        form scoped_name for collision-free lookups across workspaces
-        with same-name collections.
+        Caller passes the BARE collection name. The wire URL comes from
+        _build_collection_path; the local _schema_cache key is the
+        workspace-scoped name (_scope_collection), so same-name
+        collections in different workspaces never share an entry.
         """
         scoped_name = self._scope_collection(collection_name)
         response = self._make_request(
             "GET",
             self._build_collection_path(collection_name),
             evict_caches_on_404=scoped_name,
+            operation="get_schema",
         )
 
         # Extract schema info
@@ -575,9 +659,13 @@ class AetherfyVectorsClient:
         return schema
 
     def clear_schema_cache(self, collection_name: Optional[str] = None) -> None:
-        """Clear schema cache for a collection or all collections."""
+        """Clear schema cache for a collection or all collections.
+
+        ``collection_name`` is the bare name; the cache is keyed by the
+        workspace-scoped name (``_scope_collection``).
+        """
         if collection_name:
-            self._schema_cache.pop(collection_name, None)
+            self._schema_cache.pop(self._scope_collection(collection_name), None)
         else:
             self._schema_cache.clear()
 
@@ -703,10 +791,8 @@ class AetherfyVectorsClient:
 
         scoped_name = self._scope_collection(collection_name)
 
-        # Post-A/B: workspace lives in URL path, body name is bare.
-        # POST /workspaces/{ws}/collections {name: bare, ...} for workspaced;
-        # POST /collections {name: bare, ...} for workspaceless. vectordb
-        # rejects any "/" in the body name.
+        # The workspace is in the URL; the body name is bare (vectordb
+        # rejects any "/" in it).
         data: Dict[str, Any] = {
             "name": collection_name,
             "vectors": config.to_dict(),
@@ -721,7 +807,11 @@ class AetherfyVectorsClient:
             data["regions"] = regions
 
         response = self._make_request(
-            "POST", self._build_collections_list_path(), data, timeout=timeout
+            "POST",
+            self._build_collections_list_path(),
+            data,
+            timeout=timeout,
+            operation="create_collection",
         )
 
         # Prepopulate the schema cache from the request we just authored.
@@ -783,6 +873,7 @@ class AetherfyVectorsClient:
             self._build_collection_path(collection_name),
             evict_caches_on_404=scoped_name,
             timeout=timeout,
+            operation="delete_collection",
         )
         # Drop both caches so a subsequent recreate-with-different-shape
         # doesn't see stale size/distance/etag/payload-schema entries.
@@ -796,11 +887,11 @@ class AetherfyVectorsClient:
         Returns:
             List of Collection objects.
         """
-        # Post-A/B: GET /workspaces/{ws}/collections returns ONLY this
-        # workspace's collections with bare names; GET /collections returns
-        # workspaceless collections (also bare). No client-side filtering
-        # or name-unscoping needed.
-        response = self._make_request("GET", self._build_collections_list_path())
+        # The workspace's list holds only its own collections, with bare
+        # names: nothing to filter or unscope.
+        response = self._make_request(
+            "GET", self._build_collections_list_path(), operation="get_collections"
+        )
         collections = response.get("collections", [])
         return [Collection.from_dict(col) for col in collections]
 
@@ -840,12 +931,13 @@ class AetherfyVectorsClient:
                 "GET",
                 self._build_collection_path(collection_name),
                 evict_caches_on_404=scoped_name,
+                operation="collection_exists",
             )
             return True
-        except AetherfyVectorsException as e:
-            if getattr(e, "status_code", None) == 404:
-                return False
-            raise
+        except CollectionNotFoundError:
+            # Only "this collection is not in the workspace" is a False; an
+            # unknown workspace (WorkspaceNotFoundError) or a refusal is not.
+            return False
 
     def get_collection(self, collection_name: str) -> Collection:
         """Get collection information.
@@ -862,10 +954,9 @@ class AetherfyVectorsClient:
             "GET",
             self._build_collection_path(collection_name),
             evict_caches_on_404=scoped_name,
+            operation="get_collection",
         )
-        # Post-A/B: vectordb returns the bare collection name (PG stores
-        # `name` without workspace prefix; workspace is the workspace_id
-        # join key). No client-side unscope needed.
+        # vectordb returns the bare collection name: nothing to unscope.
         collection_data = response.get("result", response)
         return Collection.from_dict(collection_data)
 
@@ -1052,7 +1143,7 @@ class AetherfyVectorsClient:
                 failed.append(
                     {
                         "point_ids": [p["id"] for p in chunk],
-                        "error": ValidationError(str(e)),
+                        "error": ValidationError(str(e), **server_fields(e.__cause__)),
                     }
                 )
             # Programming errors (TypeError, AttributeError, etc.)
@@ -1103,22 +1194,21 @@ class AetherfyVectorsClient:
                 data,
                 headers=extra_headers if extra_headers else None,
                 evict_caches_on_404=scoped_name,
+                operation="upsert",
             )
             return True
 
         except ValidationError as e:
             # Handle 412 Precondition Failed (schema changed)
             if e.status_code == 412:
-                self.clear_schema_cache(scoped_name)
-                self._payload_schema_cache.pop(original_collection_name, None)
+                self._schema_cache.pop(scoped_name, None)
+                self._payload_schema_cache.pop(scoped_name, None)
 
                 # Fetch updated schema and re-validate
                 updated_schema = None
                 try:
                     self.get_schema(original_collection_name)
-                    updated_schema = self._payload_schema_cache.get(
-                        original_collection_name
-                    )
+                    updated_schema = self._payload_schema_cache.get(scoped_name)
                     if updated_schema and updated_schema["schema"]:
                         enforcement_mode = updated_schema.get("enforcement_mode", "off")
                         if enforcement_mode != "off":
@@ -1133,9 +1223,7 @@ class AetherfyVectorsClient:
                     raise
                 except Exception:
                     # Ignore other errors during schema refresh
-                    updated_schema = self._payload_schema_cache.get(
-                        original_collection_name
-                    )
+                    updated_schema = self._payload_schema_cache.get(scoped_name)
 
                 # Retry the upsert with updated schema
                 try:
@@ -1153,18 +1241,19 @@ class AetherfyVectorsClient:
                         data,
                         headers=(extra_headers_retry if extra_headers_retry else None),
                         evict_caches_on_404=scoped_name,
+                        operation="upsert",
                     )
                     return True
                 except Exception:
                     # If retry also fails, raise the original 412 error
                     raise ValidationError(
                         f"Schema changed for collection '{original_collection_name}'. Please retry your request.",
-                        status_code=412,
-                    )
+                        **server_fields(e),
+                    ) from e
 
             # Handle 400 Bad Request (validation error from backend or client-side)
             # Re-raise as ValueError for backward compatibility
-            raise ValueError(str(e))
+            raise ValueError(str(e)) from e
 
         except AetherfyVectorsException:
             # Re-raise other errors
@@ -1212,6 +1301,7 @@ class AetherfyVectorsClient:
             self._build_collection_path(collection_name, "/points/delete"),
             data,
             evict_caches_on_404=scoped_name,
+            operation="delete",
         )
         return True
 
@@ -1221,6 +1311,42 @@ class AetherfyVectorsClient:
     # Three helpers for the three payload-mutation endpoints. Server-side
     # cap: body.points.length <= 512.
     # ------------------------------------------------------------------
+
+    def _payload_request(
+        self,
+        method: str,
+        collection_name: str,
+        suffix: str,
+        data: Dict[str, Any],
+        points: Sequence[Union[str, int]],
+        scoped_name: str,
+        *,
+        operation: str,
+    ) -> Any:
+        """A payload route request. vectordb re-wraps Qdrant's own 404 (a
+        point that does not exist) as code ``NOT_FOUND``; on these routes that
+        is the point, so it is raised as PointNotFoundError. Every other 404
+        keeps its own type (COLLECTION_NOT_FOUND, WORKSPACE_NOT_FOUND, ...).
+        """
+        try:
+            return self._make_request(
+                method,
+                self._build_collection_path(collection_name, suffix),
+                data,
+                evict_caches_on_404=scoped_name,
+                operation=operation,
+            )
+        except AetherfyVectorsException as e:
+            if e.status_code == 404 and e.error_code == "NOT_FOUND":
+                raise PointNotFoundError(
+                    ", ".join(str(p) for p in points),
+                    collection_name,
+                    request_id=e.request_id,
+                    status_code=e.status_code,
+                    details=e.details,
+                    error_code=e.error_code,
+                ) from e
+            raise
 
     def set_payload(
         self,
@@ -1263,11 +1389,14 @@ class AetherfyVectorsClient:
         data: Dict[str, Any] = {"payload": payload, "points": points}
         if key is not None:
             data["key"] = key
-        response = self._make_request(
+        response = self._payload_request(
             "POST",
-            self._build_collection_path(collection_name, "/points/payload"),
+            collection_name,
+            "/points/payload",
             data,
-            evict_caches_on_404=scoped_name,
+            points,
+            scoped_name,
+            operation="set_payload",
         )
         return response.get("result", response) if response else {}
 
@@ -1300,11 +1429,14 @@ class AetherfyVectorsClient:
             validate_point_id(pid)
         scoped_name = self._scope_collection(collection_name)
         data = {"payload": payload, "points": points}
-        response = self._make_request(
+        response = self._payload_request(
             "PUT",
-            self._build_collection_path(collection_name, "/points/payload"),
+            collection_name,
+            "/points/payload",
             data,
-            evict_caches_on_404=scoped_name,
+            points,
+            scoped_name,
+            operation="overwrite_payload",
         )
         return response.get("result", response) if response else {}
 
@@ -1336,11 +1468,14 @@ class AetherfyVectorsClient:
             validate_point_id(pid)
         scoped_name = self._scope_collection(collection_name)
         data = {"keys": keys, "points": points}
-        response = self._make_request(
+        response = self._payload_request(
             "POST",
-            self._build_collection_path(collection_name, "/points/payload/delete"),
+            collection_name,
+            "/points/payload/delete",
             data,
-            evict_caches_on_404=scoped_name,
+            points,
+            scoped_name,
+            operation="delete_payload",
         )
         return response.get("result", response) if response else {}
 
@@ -1451,6 +1586,7 @@ class AetherfyVectorsClient:
                     evict_caches_on_404=scoped_name,
                     timeout=remaining,
                     attempt_timeout=attempt_timeout,
+                    operation="create_field_index",
                 )
             except RequestTimeoutError:
                 # Before the deadline, this is one create outliving its own
@@ -1506,12 +1642,13 @@ class AetherfyVectorsClient:
                 ),
                 evict_caches_on_404=scoped_name,
                 attempt_timeout=max(self.timeout, self.INDEX_ATTEMPT_TIMEOUT_S),
+                operation="delete_field_index",
             )
             return True
-        except AetherfyVectorsException as e:
-            if getattr(e, "status_code", None) == 404:
-                return False
-            raise
+        except CollectionNotFoundError:
+            # Only "this collection is not in the workspace" is a False; an
+            # unknown workspace (WorkspaceNotFoundError) or a refusal is not.
+            return False
 
     def merge_metadata(
         self,
@@ -1531,19 +1668,12 @@ class AetherfyVectorsClient:
         """
         if not isinstance(partial, dict):
             raise TypeError("partial must be a dict")
-        try:
-            return self.set_payload(
-                collection_name,
-                payload=partial,
-                points=[point_id],
-                key="metadata",
-            )
-        except AetherfyVectorsException as e:
-            if e.status_code == 404 and not isinstance(
-                e, (PointNotFoundError, CollectionNotFoundError)
-            ):
-                raise PointNotFoundError(str(point_id), collection_name) from e
-            raise
+        return self.set_payload(
+            collection_name,
+            payload=partial,
+            points=[point_id],
+            key="metadata",
+        )
 
     def delete_metadata_keys(
         self,
@@ -1559,18 +1689,11 @@ class AetherfyVectorsClient:
         if not isinstance(keys, list) or not all(isinstance(k, str) for k in keys):
             raise TypeError("keys must be a list of strings")
         dotted = [f"metadata.{k}" for k in keys]
-        try:
-            return self.delete_payload(
-                collection_name,
-                keys=dotted,
-                points=[point_id],
-            )
-        except AetherfyVectorsException as e:
-            if e.status_code == 404 and not isinstance(
-                e, (PointNotFoundError, CollectionNotFoundError)
-            ):
-                raise PointNotFoundError(str(point_id), collection_name) from e
-            raise
+        return self.delete_payload(
+            collection_name,
+            keys=dotted,
+            points=[point_id],
+        )
 
     def retrieve(
         self,
@@ -1621,6 +1744,7 @@ class AetherfyVectorsClient:
             data,
             evict_caches_on_404=scoped_name,
             timeout=timeout,
+            operation="retrieve",
         )
         return response.get("result", [])
 
@@ -1723,6 +1847,7 @@ class AetherfyVectorsClient:
             data,
             evict_caches_on_404=scoped_name,
             timeout=timeout,
+            operation="search",
         )
 
         results = []
@@ -1809,6 +1934,7 @@ class AetherfyVectorsClient:
             data,
             evict_caches_on_404=scoped_name,
             timeout=timeout,
+            operation="scroll",
         )
 
         # Scroll response shape: {"result": {"points": [...], "next_page_offset": ...}, ...}
@@ -1921,6 +2047,7 @@ class AetherfyVectorsClient:
             data,
             evict_caches_on_404=scoped_name,
             timeout=timeout,
+            operation="count",
         )
         # The wire response is `{"result": {"count": N}, "status": "ok"}`,
         # not flat — the count lives under `result`. Mirrors the JS SDK.
@@ -1954,7 +2081,9 @@ class AetherfyVectorsClient:
 
         try:
             response = self._make_request(
-                "GET", f"schema/{quote_collection_name(scoped_name)}"
+                "GET",
+                self._build_collection_path(collection_name, "/schema"),
+                operation="get_schema",
             )
 
             schema = Schema.from_dict(response["schema"])
@@ -1972,19 +2101,16 @@ class AetherfyVectorsClient:
             return schema
 
         except AetherfyVectorsException as e:
-            if e.status_code == 404:
-                # Backend disambiguates the two 404 cases via error.code:
-                #   COLLECTION_NOT_FOUND → collection is gone, evict caches
-                #   SCHEMA_NOT_DEFINED → collection exists but no schema (legit)
-                # Without the code (older backend or unstructured body) we
-                # treat 404 as "no schema set" (return None) without
-                # evicting — same shape as today's behavior. The eviction
-                # path only fires when the backend explicitly tells us
-                # the collection is gone.
-                error_code = self._extract_error_code(e)
-                if error_code == "COLLECTION_NOT_FOUND":
-                    self._schema_cache.pop(scoped_name, None)
-                    self._payload_schema_cache.pop(scoped_name, None)
+            # Two 404s mean "no schema", told apart by error.code:
+            #   COLLECTION_NOT_FOUND → the collection is gone: evict caches
+            #   SCHEMA_NOT_DEFINED → the collection has no schema (legit)
+            # Any other 404 (an unknown workspace) is raised.
+            error_code = self._extract_error_code(e)
+            if e.status_code == 404 and error_code == "COLLECTION_NOT_FOUND":
+                self._schema_cache.pop(scoped_name, None)
+                self._payload_schema_cache.pop(scoped_name, None)
+                return None
+            if e.status_code == 404 and error_code == "SCHEMA_NOT_DEFINED":
                 return None
             raise
 
@@ -2043,9 +2169,10 @@ class AetherfyVectorsClient:
 
         response = self._make_request(
             "PUT",
-            f"schema/{quote_collection_name(scoped_name)}",
+            self._build_collection_path(collection_name, "/schema"),
             data,
             evict_caches_on_404=scoped_name,
+            operation="set_schema",
         )
         etag = response["etag"]
 
@@ -2075,7 +2202,11 @@ class AetherfyVectorsClient:
         scoped_name = self._scope_collection(collection_name)
 
         try:
-            self._make_request("DELETE", f"schema/{quote_collection_name(scoped_name)}")
+            self._make_request(
+                "DELETE",
+                self._build_collection_path(collection_name, "/schema"),
+                operation="delete_schema",
+            )
 
             # Clear from cache (use scoped name)
             self._payload_schema_cache.pop(scoped_name, None)
@@ -2083,18 +2214,22 @@ class AetherfyVectorsClient:
             return True
 
         except AetherfyVectorsException as e:
-            if e.status_code == 404:
-                # Disambiguate via backend's error.code:
-                #   COLLECTION_NOT_FOUND → collection is gone, evict caches.
-                #   SCHEMA_NOT_DEFINED → collection exists, no schema set.
-                # Both surface as SchemaNotFoundError to the caller — the
-                # difference is whether we self-heal the local caches.
-                error_code = self._extract_error_code(e)
-                if error_code == "COLLECTION_NOT_FOUND":
-                    self._schema_cache.pop(scoped_name, None)
-                    self._payload_schema_cache.pop(scoped_name, None)
-                raise SchemaNotFoundError(collection_name)
-            raise
+            # Disambiguate via the backend's error.code:
+            #   COLLECTION_NOT_FOUND → collection is gone, evict caches.
+            #   SCHEMA_NOT_DEFINED → collection exists, no schema set.
+            # Both surface as SchemaNotFoundError to the caller — the
+            # difference is whether we self-heal the local caches. Any other
+            # 404 (an unknown workspace) is raised as it is.
+            error_code = self._extract_error_code(e)
+            if e.status_code != 404 or error_code not in (
+                "COLLECTION_NOT_FOUND",
+                "SCHEMA_NOT_DEFINED",
+            ):
+                raise
+            if error_code == "COLLECTION_NOT_FOUND":
+                self._schema_cache.pop(scoped_name, None)
+                self._payload_schema_cache.pop(scoped_name, None)
+            raise SchemaNotFoundError(collection_name, **server_fields(e)) from e
 
     def analyze_schema(
         self, collection_name: str, sample_size: int = 1000
@@ -2122,9 +2257,10 @@ class AetherfyVectorsClient:
         data = {"sample_size": sample_size}
         response = self._make_request(
             "POST",
-            f"schema/{quote_collection_name(scoped_name)}/analyze",
+            self._build_collection_path(collection_name, "/schema/analyze"),
             data,
             evict_caches_on_404=scoped_name,
+            operation="analyze_schema",
         )
 
         # Return with unscoped collection name
@@ -2168,23 +2304,10 @@ class AetherfyVectorsClient:
         Raises:
             AetherfyVectorsException: If request fails.
         """
-        url = build_api_url(self.endpoint, "analytics/usage")
-
-        try:
-            response = self.session.get(
-                url, headers=self.auth_headers, timeout=self.timeout
-            )
-
-            if response.status_code == 200:
-                return UsageStats.from_dict(response.json())
-
-            error_data = response.json() if response.content else {}
-            raise parse_error_response(error_data, response.status_code)
-
-        except requests.RequestException as e:
-            raise AetherfyVectorsException(
-                f"Failed to retrieve usage statistics: {str(e)}"
-            )
+        response = self._make_request(
+            "GET", "analytics/usage", operation="get_usage_stats"
+        )
+        return UsageStats.from_dict(response)
 
     # Utility Methods
 

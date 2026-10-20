@@ -33,12 +33,14 @@ def test_a_forbidden_workspace_is_typed_and_names_it():
     assert "afy access <agent> --add beta" in str(err)
 
 
-def test_the_workspaceless_collections_are_named_too():
+def test_a_workspace_addressed_by_id_is_this_workspace():
+    """Addressed by id (workspace="auto"), the body's `workspace` is null."""
     err = parse_error_response(_forbidden(None), 403)
     assert isinstance(err, AgentWorkspaceForbiddenError)
     assert err.workspace is None
-    assert "the collections in no workspace" in str(err)
-    assert '--add ""' in str(err)
+    assert "this workspace" in str(err)
+    assert "no workspace" not in str(err)
+    assert "afy access <agent> --add <workspace>" in str(err)
 
 
 def test_control_another_403_is_not_this_error():

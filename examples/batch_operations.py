@@ -46,7 +46,7 @@ def generate_sample_data(count: int, vector_dim: int = 128) -> List[Dict[str, An
 def batch_upsert_example():
     """Demonstrate efficient batch upsert operations."""
     
-    client = AetherfyVectorsClient(api_key="afy_live_your_api_key_here")
+    client = AetherfyVectorsClient(api_key="afy_live_your_api_key_here", workspace="default")
     collection_name = "batch_demo"
     
     try:
@@ -109,7 +109,7 @@ def batch_upsert_example():
 def batch_search_example(collection_name: str):
     """Demonstrate efficient batch search operations."""
     
-    client = AetherfyVectorsClient(api_key="afy_live_your_api_key_here")
+    client = AetherfyVectorsClient(api_key="afy_live_your_api_key_here", workspace="default")
     
     try:
         print(f"\n=== Batch Search Example ===\n")
@@ -216,7 +216,7 @@ def batch_search_example(collection_name: str):
 def batch_delete_example(collection_name: str):
     """Demonstrate efficient batch delete operations."""
     
-    client = AetherfyVectorsClient(api_key="afy_live_your_api_key_here")
+    client = AetherfyVectorsClient(api_key="afy_live_your_api_key_here", workspace="default")
     
     try:
         print(f"\n=== Batch Delete Example ===\n")
@@ -278,7 +278,7 @@ def batch_delete_example(collection_name: str):
 def batch_retrieve_example(collection_name: str):
     """Demonstrate efficient batch retrieve operations."""
     
-    client = AetherfyVectorsClient(api_key="afy_live_your_api_key_here")
+    client = AetherfyVectorsClient(api_key="afy_live_your_api_key_here", workspace="default")
     
     try:
         print(f"\n=== Batch Retrieve Example ===\n")
@@ -377,7 +377,7 @@ def main():
         
         # Cleanup
         try:
-            client = AetherfyVectorsClient(api_key="afy_live_your_api_key_here")
+            client = AetherfyVectorsClient(api_key="afy_live_your_api_key_here", workspace="default")
             client.delete_collection(collection_name)
             print(f"\n✓ Cleaned up collection '{collection_name}'")
         except Exception as e:

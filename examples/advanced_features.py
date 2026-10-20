@@ -24,7 +24,7 @@ from aetherfy_vectors.models import VectorConfig, DistanceMetric
 def usage_example():
     """Consumption against plan limits, and the warnings worth acting on."""
 
-    client = AetherfyVectorsClient(api_key="afy_live_your_api_key_here")
+    client = AetherfyVectorsClient(api_key="afy_live_your_api_key_here", workspace="default")
 
     print("=== Aetherfy Usage & Limits ===\n")
 
@@ -63,7 +63,7 @@ def usage_example():
 def latency_example():
     """Measure search latency yourself — Aetherfy does not report it to you."""
 
-    client = AetherfyVectorsClient(api_key="afy_live_your_api_key_here")
+    client = AetherfyVectorsClient(api_key="afy_live_your_api_key_here", workspace="default")
     collection = "latency_demo"
 
     print("\n=== Measured Search Latency ===\n")

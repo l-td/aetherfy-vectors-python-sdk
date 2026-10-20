@@ -77,7 +77,16 @@ class ValidationError(AetherfyVectorsException):
         super().__init__(message, **kwargs)
 
 
-class CollectionNotFoundError(AetherfyVectorsException):
+class NotFoundError(AetherfyVectorsException):
+    """Something the request named does not exist (HTTP 404).
+
+    The parent of every not-found error (collection, point, schema,
+    workspace), and what a 404 whose ``error_code`` this SDK does not know
+    arrives as, with that code. Catch it to handle any of them.
+    """
+
+
+class CollectionNotFoundError(NotFoundError):
     """Specified collection does not exist."""
 
     def __init__(self, collection_name: str, **kwargs):
@@ -86,7 +95,7 @@ class CollectionNotFoundError(AetherfyVectorsException):
         self.collection_name = collection_name
 
 
-class PointNotFoundError(AetherfyVectorsException):
+class PointNotFoundError(NotFoundError):
     """Specified point does not exist."""
 
     def __init__(self, point_id: str, collection_name: str, **kwargs):
@@ -97,17 +106,38 @@ class PointNotFoundError(AetherfyVectorsException):
 
 
 class RequestTimeoutError(AetherfyVectorsException):
-    """Request timed out."""
+    """Request timed out.
 
-    def __init__(self, message: str = "Request timed out", **kwargs):
+    ``request_sent`` is False for a connect timeout (the request never left),
+    None when it may have been sent (a read timeout). See retry_policy.
+    """
+
+    def __init__(
+        self,
+        message: str = "Request timed out",
+        request_sent: Optional[bool] = None,
+        **kwargs,
+    ):
         super().__init__(message, **kwargs)
+        self.request_sent = request_sent
 
 
 class NetworkError(AetherfyVectorsException):
-    """Network connection error."""
+    """Network connection error.
 
-    def __init__(self, message: str = "Network connection error", **kwargs):
+    ``request_sent`` is False when the connection was never made (DNS,
+    connection refused), None when it may have been sent (a reset after
+    sending). See retry_policy.
+    """
+
+    def __init__(
+        self,
+        message: str = "Network connection error",
+        request_sent: Optional[bool] = None,
+        **kwargs,
+    ):
         super().__init__(message, **kwargs)
+        self.request_sent = request_sent
 
 
 class ConflictError(AetherfyVectorsException):
@@ -180,7 +210,7 @@ class CollectionInOtherRegionError(AetherfyVectorsException):
             message = (
                 f"Collection '{collection_name}' already exists in region "
                 f"{', '.join(existing_regions)}. Collection names are unique "
-                f"per account; pick a different name or use the existing one."
+                f"per workspace; pick a different name or use the existing one."
             )
         super().__init__(message, **kwargs)
         self.collection_name = collection_name
@@ -193,11 +223,11 @@ class AgentWorkspaceForbiddenError(AetherfyVectorsException):
 
     The key Aetherfy injects into a deployed agent reaches its own workspace
     plus the workspaces the account owner granted it; any other is refused
-    (403 ``AGENT_KEY_WORKSPACE_FORBIDDEN``) whether or not the collection
-    exists there. ``workspace`` names it, or is None for the collections in no
-    workspace. Not retryable: the owner grants access on the agent's page in
-    the dashboard, or with ``afy access <agent> --add <workspace>``, and it
-    takes effect within 60 seconds.
+    (403 ``AGENT_KEY_WORKSPACE_FORBIDDEN``) whether or not it exists.
+    ``workspace`` names it, or is None when it was addressed by id. Not
+    retryable: the owner grants access on the agent's page in the dashboard,
+    or with ``afy access <agent> --add <workspace>``, and it takes effect
+    within 60 seconds.
     """
 
     def __init__(
@@ -206,20 +236,44 @@ class AgentWorkspaceForbiddenError(AetherfyVectorsException):
         message: Optional[str] = None,
         **kwargs,
     ):
-        where = (
-            f"workspace '{workspace}'"
-            if workspace
-            else "the collections in no workspace"
-        )
+        where = f"workspace '{workspace}'" if workspace else "this workspace"
         if message is None:
             message = f"This agent's API key cannot use {where}."
-        add = workspace if workspace else '""'
+        add = workspace if workspace else "<workspace>"
         message += (
             f" Ask the account owner to grant this agent access to {where}: "
             f"the agent's page in the dashboard, or `afy access <agent> --add {add}`."
         )
         super().__init__(message, **kwargs)
         self.workspace = workspace
+
+
+class WorkspaceNotFoundError(NotFoundError):
+    """No such workspace in this account (404 ``WORKSPACE_NOT_FOUND``).
+
+    ``workspace`` is the name as sent, or None when it was addressed by id;
+    ``workspace_id`` is then the id as sent. Not retryable: create the
+    workspace, or fix the name. A workspace of another account answers the
+    same way, by design.
+    """
+
+    def __init__(
+        self,
+        workspace: Optional[str],
+        workspace_id: Optional[str] = None,
+        message: Optional[str] = None,
+        **kwargs,
+    ):
+        if message is None:
+            where = (
+                f"Workspace '{workspace}'"
+                if workspace
+                else f"Workspace id '{workspace_id}'"
+            )
+            message = f"{where} not found in this account."
+        super().__init__(message, **kwargs)
+        self.workspace = workspace
+        self.workspace_id = workspace_id
 
 
 class QuotaExceededError(AetherfyVectorsException):
@@ -239,7 +293,7 @@ class QuotaExceededError(AetherfyVectorsException):
         self.limit = limit
 
 
-class SchemaNotFoundError(AetherfyVectorsException):
+class SchemaNotFoundError(NotFoundError):
     """No schema defined for collection."""
 
     def __init__(self, collection_name: str, **kwargs):
@@ -296,20 +350,3 @@ class PartialUpsertError(AetherfyVectorsException):
         self.saved = saved
         self.total = total
         self.failed = failed
-
-
-def is_retryable_error(error: Exception) -> bool:
-    """Check if an error should be retried.
-
-    Args:
-        error: The exception to check.
-
-    Returns:
-        True if error is retryable, False otherwise.
-    """
-    return (
-        isinstance(error, ServiceUnavailableError)
-        or isinstance(error, RequestTimeoutError)
-        or isinstance(error, NetworkError)
-        or (isinstance(error, RateLimitExceededError) and error.retry_after is not None)
-    )

@@ -119,10 +119,16 @@ def test_the_accepted_response_becomes_a_spawn(transport):
     assert result.estimated_start == "~1s"
 
 
-def test_a_workspaceless_spawn_carries_none(transport):
-    transport.reply = (202, dict(ACCEPTED, workspace=None))
+def test_the_workspace_is_a_required_name():
+    """Every agent lives in a workspace: the record's `workspace` is the
+    spawned agent's workspace name, never None."""
+    import dataclasses
 
-    assert spawn("nightly-rollup").workspace is None
+    from aetherfy_agent.models import Spawn
+
+    field = {f.name: f for f in dataclasses.fields(Spawn)}["workspace"]
+    assert field.type in (str, "str")
+    assert field.default is dataclasses.MISSING
 
 
 def test_413_is_payload_too_large(transport):
