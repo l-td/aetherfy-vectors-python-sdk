@@ -22,11 +22,10 @@ from aetherfy_vectors.models import Collection, DistanceMetric, VectorConfig
 from aetherfy_vectors.storage_modes import StorageMode
 from aetherfy_vectors.utils import parse_error_response
 
-# vectordb's STORAGE_MODE_COOLDOWN_SECONDS and COMPACT_MIN_DIMENSIONS
-# (backend/utils/storageModes.js). Copied, not imported: the server is
-# another repo, and tests/test_storage_mode.py pins the behaviour.
+# vectordb's STORAGE_MODE_COOLDOWN_SECONDS (backend/utils/storageModes.js).
+# Copied, not imported: the server is another repo, and
+# tests/test_storage_mode.py pins the behaviour.
 COOLDOWN_SECONDS = 900
-COMPACT_MIN_DIMENSIONS = 512
 
 
 def _wire_error(status: int, code: str, message: str, **details: Any):
@@ -119,6 +118,9 @@ class FakeVectorsClient:
         self.workspace = workspace
         # A test advances this to cross the storage-mode cooldown.
         self.now = 0.0
+        # The storage modes the fake's plan allows (the service's `exact` and
+        # `balanced` on every plan, `fast` from Performance up).
+        self.plan_modes = ["exact", "balanced", "fast"]
         self.collections: Dict[str, Dict[str, Any]] = {}
         self.indexes: List[tuple] = []
         # Flip to make every read behave as if the must_not clause had been
@@ -136,7 +138,7 @@ class FakeVectorsClient:
     ):
         assert name not in self.collections, f"{name} already exists"
         mode = self._valid_mode(storage_mode) or StorageMode.EXACT
-        self._check_suitable(mode, config.size)
+        self._check_in_plan(mode)
         self.collections[name] = {
             "config": config,
             "points": {},
@@ -146,7 +148,7 @@ class FakeVectorsClient:
         return Collection(name=name, config=config, storage_mode=mode)
 
     # vectordb's answers, in the order it gives them: an unknown mode is a 400
-    # before anything is read, compact below the floor a 422.
+    # before anything is read, a mode outside the plan a 403.
     @staticmethod
     def _valid_mode(value) -> Optional[StorageMode]:
         if value is None:
@@ -157,20 +159,22 @@ class FakeVectorsClient:
             raise _wire_error(
                 400,
                 "VALIDATION_ERROR",
-                "storage_mode must be one of: exact, balanced, fast, compact",
+                "storage_mode must be one of: exact, balanced, fast",
                 field="storage_mode",
             )
 
-    @staticmethod
-    def _check_suitable(mode: StorageMode, size: int) -> None:
-        if mode is StorageMode.COMPACT and size < COMPACT_MIN_DIMENSIONS:
+    def _check_in_plan(self, mode: StorageMode) -> None:
+        """A test sets ``plan_modes`` to the modes its plan allows."""
+        if mode.value not in self.plan_modes:
             raise _wire_error(
-                422,
-                "STORAGE_MODE_UNSUITABLE",
-                f"storage_mode 'compact' needs vectors of at least "
-                f"{COMPACT_MIN_DIMENSIONS} dimensions; this collection's are {size}.",
+                403,
+                "STORAGE_MODE_NOT_IN_PLAN",
+                f"The '{mode.value}' storage mode is not part of your plan.",
                 field="storage_mode",
-                suggested_mode="balanced",
+                storage_mode=mode.value,
+                plan="starter",
+                required_plan="performance",
+                allowed_modes=list(self.plan_modes),
             )
 
     def update_collection(
@@ -185,7 +189,7 @@ class FakeVectorsClient:
         mode = self._valid_mode(storage_mode)
         if mode is None:
             return True
-        self._check_suitable(mode, col["config"].size)
+        self._check_in_plan(mode)
         if mode is col["mode"]:
             return True  # a no-op: no cooldown consumed
         changed = col["mode_changed_at"]

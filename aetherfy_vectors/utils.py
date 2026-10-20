@@ -360,6 +360,21 @@ def parse_error_response(
                 details=details,
                 error_code=error_code,
             )
+        if error_code == "STORAGE_MODE_NOT_IN_PLAN":
+            from .exceptions import StorageModeNotInPlanError
+
+            extras = details if isinstance(details, dict) else {}
+            return StorageModeNotInPlanError(
+                message,
+                storage_mode=extras.get("storage_mode"),
+                plan=extras.get("plan"),
+                required_plan=extras.get("required_plan"),
+                allowed_modes=extras.get("allowed_modes"),
+                request_id=request_id,
+                status_code=status_code,
+                details=details,
+                error_code=error_code,
+            )
         # Every other refusal of this key, e.g. AUTH_AGENT_KEY_OUT_OF_SCOPE
         # (an agent key on an account-only route).
         return AuthenticationError(

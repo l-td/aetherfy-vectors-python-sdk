@@ -31,6 +31,7 @@ from .exceptions import (
     WorkspaceNotFoundError,
     NotFoundError,
     QuotaExceededError,
+    StorageModeNotInPlanError,
 )
 from .models import (
     SearchResult,
@@ -68,6 +69,7 @@ __all__ = [
     "WorkspaceNotFoundError",
     "NotFoundError",
     "QuotaExceededError",
+    "StorageModeNotInPlanError",
     "SearchResult",
     "Point",
     "Collection",

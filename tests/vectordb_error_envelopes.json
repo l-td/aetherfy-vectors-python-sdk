@@ -1,5 +1,5 @@
 {
-  "_provenance": "Produced by vectordb (l-td/vectordb backend/): vectors_400 by utils/collectionValidation.js validateCollectionVectors({size:3,distance:\"Cosine\",on_disk:true}); mode_400 by validateStorageMode(\"turbo\"); unsuitable_422 by utils/storageModes.js suitability(\"compact\",384); too_soon_409 is the literal body services/collectionStorageMode.js step 4 sends, with the example wait 437 s. limit_reached_429 by services/storageModeChangeBudget.js reserve() with the plan row {limit 3, period week} and a stubbed pool that refuses the upsert and answers the reset (2026-10-26T00:00:00Z, 392000 s). Every extra sits on the error object. Regenerate by running those, not by hand.",
+  "_provenance": "Produced by vectordb (l-td/vectordb backend/): vectors_400 by utils/collectionValidation.js validateCollectionVectors({size:3,distance:\"Cosine\",on_disk:true}); mode_400 by validateStorageMode(\"turbo\"); not_in_plan_403 by services/storageModeGate.js refusalFor(\"fast\", {tier:\"starter\", limits:{allowedStorageModes:[\"exact\",\"balanced\"]}}) with tierUnlockingStorageMode answering \"performance\"; too_soon_409 is the literal body services/collectionStorageMode.js step 4 sends, with the example wait 437 s. limit_reached_429 by services/storageModeChangeBudget.js reserve() with the plan row {limit 3, period week} and a stubbed pool that refuses the upsert and answers the reset (2026-10-26T00:00:00Z, 392000 s). Every extra sits on the error object. Regenerate by running those, not by hand.",
   "vectors_400": {
     "error": {
       "code": "VALIDATION_ERROR",
@@ -10,25 +10,27 @@
   "mode_400": {
     "error": {
       "code": "VALIDATION_ERROR",
-      "message": "storage_mode must be one of exact, balanced, fast, compact; got \"turbo\".",
+      "message": "storage_mode must be one of exact, balanced, fast; got \"turbo\".",
       "field": "storage_mode",
       "accepted": [
         "exact",
         "balanced",
-        "fast",
-        "compact"
+        "fast"
       ]
     }
   },
-  "unsuitable_422": {
+  "not_in_plan_403": {
     "error": {
-      "code": "STORAGE_MODE_UNSUITABLE",
-      "message": "storage_mode 'compact' needs vectors of at least 512 dimensions; this collection's are 384. Below that, binary quantization loses too much recall. Use 'balanced' for a smaller memory footprint instead.",
+      "code": "STORAGE_MODE_NOT_IN_PLAN",
+      "message": "The 'fast' storage mode is available on the Performance plan and above. Your plan is Starter, which allows exact and balanced.",
       "field": "storage_mode",
-      "storage_mode": "compact",
-      "vector_size": 384,
-      "min_vector_size": 512,
-      "suggested_mode": "balanced"
+      "storage_mode": "fast",
+      "plan": "starter",
+      "required_plan": "performance",
+      "allowed_modes": [
+        "exact",
+        "balanced"
+      ]
     }
   },
   "too_soon_409": {

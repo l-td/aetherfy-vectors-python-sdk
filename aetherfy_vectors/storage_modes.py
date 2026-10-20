@@ -13,9 +13,11 @@ balanced   An 8-bit copy of each vector is searched, the originals sit on disk
            and rescore the best candidates. Uses far less memory than exact.
 fast       The same 8-bit copy, with the originals kept in memory too. Uses
            MORE memory than exact, not less.
-compact    A 2-bit copy, originals on disk. The smallest footprint and the
-           lossiest mode; needs vectors of at least 512 dimensions.
 =========  ===================================================================
+
+``fast`` is available on the Performance plan and above; ``exact`` and
+``balanced`` on every plan. A mode outside your plan raises
+``StorageModeNotInPlanError``.
 
 The same names are accepted by the JS SDK (``storageMode``).
 """
@@ -30,7 +32,6 @@ class StorageMode(str, Enum):
     EXACT = "exact"
     BALANCED = "balanced"
     FAST = "fast"
-    COMPACT = "compact"
 
 
 #: What a collection created without ``storage_mode`` gets.
@@ -41,7 +42,7 @@ def coerce_storage_mode(value: Union[StorageMode, str]) -> StorageMode:
     """Return ``value`` as a StorageMode.
 
     Raises:
-        ValueError: if it is not one of the four modes. A typo fails here,
+        ValueError: if it is not one of the three modes. A typo fails here,
             before a round trip, and names the accepted values.
     """
     if isinstance(value, StorageMode):

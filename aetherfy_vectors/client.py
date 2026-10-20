@@ -750,10 +750,10 @@ class AetherfyVectorsClient:
                 endpoint to connect to rather than where the collection lives.
             storage_mode: How the collection's vectors are stored and
                 searched: a ``StorageMode`` or its name (``"exact"``,
-                ``"balanced"``, ``"fast"``, ``"compact"``). Omit for
+                ``"balanced"``, ``"fast"``). Omit for
                 ``exact``, the layout every collection had before modes
-                existed. ``compact`` needs vectors of at least 512 dimensions
-                (ValidationError otherwise). See
+                existed. ``fast`` needs the Performance plan or above
+                (StorageModeNotInPlanError otherwise). See
                 ``aetherfy_vectors.storage_modes`` for what each costs.
                 Re-creating a collection that exists never changes its mode;
                 use ``update_collection(storage_mode=...)``.
@@ -773,8 +773,10 @@ class AetherfyVectorsClient:
             and its ``storage_mode``.
 
         Raises:
-            ValueError: If ``storage_mode`` is not one of the four modes.
+            ValueError: If ``storage_mode`` is not one of the three modes.
             ValidationError: If parameters are invalid.
+            StorageModeNotInPlanError: If the mode is not part of your plan
+                (``error_code`` ``STORAGE_MODE_NOT_IN_PLAN``).
             TypeError: For an unknown or unsupported keyword argument.
             AetherfyVectorsException: If creation fails.
         """
@@ -920,10 +922,11 @@ class AetherfyVectorsClient:
 
         Raises:
             ValueError: If neither argument is given, or ``storage_mode``
-                is not one of the four modes.
-            ValidationError: If a value is invalid, or ``compact`` is asked
-                for on a collection of fewer than 512 dimensions
-                (``error_code`` ``STORAGE_MODE_UNSUITABLE``).
+                is not one of the three modes.
+            ValidationError: If a value is invalid.
+            StorageModeNotInPlanError: If the mode is not part of your plan
+                (``error_code`` ``STORAGE_MODE_NOT_IN_PLAN``); ``required_plan``
+                names the plan that has it. Not retried.
             ConflictError: If the mode changed less than 15 minutes ago
                 (``error_code`` ``STORAGE_MODE_CHANGE_TOO_SOON``). The
                 seconds left are ``details["retry_after_seconds"]``.

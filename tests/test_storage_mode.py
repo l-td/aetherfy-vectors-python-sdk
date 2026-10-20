@@ -5,7 +5,7 @@ layer's tests share.
 The wire contract is vectordb's (backend/docs/STORAGE_MODES.md): a mode is
 sent only when the caller names one, so a caller who never does sends the body
 this SDK always sent; the server answers 400 for an unknown mode, 422
-STORAGE_MODE_UNSUITABLE for compact below 512 dimensions, 409
+STORAGE_MODE_NOT_IN_PLAN for a mode outside the plan, 409
 STORAGE_MODE_CHANGE_TOO_SOON inside the cooldown.
 """
 
@@ -15,6 +15,7 @@ import pytest
 
 from aetherfy_vectors import AetherfyVectorsClient, StorageMode
 from aetherfy_vectors.exceptions import (
+    StorageModeNotInPlanError,
     ConflictError,
     ServiceUnavailableError,
     ValidationError,
@@ -73,12 +74,11 @@ def sent_request(request):
 
 
 class TestEnum:
-    def test_the_four_modes_are_their_wire_names(self):
+    def test_the_three_modes_are_their_wire_names(self):
         assert [m.value for m in StorageMode] == [
             "exact",
             "balanced",
             "fast",
-            "compact",
         ]
         assert DEFAULT_STORAGE_MODE is StorageMode.EXACT
 
@@ -91,7 +91,7 @@ class TestEnum:
 
     @pytest.mark.parametrize("bad", ["turbo", "Exact", "", None, 3, {}])
     def test_coerce_names_the_accepted_values(self, bad):
-        with pytest.raises(ValueError, match="exact, balanced, fast, compact"):
+        with pytest.raises(ValueError, match="exact, balanced, fast"):
             coerce_storage_mode(bad)
 
     def test_parse_keeps_an_unknown_name_instead_of_raising(self):
@@ -129,7 +129,7 @@ class TestCreate:
 
     def test_an_unknown_mode_raises_before_any_request(self, client):
         request = queue(client)
-        with pytest.raises(ValueError, match="exact, balanced, fast, compact"):
+        with pytest.raises(ValueError, match="exact, balanced, fast"):
             client.create_collection("docs", CONFIG, storage_mode="turbo")
         assert request.call_count == 0
 
@@ -143,31 +143,28 @@ class TestCreate:
         queue(client, _response(200, {"regions": ["us-east-1"]}))
         assert client.create_collection("docs", CONFIG).storage_mode is None
 
-    def test_a_422_for_compact_below_the_floor_is_a_validation_error(self, client):
+    def test_a_403_for_a_mode_outside_the_plan_is_a_storage_mode_not_in_plan_error(self, client):
         queue(
             client,
             _response(
-                422,
+                403,
                 {
                     "error": {
-                        "code": "STORAGE_MODE_UNSUITABLE",
-                        "message": "storage_mode 'compact' needs vectors of at least 512 dimensions",
+                        "code": "STORAGE_MODE_NOT_IN_PLAN",
+                        "message": "The 'fast' storage mode is available on the Performance plan and above.",
                         "field": "storage_mode",
-                        "min_vector_size": 512,
-                        "suggested_mode": "balanced",
+                        "storage_mode": "fast",
+                        "plan": "starter",
+                        "required_plan": "performance",
+                        "allowed_modes": ["exact", "balanced"],
                     }
                 },
             ),
         )
-        with pytest.raises(ValidationError) as exc:
-            client.create_collection(
-                "docs",
-                VectorConfig(size=384, distance=DistanceMetric.COSINE),
-                storage_mode="compact",
-            )
-        assert exc.value.status_code == 422
-        assert exc.value.error_code == "STORAGE_MODE_UNSUITABLE"
-        assert exc.value.details["suggested_mode"] == "balanced"
+        with pytest.raises(StorageModeNotInPlanError) as exc:
+            client.create_collection("docs", CONFIG, storage_mode="fast")
+        assert exc.value.status_code == 403
+        assert exc.value.required_plan == "performance"
 
     def test_the_engine_setting_the_mode_replaces_is_still_refused(self, client):
         request = queue(client)
@@ -187,11 +184,11 @@ class TestRead:
                 {
                     "name": "docs",
                     "config": {"params": {"vectors": {"size": 768, "distance": "Cosine"}}},
-                    "storage_mode": "compact",
+                    "storage_mode": "balanced",
                 },
             ),
         )
-        assert client.get_collection("docs").storage_mode is StorageMode.COMPACT
+        assert client.get_collection("docs").storage_mode is StorageMode.BALANCED
 
     def test_get_collections_reads_each_collections_mode(self, client):
         def row(name, mode):
@@ -244,7 +241,7 @@ class TestUpdate:
 
     def test_an_unknown_mode_raises_before_any_request(self, client):
         request = queue(client)
-        with pytest.raises(ValueError, match="exact, balanced, fast, compact"):
+        with pytest.raises(ValueError, match="exact, balanced, fast"):
             client.update_collection("docs", storage_mode="turbo")
         assert request.call_count == 0
 
@@ -334,13 +331,15 @@ class TestFakeStore:
             fake.create_collection("c", CONFIG, storage_mode="turbo")
         assert exc.value.status_code == 400
 
-    def test_compact_below_the_floor_is_a_422(self):
+    def test_a_mode_outside_the_plan_is_a_403_on_create_and_on_update(self):
         fake = FakeVectorsClient()
-        small = VectorConfig(size=384, distance=DistanceMetric.COSINE)
-        with pytest.raises(ValidationError) as exc:
-            fake.create_collection("c", small, storage_mode="compact")
-        assert exc.value.error_code == "STORAGE_MODE_UNSUITABLE"
-        fake.create_collection("ok", CONFIG, storage_mode="compact")
+        fake.plan_modes = ["exact", "balanced"]
+        with pytest.raises(StorageModeNotInPlanError) as exc:
+            fake.create_collection("c", CONFIG, storage_mode="fast")
+        assert exc.value.error_code == "STORAGE_MODE_NOT_IN_PLAN"
+        fake.create_collection("ok", CONFIG, storage_mode="balanced")
+        with pytest.raises(StorageModeNotInPlanError):
+            fake.update_collection("ok", storage_mode="fast")
 
     def test_the_cooldown_blocks_a_second_change_until_it_has_passed(self):
         fake = FakeVectorsClient()

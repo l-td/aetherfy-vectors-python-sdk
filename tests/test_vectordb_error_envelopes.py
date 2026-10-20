@@ -11,8 +11,10 @@ import json
 from pathlib import Path
 
 from aetherfy_vectors.exceptions import (
+    AuthenticationError,
     ConflictError,
     RateLimitExceededError,
+    StorageModeNotInPlanError,
     ValidationError,
 )
 from aetherfy_vectors.retry_policy import ONCE, REPEATABLE, should_retry_class
@@ -30,8 +32,8 @@ def test_the_fixture_carries_its_provenance_and_every_case():
             "_provenance",
             "limit_reached_429",
             "mode_400",
+            "not_in_plan_403",
             "too_soon_409",
-            "unsuitable_422",
             "vectors_400",
         ]
     )
@@ -49,16 +51,22 @@ def test_400_with_field_inside_details():
     assert isinstance(error, ValidationError)
     assert error.error_code == "VALIDATION_ERROR"
     assert error.details["field"] == "storage_mode"
-    assert error.details["accepted"] == ["exact", "balanced", "fast", "compact"]
+    assert error.details["accepted"] == ["exact", "balanced", "fast"]
 
 
-def test_422_unsuitable_is_a_validation_error_with_its_code_and_extras():
-    error = parse_error_response(ENVELOPES["unsuitable_422"], 422)
-    assert isinstance(error, ValidationError)
-    assert error.status_code == 422
-    assert error.error_code == "STORAGE_MODE_UNSUITABLE"
-    assert error.details["min_vector_size"] == 512
-    assert error.details["suggested_mode"] == "balanced"
+def test_403_not_in_plan_is_its_own_class_with_typed_fields_and_is_never_retried():
+    error = parse_error_response(ENVELOPES["not_in_plan_403"], 403)
+    assert isinstance(error, StorageModeNotInPlanError)
+    assert not isinstance(error, AuthenticationError)
+    assert error.status_code == 403
+    assert error.error_code == "STORAGE_MODE_NOT_IN_PLAN"
+    assert error.storage_mode == "fast"
+    assert error.plan == "starter"
+    assert error.required_plan == "performance"
+    assert error.allowed_modes == ["exact", "balanced"]
+    assert error.details["field"] == "storage_mode"
+    assert not should_retry_class(REPEATABLE, error)
+    assert not should_retry_class(ONCE, error)
 
 
 def test_409_too_soon_is_a_conflict_error_carrying_the_wait():

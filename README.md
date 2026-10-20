@@ -765,14 +765,13 @@ Schema violations raise `SchemaValidationError` (with a list of per-field errors
 ## 🎚️ Storage modes
 
 A collection's **storage mode** is a preset for how its vectors are stored
-and searched. You pick one of four names; the service applies the settings.
+and searched. You pick one of three names; the service applies the settings.
 
 | Mode | What it does |
 |---|---|
 | `exact` (the default) | Full-precision vectors in memory, and search reads them. The layout every collection had before modes existed. |
 | `balanced` | Searches a compact 8-bit copy of each vector and keeps the originals on disk to rescore the best candidates. Far less memory than `exact`. |
 | `fast` | The same compact copy, with the originals kept in memory too. Uses **more** memory than `exact`, not less. |
-| `compact` | A 2-bit copy with the originals on disk: the smallest footprint and the lossiest mode. Needs vectors of at least 512 dimensions. |
 
 ```python
 from aetherfy_vectors import StorageMode
@@ -792,8 +791,8 @@ client.update_collection("docs", storage_mode="fast")
 - Quantized modes lose some recall. Searching with oversampling and rescoring
   recovers most of it:
   `client.search("docs", query, limit=10, search_params={"quantization": {"rescore": True, "oversampling": 2.0}})`.
-  `compact` loses the most, and how much depends on the embedding model: test
-  it on your own data before you rely on it.
+  How much is lost depends on the embedding model: test it on your own data
+  before you rely on it.
 - A collection can change mode once every 15 minutes. A change inside that
   window raises `ConflictError` with `error_code` `STORAGE_MODE_CHANGE_TOO_SOON`;
   the seconds left are `e.details["retry_after_seconds"]`. It is not
@@ -804,14 +803,17 @@ client.update_collection("docs", storage_mode="fast")
   `RateLimitExceededError` with `error_code`
   `STORAGE_MODE_CHANGE_LIMIT_REACHED`; `e.details` carries `limit`, `period`,
   `resets_at` and `retry_after_seconds`. It is not retried for you either.
-- `compact` on a collection of fewer than 512 dimensions raises
-  `ValidationError` with `error_code` `STORAGE_MODE_UNSUITABLE`.
 - Re-creating a collection that exists never changes its mode, and the returned
   `Collection` shows the mode it has, not the one you asked for.
 - `update_collection(name, description=...)` changes the description too;
   `description=None` clears it. Pass at least one of the two.
-- Every mode is available on every plan. Storage is metered the same way in
-  every mode.
+- `exact` and `balanced` are available on every plan; `fast` on the
+  Performance plan and above. Asking for a mode your plan does not have raises
+  `StorageModeNotInPlanError` (`error_code` `STORAGE_MODE_NOT_IN_PLAN`), with
+  `storage_mode`, `plan`, `required_plan` and `allowed_modes` on it. It is not
+  retried. If your plan changes to one without a mode, your collections in that
+  mode are switched to `exact`; they keep working, and the switch does not use
+  your changes per period or start the 15-minute wait.
 
 ## 📊 Performance Comparison
 
@@ -894,7 +896,7 @@ collection placement, pass `regions=` to `create_collection` (see below).
 # the endpoint to connect to.)
 collection = client.create_collection(
     collection_name, vectors_config, distance=None, description=None, regions=None,
-    storage_mode=None,  # "exact" | "balanced" | "fast" | "compact"; see Storage modes
+    storage_mode=None,  # "exact" | "balanced" | "fast"; see Storage modes
 )
 
 # Change the description or the storage mode; returns True
