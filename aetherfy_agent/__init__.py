@@ -40,6 +40,7 @@ from . import _http
 from .exceptions import (
     AGENT_RUN_CONCURRENCY_LIMIT_EXCEEDED,
     ConnectionAccessDenied,
+    ConnectionNameAmbiguous,
     ConnectionNeedsReauth,
     ConnectionNotFound,
     ConnectionTokenError,
@@ -104,6 +105,7 @@ __all__ = [
     "WaitTimeoutInvalid",
     "ConnectionTokenError",
     "ConnectionNotFound",
+    "ConnectionNameAmbiguous",
     "ConnectionNeedsReauth",
     "ConnectionUnavailable",
     "ConnectionAccessDenied",

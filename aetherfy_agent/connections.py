@@ -35,10 +35,12 @@ from urllib.parse import quote
 from . import _http
 from .exceptions import (
     CONNECTION_NEEDS_REAUTH,
+    CONNECTION_NAME_AMBIGUOUS,
     CONNECTION_NOT_FOUND,
     CONNECTION_PROVIDER_UNAVAILABLE,
     CONNECTION_REQUIRES_AGENT_KEY,
     ConnectionAccessDenied,
+    ConnectionNameAmbiguous,
     ConnectionNeedsReauth,
     ConnectionNotFound,
     ConnectionTokenError,
@@ -97,6 +99,8 @@ def connection(
         NOT get this for an unknown or unpermitted name (see the last entry);
         it is only the answer for a connection removed while the request was
         being checked.
+    :raises ConnectionNameAmbiguous: two workspaces this agent is granted both hold
+        this name and it has no own or home connection of it; ``.workspaces`` lists them.
     :raises ConnectionNeedsReauth: the provider refused the grant; reconnect it.
     :raises ConnectionUnavailable: the provider did not answer; retry shortly.
     :raises ConnectionAccessDenied: the key is not this agent's own.
@@ -165,6 +169,8 @@ def connection(
     # ConnectionTokenError reporting exactly what came back.
     if status == 404 and code == CONNECTION_NOT_FOUND:
         raise ConnectionNotFound(message, details=detail)
+    if status == 409 and code == CONNECTION_NAME_AMBIGUOUS:
+        raise ConnectionNameAmbiguous(message, details=detail)
     if status == 409 and code == CONNECTION_NEEDS_REAUTH:
         with _cache_lock:
             _cache.pop(name, None)

@@ -750,7 +750,12 @@ else:
 
 Only an agent machine's own `AETHERFY_API_KEY` is answered. A token is reused
 until it would have less than `min_valid_seconds` (and never less than a minute)
-left. The full contract is the Connections page of the Aetherfy agent docs.
+left. An agent uses its own connections and its workspace's (its own wins on a
+name clash). A name that is neither, unknown or someone else's, is refused with
+`ConnectionTokenError` (`403 AUTH_AGENT_KEY_OUT_OF_SCOPE`); a name two
+workspaces it is granted both hold is `ConnectionNameAmbiguous`, which lists
+them in `.workspaces`. The full contract is the Connections page of the Aetherfy
+agent docs.
 
 ## 🧩 Payload Schemas
 

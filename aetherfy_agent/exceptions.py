@@ -22,7 +22,7 @@ see. ``ResultTooLarge`` sits outside both — it is raised before anything leave
 the machine.
 """
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from aetherfy_vectors.exceptions import AetherfyVectorsException
 
@@ -341,6 +341,7 @@ CONNECTION_NOT_FOUND = "CONNECTION_NOT_FOUND"
 CONNECTION_NEEDS_REAUTH = "CONNECTION_NEEDS_REAUTH"
 CONNECTION_PROVIDER_UNAVAILABLE = "CONNECTION_PROVIDER_UNAVAILABLE"
 CONNECTION_REQUIRES_AGENT_KEY = "CONNECTION_REQUIRES_AGENT_KEY"
+CONNECTION_NAME_AMBIGUOUS = "CONNECTION_NAME_AMBIGUOUS"
 
 
 class ConnectionTokenError(AgentError):
@@ -385,6 +386,30 @@ class ConnectionNotFound(ConnectionTokenError):
         super().__init__(
             message, status_code=404, error_code=CONNECTION_NOT_FOUND, details=details
         )
+
+
+class ConnectionNameAmbiguous(ConnectionTokenError):
+    """
+    Raised on ``409 CONNECTION_NAME_AMBIGUOUS`` — two or more workspaces this
+    agent is granted (at a level that lets it use their connections) hold a
+    connection of this name, and the agent has neither an own nor a home
+    workspace connection of it to take precedence. Aetherfy never picks one:
+    :attr:`workspaces` lists them. Connect the name on the agent itself, or
+    rename one of them, on the dashboard.
+    """
+
+    def __init__(self, message: str, *, details: Optional[Dict[str, Any]] = None):
+        super().__init__(
+            message,
+            status_code=409,
+            error_code=CONNECTION_NAME_AMBIGUOUS,
+            details=details,
+        )
+
+    @property
+    def workspaces(self) -> List[str]:
+        """The names of the workspaces that tie, sorted."""
+        return [str(w) for w in (self.details or {}).get("workspaces", [])]
 
 
 class ConnectionNeedsReauth(ConnectionTokenError):

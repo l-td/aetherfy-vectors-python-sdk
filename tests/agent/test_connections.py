@@ -18,6 +18,7 @@ import aetherfy_agent
 from aetherfy_agent import connection
 from aetherfy_agent.exceptions import (
     ConnectionAccessDenied,
+    ConnectionNameAmbiguous,
     ConnectionNeedsReauth,
     ConnectionNotFound,
     ConnectionTokenError,
@@ -149,6 +150,7 @@ def test_a_never_expiring_token_is_rechecked_after_a_while(transport, monkeypatc
     "status,code,exc,retryable",
     [
         (404, "CONNECTION_NOT_FOUND", ConnectionNotFound, False),
+        (409, "CONNECTION_NAME_AMBIGUOUS", ConnectionNameAmbiguous, False),
         (409, "CONNECTION_NEEDS_REAUTH", ConnectionNeedsReauth, False),
         (502, "CONNECTION_PROVIDER_UNAVAILABLE", ConnectionUnavailable, True),
         (403, "CONNECTION_REQUIRES_AGENT_KEY", ConnectionAccessDenied, False),
@@ -189,6 +191,26 @@ def test_an_unknown_or_unpermitted_name_is_the_generic_error_with_the_403(transp
     assert raised.value.status_code == 403
     assert raised.value.error_code == "AUTH_AGENT_KEY_OUT_OF_SCOPE"
     assert not isinstance(raised.value, ConnectionNotFound)
+
+
+def test_an_ambiguous_name_lists_the_workspaces_that_tie(transport):
+    transport.replies = [
+        (
+            409,
+            {
+                "detail": {
+                    "code": "CONNECTION_NAME_AMBIGUOUS",
+                    "message": "in more than one workspace",
+                    "workspaces": ["alpha", "bravo"],
+                }
+            },
+        )
+    ]
+    with pytest.raises(ConnectionNameAmbiguous) as raised:
+        connection("dup")
+    assert raised.value.workspaces == ["alpha", "bravo"]
+    # A needs_reauth 409 is a different thing: the code, not the status, picks the type.
+    assert not isinstance(raised.value, ConnectionNeedsReauth)
 
 
 def test_an_unrecognised_pairing_is_reported_as_it_came(transport):

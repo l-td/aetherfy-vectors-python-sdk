@@ -173,6 +173,10 @@ described here.
   `required_scope` `connections:token`, and arrives as the generic
   `ConnectionTokenError`; `ConnectionNotFound` is only a connection removed
   mid-request.
+  A name that two workspaces the agent is granted (at a level that lets it use
+  their connections) both hold, with no own or home connection of it, is
+  `ConnectionNameAmbiguous` (`409 CONNECTION_NAME_AMBIGUOUS`); `.workspaces`
+  lists the tie.
 
 ### Changed
 - `PartialUpsertError`'s message no longer counts the points of a failed chunk
