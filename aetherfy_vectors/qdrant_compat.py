@@ -114,7 +114,7 @@ _SHARDING = "sharding is managed by the service and cannot be configured"
 # update_collection: the same fixed settings, changed after the fact.
 _UPDATE_FIXED = (
     "the service fixes every storage, index and optimizer setting; "
-    "choose a layout with update_collection(performance_mode=...)"
+    "choose a layout with update_collection(storage_mode=...)"
 )
 
 
@@ -146,8 +146,7 @@ QDRANT_COMPAT: Dict[str, Dict[str, QdrantArgRule]] = {
         "optimizers_config": _refuse(_NOT_APPLIED),
         "wal_config": _refuse(_NOT_APPLIED),
         "quantization_config": _refuse(
-            _NOT_APPLIED
-            + "; choose a layout with create_collection(performance_mode=...)"
+            _NOT_APPLIED + "; choose a layout with create_collection(storage_mode=...)"
         ),
         "strict_mode_config": _refuse(_NOT_APPLIED),
         "init_from": _refuse(

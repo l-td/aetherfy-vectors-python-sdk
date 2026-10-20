@@ -38,7 +38,7 @@ from .models import (
     Collection,
     UsageStats,
 )
-from .performance_modes import PerformanceMode
+from .storage_modes import StorageMode
 from .schema import (
     Schema,
     FieldDefinition,
@@ -72,7 +72,7 @@ __all__ = [
     "Point",
     "Collection",
     "UsageStats",
-    "PerformanceMode",
+    "StorageMode",
     "Schema",
     "FieldDefinition",
     "AnalysisResult",

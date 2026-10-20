@@ -762,9 +762,9 @@ print(analysis.suggested_schema)   # a Schema you can set_schema() directly
 
 Schema violations raise `SchemaValidationError` (with a list of per-field errors). If the server reports a stale schema (`412 Precondition Failed`), the SDK auto-refreshes the cache and retries.
 
-## 🎚️ Performance modes
+## 🎚️ Storage modes
 
-A collection's **performance mode** is a preset for how its vectors are stored
+A collection's **storage mode** is a preset for how its vectors are stored
 and searched. You pick one of four names; the service applies the settings.
 
 | Mode | What it does |
@@ -775,18 +775,18 @@ and searched. You pick one of four names; the service applies the settings.
 | `compact` | A 2-bit copy with the originals on disk: the smallest footprint and the lossiest mode. Needs vectors of at least 512 dimensions. |
 
 ```python
-from aetherfy_vectors import PerformanceMode
+from aetherfy_vectors import StorageMode
 
 collection = client.create_collection(
     "docs",
     {"size": 1536, "distance": "Cosine"},
-    performance_mode=PerformanceMode.BALANCED,  # or the string "balanced"
+    storage_mode=StorageMode.BALANCED,  # or the string "balanced"
 )
-print(collection.performance_mode)  # PerformanceMode.BALANCED
+print(collection.storage_mode)  # StorageMode.BALANCED
 
 # Change it later. The collection stays usable while its storage is rewritten
 # in the background (its status reads "yellow" until that finishes).
-client.update_collection("docs", performance_mode="fast")
+client.update_collection("docs", storage_mode="fast")
 ```
 
 - Quantized modes lose some recall. Searching with oversampling and rescoring
@@ -795,12 +795,17 @@ client.update_collection("docs", performance_mode="fast")
   `compact` loses the most, and how much depends on the embedding model: test
   it on your own data before you rely on it.
 - A collection can change mode once every 15 minutes. A change inside that
-  window raises `ConflictError` with `error_code` `PERFORMANCE_MODE_CHANGE_TOO_SOON`;
+  window raises `ConflictError` with `error_code` `STORAGE_MODE_CHANGE_TOO_SOON`;
   the seconds left are `e.details["retry_after_seconds"]`. It is not
   retried for you, because waiting inside the call cannot help. Asking for the
   mode a collection already has does nothing and does not start the wait.
+- Your plan also limits the storage-mode changes your whole account can make per
+  period (a day, week or month, UTC). Past it, `update_collection` raises
+  `RateLimitExceededError` with `error_code`
+  `STORAGE_MODE_CHANGE_LIMIT_REACHED`; `e.details` carries `limit`, `period`,
+  `resets_at` and `retry_after_seconds`. It is not retried for you either.
 - `compact` on a collection of fewer than 512 dimensions raises
-  `ValidationError` with `error_code` `PERFORMANCE_MODE_UNSUITABLE`.
+  `ValidationError` with `error_code` `STORAGE_MODE_UNSUITABLE`.
 - Re-creating a collection that exists never changes its mode, and the returned
   `Collection` shows the mode it has, not the one you asked for.
 - `update_collection(name, description=...)` changes the description too;
@@ -889,11 +894,11 @@ collection placement, pass `regions=` to `create_collection` (see below).
 # the endpoint to connect to.)
 collection = client.create_collection(
     collection_name, vectors_config, distance=None, description=None, regions=None,
-    performance_mode=None,  # "exact" | "balanced" | "fast" | "compact"; see Performance modes
+    storage_mode=None,  # "exact" | "balanced" | "fast" | "compact"; see Storage modes
 )
 
-# Change the description or the performance mode; returns True
-client.update_collection(name, description="notes", performance_mode="balanced")
+# Change the description or the storage mode; returns True
+client.update_collection(name, description="notes", storage_mode="balanced")
 
 # List collections
 collections = client.get_collections()
@@ -1151,8 +1156,8 @@ by one:
 | `create_collection` | `sparse_vectors_config` | refused unless `None` | Only dense vectors are supported |
 | `create_collection` | `shard_number`, `sharding_method` | refused unless `None` | Sharding is managed by the service |
 | `create_collection` | `replication_factor`, `write_consistency_factor` | refused unless `None` | Replication across regions is managed by the service (`regions=`) |
-| `create_collection` | `on_disk_payload`, `hnsw_config`, `optimizers_config`, `wal_config`, `quantization_config`, `strict_mode_config` | refused unless `None` | Storage and index settings are fixed by the service and would not be applied; choose a layout with `performance_mode=` |
-| `update_collection` | `optimizers_config`, `collection_params`, `vectors_config`, `hnsw_config`, `quantization_config`, `sparse_vectors_config`, `strict_mode_config` | refused unless `None` | The service fixes every storage, index and optimizer setting; change a layout with `performance_mode=` |
+| `create_collection` | `on_disk_payload`, `hnsw_config`, `optimizers_config`, `wal_config`, `quantization_config`, `strict_mode_config` | refused unless `None` | Storage and index settings are fixed by the service and would not be applied; choose a layout with `storage_mode=` |
+| `update_collection` | `optimizers_config`, `collection_params`, `vectors_config`, `hnsw_config`, `quantization_config`, `sparse_vectors_config`, `strict_mode_config` | refused unless `None` | The service fixes every storage, index and optimizer setting; change a layout with `storage_mode=` |
 | `create_collection` | `init_from` | refused unless `None` | Creating a collection from another one is not supported |
 | `close` | `grpc_grace` | accepted, no effect | There is no gRPC channel to wait on |
 | `create_collection`, `update_collection`, `delete_collection`, `retrieve`, `scroll`, `search`, `count` | `timeout` | honoured | A deadline for the whole call, retries and backoff included, as in qdrant-client. The constructor's `timeout` is different: it bounds each attempt, and writes are retried up to 3 times |

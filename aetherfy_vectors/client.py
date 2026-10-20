@@ -36,10 +36,10 @@ from .exceptions import (
     SchemaNotFoundError,
     PartialUpsertError,
 )
-from .performance_modes import (
-    PerformanceMode,
-    coerce_performance_mode,
-    parse_performance_mode,
+from .storage_modes import (
+    StorageMode,
+    coerce_storage_mode,
+    parse_storage_mode,
 )
 from .qdrant_compat import check_qdrant_kwargs
 from .retry_policy import OPERATIONS
@@ -728,7 +728,7 @@ class AetherfyVectorsClient:
         distance: Optional[DistanceMetric] = None,
         description: Optional[str] = None,
         regions: Optional[List[str]] = None,
-        performance_mode: Optional[Union[PerformanceMode, str]] = None,
+        storage_mode: Optional[Union[StorageMode, str]] = None,
         timeout: Optional[float] = None,
         **kwargs,
     ) -> "Collection":
@@ -748,15 +748,15 @@ class AetherfyVectorsClient:
                 server (422). Subset/empty validation is server-side. Distinct
                 from the client constructor's ``api_region``, which selects the
                 endpoint to connect to rather than where the collection lives.
-            performance_mode: How the collection's vectors are stored and
-                searched: a ``PerformanceMode`` or its name (``"exact"``,
+            storage_mode: How the collection's vectors are stored and
+                searched: a ``StorageMode`` or its name (``"exact"``,
                 ``"balanced"``, ``"fast"``, ``"compact"``). Omit for
                 ``exact``, the layout every collection had before modes
                 existed. ``compact`` needs vectors of at least 512 dimensions
                 (ValidationError otherwise). See
-                ``aetherfy_vectors.performance_modes`` for what each costs.
+                ``aetherfy_vectors.storage_modes`` for what each costs.
                 Re-creating a collection that exists never changes its mode;
-                use ``update_collection(performance_mode=...)``.
+                use ``update_collection(storage_mode=...)``.
             timeout: Deadline in seconds for this whole call, retries and
                 backoff included, like qdrant-client's ``timeout``. Raises
                 RequestTimeoutError once it passes. None keeps the client's
@@ -765,26 +765,22 @@ class AetherfyVectorsClient:
                 against ``aetherfy_vectors.qdrant_compat``. None of its
                 storage, index or replication settings can be applied, so each
                 raises TypeError unless passed as None; any other name raises
-                TypeError too. ``performance_mode`` is the supported way to
+                TypeError too. ``storage_mode`` is the supported way to
                 choose a storage layout.
 
         Returns:
             The created Collection, including its resolved ``regions`` list
-            and its ``performance_mode``.
+            and its ``storage_mode``.
 
         Raises:
-            ValueError: If ``performance_mode`` is not one of the four modes.
+            ValueError: If ``storage_mode`` is not one of the four modes.
             ValidationError: If parameters are invalid.
             TypeError: For an unknown or unsupported keyword argument.
             AetherfyVectorsException: If creation fails.
         """
         check_qdrant_kwargs("create_collection", kwargs)
         validate_collection_name(collection_name)
-        mode = (
-            coerce_performance_mode(performance_mode)
-            if performance_mode is not None
-            else None
-        )
+        mode = coerce_storage_mode(storage_mode) if storage_mode is not None else None
 
         # Handle different input formats for compatibility
         if isinstance(vectors_config, dict):
@@ -836,7 +832,7 @@ class AetherfyVectorsClient:
         # Same rule: omitted means the server default (exact), so a caller who
         # never names a mode sends the body this SDK always sent.
         if mode is not None:
-            data["performance_mode"] = mode.value
+            data["storage_mode"] = mode.value
 
         response = self._make_request(
             "POST",
@@ -877,7 +873,7 @@ class AetherfyVectorsClient:
         # an idempotent re-create), so the caller sees what the collection
         # has, not what they asked for. None from a server that omits it.
         resolved_mode = (
-            parse_performance_mode(response.get("performance_mode"))
+            parse_storage_mode(response.get("storage_mode"))
             if isinstance(response, dict)
             else None
         )
@@ -886,7 +882,7 @@ class AetherfyVectorsClient:
             config=config,
             description=description,
             regions=resolved_regions,
-            performance_mode=resolved_mode,
+            storage_mode=resolved_mode,
         )
 
     def update_collection(
@@ -894,18 +890,18 @@ class AetherfyVectorsClient:
         collection_name: str,
         *,
         description: Any = _UNSET,
-        performance_mode: Optional[Union[PerformanceMode, str]] = None,
+        storage_mode: Optional[Union[StorageMode, str]] = None,
         timeout: Optional[float] = None,
         **kwargs,
     ) -> bool:
-        """Change a collection's description or performance mode.
+        """Change a collection's description or storage mode.
 
         Args:
             collection_name: Name of the collection.
             description: The new description (max 500 characters); ``None``
                 clears it. Omit to leave it alone.
-            performance_mode: The mode to move the collection to: a
-                ``PerformanceMode`` or its name. Omit to leave it alone. The
+            storage_mode: The mode to move the collection to: a
+                ``StorageMode`` or its name. Omit to leave it alone. The
                 collection stays usable while the engine rewrites its storage
                 in the background (its status reads ``yellow`` until that
                 finishes), and a collection can change mode once every 15
@@ -916,20 +912,20 @@ class AetherfyVectorsClient:
             **kwargs: qdrant-client ``update_collection`` arguments, checked
                 against ``aetherfy_vectors.qdrant_compat``. The service fixes
                 every storage, index and optimizer setting, so each raises
-                TypeError unless passed as None. ``performance_mode`` is the
+                TypeError unless passed as None. ``storage_mode`` is the
                 supported way to change a storage layout.
 
         Returns:
             True when the change was applied.
 
         Raises:
-            ValueError: If neither argument is given, or ``performance_mode``
+            ValueError: If neither argument is given, or ``storage_mode``
                 is not one of the four modes.
             ValidationError: If a value is invalid, or ``compact`` is asked
                 for on a collection of fewer than 512 dimensions
-                (``error_code`` ``PERFORMANCE_MODE_UNSUITABLE``).
+                (``error_code`` ``STORAGE_MODE_UNSUITABLE``).
             ConflictError: If the mode changed less than 15 minutes ago
-                (``error_code`` ``PERFORMANCE_MODE_CHANGE_TOO_SOON``). The
+                (``error_code`` ``STORAGE_MODE_CHANGE_TOO_SOON``). The
                 seconds left are ``details["retry_after_seconds"]``.
                 It is not retried: waiting inside the call cannot help.
             CollectionNotFoundError: If the collection does not exist.
@@ -939,11 +935,11 @@ class AetherfyVectorsClient:
         data: Dict[str, Any] = {}
         if description is not _UNSET:
             data["description"] = description
-        if performance_mode is not None:
-            data["performance_mode"] = coerce_performance_mode(performance_mode).value
+        if storage_mode is not None:
+            data["storage_mode"] = coerce_storage_mode(storage_mode).value
         if not data:
             raise ValueError(
-                "update_collection() needs description= or performance_mode=: "
+                "update_collection() needs description= or storage_mode=: "
                 "there is nothing to change"
             )
         self._make_request(

@@ -19,12 +19,12 @@ would hide the defect instead of catching it.
 from typing import Any, Dict, List, Optional, Union
 
 from aetherfy_vectors.models import Collection, DistanceMetric, VectorConfig
-from aetherfy_vectors.performance_modes import PerformanceMode
+from aetherfy_vectors.storage_modes import StorageMode
 from aetherfy_vectors.utils import parse_error_response
 
-# vectordb's PERFORMANCE_MODE_COOLDOWN_SECONDS and COMPACT_MIN_DIMENSIONS
-# (backend/utils/performanceModes.js). Copied, not imported: the server is
-# another repo, and tests/test_performance_mode.py pins the behaviour.
+# vectordb's STORAGE_MODE_COOLDOWN_SECONDS and COMPACT_MIN_DIMENSIONS
+# (backend/utils/storageModes.js). Copied, not imported: the server is
+# another repo, and tests/test_storage_mode.py pins the behaviour.
 COOLDOWN_SECONDS = 900
 COMPACT_MIN_DIMENSIONS = 512
 
@@ -117,7 +117,7 @@ class FakeVectorsClient:
 
     def __init__(self, workspace: Optional[str] = "my-bot"):
         self.workspace = workspace
-        # A test advances this to cross the performance-mode cooldown.
+        # A test advances this to cross the storage-mode cooldown.
         self.now = 0.0
         self.collections: Dict[str, Dict[str, Any]] = {}
         self.indexes: List[tuple] = []
@@ -131,11 +131,11 @@ class FakeVectorsClient:
         self,
         name: str,
         config: VectorConfig,
-        performance_mode: Optional[Union[PerformanceMode, str]] = None,
+        storage_mode: Optional[Union[StorageMode, str]] = None,
         **kwargs,
     ):
         assert name not in self.collections, f"{name} already exists"
-        mode = self._valid_mode(performance_mode) or PerformanceMode.EXACT
+        mode = self._valid_mode(storage_mode) or StorageMode.EXACT
         self._check_suitable(mode, config.size)
         self.collections[name] = {
             "config": config,
@@ -143,33 +143,33 @@ class FakeVectorsClient:
             "mode": mode,
             "mode_changed_at": None,
         }
-        return Collection(name=name, config=config, performance_mode=mode)
+        return Collection(name=name, config=config, storage_mode=mode)
 
     # vectordb's answers, in the order it gives them: an unknown mode is a 400
     # before anything is read, compact below the floor a 422.
     @staticmethod
-    def _valid_mode(value) -> Optional[PerformanceMode]:
+    def _valid_mode(value) -> Optional[StorageMode]:
         if value is None:
             return None
         try:
-            return PerformanceMode(getattr(value, "value", value))
+            return StorageMode(getattr(value, "value", value))
         except ValueError:
             raise _wire_error(
                 400,
                 "VALIDATION_ERROR",
-                "performance_mode must be one of: exact, balanced, fast, compact",
-                field="performance_mode",
+                "storage_mode must be one of: exact, balanced, fast, compact",
+                field="storage_mode",
             )
 
     @staticmethod
-    def _check_suitable(mode: PerformanceMode, size: int) -> None:
-        if mode is PerformanceMode.COMPACT and size < COMPACT_MIN_DIMENSIONS:
+    def _check_suitable(mode: StorageMode, size: int) -> None:
+        if mode is StorageMode.COMPACT and size < COMPACT_MIN_DIMENSIONS:
             raise _wire_error(
                 422,
-                "PERFORMANCE_MODE_UNSUITABLE",
-                f"performance_mode 'compact' needs vectors of at least "
+                "STORAGE_MODE_UNSUITABLE",
+                f"storage_mode 'compact' needs vectors of at least "
                 f"{COMPACT_MIN_DIMENSIONS} dimensions; this collection's are {size}.",
-                field="performance_mode",
+                field="storage_mode",
                 suggested_mode="balanced",
             )
 
@@ -178,11 +178,11 @@ class FakeVectorsClient:
         name: str,
         *,
         description: Any = None,
-        performance_mode: Optional[Union[PerformanceMode, str]] = None,
+        storage_mode: Optional[Union[StorageMode, str]] = None,
         **kwargs,
     ) -> bool:
         col = self.collections[name]
-        mode = self._valid_mode(performance_mode)
+        mode = self._valid_mode(storage_mode)
         if mode is None:
             return True
         self._check_suitable(mode, col["config"].size)
@@ -192,9 +192,9 @@ class FakeVectorsClient:
         if changed is not None and self.now - changed < COOLDOWN_SECONDS:
             raise _wire_error(
                 409,
-                "PERFORMANCE_MODE_CHANGE_TOO_SOON",
-                "The performance mode was changed less than 15 minutes ago.",
-                field="performance_mode",
+                "STORAGE_MODE_CHANGE_TOO_SOON",
+                "The storage mode was changed less than 15 minutes ago.",
+                field="storage_mode",
                 retry_after_seconds=int(COOLDOWN_SECONDS - (self.now - changed)),
                 cooldown_seconds=COOLDOWN_SECONDS,
             )
@@ -212,7 +212,7 @@ class FakeVectorsClient:
             config=col["config"],
             points_count=len(col["points"]),
             status="green",
-            performance_mode=col["mode"],
+            storage_mode=col["mode"],
         )
 
     def get_collections(self, **kwargs) -> List[Collection]:
