@@ -152,7 +152,9 @@ class TestCreate:
                     "error": {
                         "code": "PERFORMANCE_MODE_UNSUITABLE",
                         "message": "performance_mode 'compact' needs vectors of at least 512 dimensions",
-                        "details": {"min_vector_size": 512, "suggested_mode": "balanced"},
+                        "field": "performance_mode",
+                        "min_vector_size": 512,
+                        "suggested_mode": "balanced",
                     }
                 },
             ),
@@ -165,7 +167,7 @@ class TestCreate:
             )
         assert exc.value.status_code == 422
         assert exc.value.error_code == "PERFORMANCE_MODE_UNSUITABLE"
-        assert exc.value.details["details"]["suggested_mode"] == "balanced"
+        assert exc.value.details["suggested_mode"] == "balanced"
 
     def test_the_engine_setting_the_mode_replaces_is_still_refused(self, client):
         request = queue(client)
@@ -255,7 +257,9 @@ class TestUpdate:
                     "error": {
                         "code": "PERFORMANCE_MODE_CHANGE_TOO_SOON",
                         "message": "It can change again in 7 minutes.",
-                        "details": {"retry_after_seconds": 437, "cooldown_seconds": 900},
+                        "field": "performance_mode",
+                        "retry_after_seconds": 437,
+                        "cooldown_seconds": 900,
                     }
                 },
             ),
@@ -265,7 +269,7 @@ class TestUpdate:
         assert request.call_count == 1
         assert exc.value.status_code == 409
         assert exc.value.error_code == "PERFORMANCE_MODE_CHANGE_TOO_SOON"
-        assert exc.value.details["details"]["retry_after_seconds"] == 437
+        assert exc.value.details["retry_after_seconds"] == 437
 
     def test_an_ambiguous_failure_is_retried_because_a_repeat_is_a_no_op(self, client):
         assert OPERATIONS["update_collection"] == REPEATABLE
@@ -346,7 +350,7 @@ class TestFakeStore:
         with pytest.raises(ConflictError) as exc:
             fake.update_collection("c", performance_mode="balanced")
         assert exc.value.error_code == "PERFORMANCE_MODE_CHANGE_TOO_SOON"
-        assert exc.value.details["details"]["retry_after_seconds"] == 800
+        assert exc.value.details["retry_after_seconds"] == 800
         assert fake.get_collection("c").performance_mode is PerformanceMode.FAST
         fake.now = 900
         fake.update_collection("c", performance_mode="balanced")

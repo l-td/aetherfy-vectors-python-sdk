@@ -930,7 +930,7 @@ class AetherfyVectorsClient:
                 (``error_code`` ``PERFORMANCE_MODE_UNSUITABLE``).
             ConflictError: If the mode changed less than 15 minutes ago
                 (``error_code`` ``PERFORMANCE_MODE_CHANGE_TOO_SOON``). The
-                seconds left are ``details["details"]["retry_after_seconds"]``.
+                seconds left are ``details["retry_after_seconds"]``.
                 It is not retried: waiting inside the call cannot help.
             CollectionNotFoundError: If the collection does not exist.
         """

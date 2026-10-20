@@ -1,5 +1,5 @@
 {
-  "_provenance": "Produced by vectordb (l-td/vectordb backend/): vectors_400 by utils/collectionValidation.js validateCollectionVectors({size:3,distance:\"Cosine\",on_disk:true}); mode_400 by validatePerformanceMode(\"turbo\"); unsuitable_422 by utils/performanceModes.js suitability(\"compact\",384); too_soon_409 is the literal body services/collectionPerformanceMode.js step 4 sends, with the example wait 437 s. Regenerate by running those, not by hand.",
+  "_provenance": "Produced by vectordb (l-td/vectordb backend/): vectors_400 by utils/collectionValidation.js validateCollectionVectors({size:3,distance:\"Cosine\",on_disk:true}); mode_400 by validatePerformanceMode(\"turbo\"); unsuitable_422 by utils/performanceModes.js suitability(\"compact\",384); too_soon_409 is the literal body services/collectionPerformanceMode.js step 4 sends, with the example wait 437 s. Every extra sits on the error object. Regenerate by running those, not by hand.",
   "vectors_400": {
     "error": {
       "code": "VALIDATION_ERROR",
@@ -11,39 +11,33 @@
     "error": {
       "code": "VALIDATION_ERROR",
       "message": "performance_mode must be one of exact, balanced, fast, compact; got \"turbo\".",
-      "details": {
-        "field": "performance_mode",
-        "accepted": [
-          "exact",
-          "balanced",
-          "fast",
-          "compact"
-        ]
-      }
+      "field": "performance_mode",
+      "accepted": [
+        "exact",
+        "balanced",
+        "fast",
+        "compact"
+      ]
     }
   },
   "unsuitable_422": {
     "error": {
       "code": "PERFORMANCE_MODE_UNSUITABLE",
       "message": "performance_mode 'compact' needs vectors of at least 512 dimensions; this collection's are 384. Below that, binary quantization loses too much recall. Use 'balanced' for a smaller memory footprint instead.",
-      "details": {
-        "field": "performance_mode",
-        "performance_mode": "compact",
-        "vector_size": 384,
-        "min_vector_size": 512,
-        "suggested_mode": "balanced"
-      }
+      "field": "performance_mode",
+      "performance_mode": "compact",
+      "vector_size": 384,
+      "min_vector_size": 512,
+      "suggested_mode": "balanced"
     }
   },
   "too_soon_409": {
     "error": {
       "code": "PERFORMANCE_MODE_CHANGE_TOO_SOON",
       "message": "The performance mode of 'docs' was changed less than 15 minutes ago. It can change again in 8 minutes.",
-      "details": {
-        "field": "performance_mode",
-        "retry_after_seconds": 437,
-        "cooldown_seconds": 900
-      }
+      "field": "performance_mode",
+      "retry_after_seconds": 437,
+      "cooldown_seconds": 900
     }
   }
 }

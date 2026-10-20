@@ -31,10 +31,9 @@ COMPACT_MIN_DIMENSIONS = 512
 
 def _wire_error(status: int, code: str, message: str, **details: Any):
     """The exception the SDK raises for vectordb's authored envelope
-    ``{"error": {"code", "message", "details"}}``."""
-    error: Dict[str, Any] = {"code": code, "message": message}
-    if details:
-        error["details"] = details
+    ``{"error": {"code", "message", <extras>}}``: every extra sits on the error
+    object, as ``field`` and ``max`` do on its other validation errors."""
+    error: Dict[str, Any] = {"code": code, "message": message, **details}
     return parse_error_response({"error": error}, status)
 
 
