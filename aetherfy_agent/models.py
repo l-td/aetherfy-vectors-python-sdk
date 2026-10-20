@@ -91,7 +91,8 @@ class Run:
 @dataclass(frozen=True)
 class ConnectionToken:
     """
-    A fresh access token for one connection (Google, Slack, Notion).
+    A fresh access token for one connection (Google, Slack, Notion, Microsoft 365,
+    HubSpot, Atlassian).
 
     Send ``access_token`` to the provider's own API as
     ``Authorization: {token_type} {access_token}``. ``expires_at`` is ``None``
@@ -100,10 +101,31 @@ class ConnectionToken:
     asks again when this one runs low.
     """
 
+    id: str
     access_token: str = field(repr=False)
     token_type: str
     expires_at: Optional[datetime]
     provider: str
     name: str
     account_label: Optional[str]
+    scopes: Tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ConnectionInfo:
+    """
+    One connection this agent's key may ask a token for, as
+    :func:`aetherfy_agent.list_connections` lists it. ``id`` is what
+    :func:`aetherfy_agent.connection` takes; ``name`` is a label for people.
+    ``scope`` is ``"agent"`` (the agent's own) or ``"workspace"`` (its
+    workspace's, or a granted workspace's whose grant has the connections
+    switch on). No token material.
+    """
+
+    id: str
+    name: str
+    provider: str
+    scope: str
+    account_label: Optional[str]
+    status: str
     scopes: Tuple[str, ...]

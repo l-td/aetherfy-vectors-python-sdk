@@ -1,11 +1,13 @@
 """
-Connections: a fresh OAuth access token for Google, Slack or Notion, by name.
+Connections: a fresh OAuth access token for a connected provider (Google, Slack,
+Notion, Microsoft 365, HubSpot, Atlassian), by the connection's id.
 
 The platform runs the OAuth sign-in on the dashboard and keeps the grant; this
 agent never sees a client secret or a refresh token. It asks the control plane
 for an access token when it needs one:
 
-    POST {AETHERFY_API_URL}/connections/{name}/token   {"min_valid_seconds": N}
+    GET  {AETHERFY_API_URL}/connections/usable          the ids this agent may use
+    POST {AETHERFY_API_URL}/connections/{id}/token      {"min_valid_seconds": N}
     Authorization: Bearer {AETHERFY_API_KEY}
 
 and gets one valid for at least N seconds (never less than a minute), refreshed
@@ -17,9 +19,9 @@ ONLY THIS MACHINE'S OWN KEY WORKS. The route answers the deployment-bound
 an account key (:class:`~.exceptions.ConnectionAccessDenied`). So this call
 works on an agent and nowhere else.
 
-A PER-NAME IN-PROCESS CACHE. A token is reused until it would have less than
+A PER-ID IN-PROCESS CACHE. A token is reused until it would have less than
 ``max(min_valid_seconds, 60)`` seconds left — the same margin the control plane
-itself applies — so a loop calling ``connection("google")`` per item costs one
+itself applies — so a loop calling ``connection(google.id)`` per item costs one
 request per token lifetime, not one per item. The cache is per process: a
 fan-out's worker processes each keep their own. A token with no expiry
 (Notion's) is asked for again after ``_NO_EXPIRY_RECHECK_SECONDS``, so a
@@ -27,26 +29,26 @@ disconnect or a reconnect on the dashboard reaches a long-running agent.
 """
 
 import threading
+import uuid
 from datetime import datetime, timedelta, timezone
 from time import monotonic
-from typing import Dict, Optional, Tuple
-from urllib.parse import quote
+from typing import Any, Dict, List, Optional, Tuple
 
 from . import _http
 from .exceptions import (
+    CONNECTION_GRANT_NOT_ENABLED,
     CONNECTION_NEEDS_REAUTH,
-    CONNECTION_NAME_AMBIGUOUS,
     CONNECTION_NOT_FOUND,
     CONNECTION_PROVIDER_UNAVAILABLE,
     CONNECTION_REQUIRES_AGENT_KEY,
     ConnectionAccessDenied,
-    ConnectionNameAmbiguous,
+    ConnectionGrantNotEnabled,
     ConnectionNeedsReauth,
     ConnectionNotFound,
     ConnectionTokenError,
     ConnectionUnavailable,
 )
-from .models import ConnectionToken
+from .models import ConnectionInfo, ConnectionToken
 
 #: The bound the control plane enforces on ``min_valid_seconds``. Checked here
 #: too, so a bad argument costs no round trip.
@@ -61,7 +63,7 @@ _REFRESH_FLOOR_SECONDS = 60
 #: again. Without a bound it would outlive its own revocation.
 _NO_EXPIRY_RECHECK_SECONDS = 300
 
-#: name -> (token, monotonic() when it was fetched)
+#: connection id -> (token, monotonic() when it was fetched)
 _cache: Dict[str, Tuple[ConnectionToken, float]] = {}
 _cache_lock = threading.Lock()
 
@@ -83,33 +85,89 @@ def _parse_expiry(value: Optional[str]) -> Optional[datetime]:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
+def list_connections() -> List[ConnectionInfo]:
+    """
+    The connections this agent's key may ask a token for: its own, its
+    workspace's, and those of a granted workspace whose grant has the connections
+    switch on. Each has an ``id`` to give :func:`connection`.
+
+    :raises NotRunningOnAgent: ``AETHERFY_API_URL`` or ``AETHERFY_API_KEY`` is unset.
+    :raises ConnectionAccessDenied: the key is not this agent's own.
+    :raises ConnectionTokenError: any other refusal — read ``error_code``.
+    :raises AgentTransportError: the request never reached the control plane.
+    """
+    from . import _require, _user_agent
+
+    api_url = _require("AETHERFY_API_URL", "the Aetherfy API the connections come from")
+    api_key = _require("AETHERFY_API_KEY", "the key the connections are listed for")
+    status, body = _http.request_json(
+        "GET",
+        "{0}/connections/usable".format(api_url.rstrip("/")),
+        api_key=api_key,
+        ua=_user_agent(),
+    )
+    if status == 200 and isinstance(body, list):
+        return [
+            ConnectionInfo(
+                id=str(item["id"]),
+                name=str(item.get("name")),
+                provider=str(item.get("provider")),
+                scope=str(item.get("scope")),
+                account_label=item.get("account_label"),
+                status=str(item.get("status")),
+                scopes=tuple(item.get("scopes") or ()),
+            )
+            for item in body
+            if isinstance(item, dict) and item.get("id")
+        ]
+    raise _refusal(status, body, "The connection list was refused with status {0}.".format(status))
+
+
+def _refusal(status: int, body: Any, fallback: str) -> ConnectionTokenError:
+    detail = body.get("detail") if isinstance(body, dict) else None
+    detail = detail if isinstance(detail, dict) else {}
+    message = detail.get("message") or fallback
+    code = detail.get("code")
+    # The status AND the code select a type; an unrecognised pairing arrives as
+    # ConnectionTokenError reporting exactly what came back.
+    if status == 404 and code == CONNECTION_NOT_FOUND:
+        return ConnectionNotFound(message, details=detail)
+    if status == 403 and code == CONNECTION_GRANT_NOT_ENABLED:
+        return ConnectionGrantNotEnabled(message, details=detail)
+    if status == 409 and code == CONNECTION_NEEDS_REAUTH:
+        return ConnectionNeedsReauth(message, details=detail)
+    if status == 502 and code == CONNECTION_PROVIDER_UNAVAILABLE:
+        return ConnectionUnavailable(message, details=detail)
+    if status == 403 and code == CONNECTION_REQUIRES_AGENT_KEY:
+        return ConnectionAccessDenied(message, details=detail)
+    return ConnectionTokenError(
+        message, status_code=status, error_code=code, details=detail
+    )
+
+
 def connection(
-    name: str, *, min_valid_seconds: int = MIN_VALID_SECONDS_DEFAULT
+    connection_id: str, *, min_valid_seconds: int = MIN_VALID_SECONDS_DEFAULT
 ) -> ConnectionToken:
     """
-    A fresh access token for the connection ``name``.
+    A fresh access token for the connection ``connection_id`` (an id from
+    :func:`list_connections`).
 
-    The agent sees its own connections and its workspace's; on a name clash its
-    own wins. The token stays valid for at least ``min_valid_seconds`` (0 to
-    3000, default 300), and never less than a minute.
+    The agent may use its own connections, its workspace's, and those of a
+    workspace it is granted whose grant has the connections switch on. The token
+    stays valid for at least ``min_valid_seconds`` (0 to 3000, default 300), and
+    never less than a minute.
 
-    :raises ValueError: ``min_valid_seconds`` is out of range.
+    :raises ValueError: ``connection_id`` is not a UUID, or ``min_valid_seconds``
+        is out of range.
     :raises NotRunningOnAgent: ``AETHERFY_API_URL`` or ``AETHERFY_API_KEY`` is unset.
-    :raises ConnectionNotFound: ``404 CONNECTION_NOT_FOUND``. An agent's key does
-        NOT get this for an unknown or unpermitted name (see the last entry);
-        it is only the answer for a connection removed while the request was
-        being checked.
-    :raises ConnectionNameAmbiguous: two workspaces this agent is granted both hold
-        this name and it has no own or home connection of it; ``.workspaces`` lists them.
+    :raises ConnectionNotFound: ``404 CONNECTION_NOT_FOUND``: no such connection, or
+        not one this agent may use (the control plane does not say which).
+    :raises ConnectionGrantNotEnabled: ``403 CONNECTION_GRANT_NOT_ENABLED``: the
+        connection is in a granted workspace whose grant does not cover connections.
     :raises ConnectionNeedsReauth: the provider refused the grant; reconnect it.
     :raises ConnectionUnavailable: the provider did not answer; retry shortly.
     :raises ConnectionAccessDenied: the key is not this agent's own.
-    :raises ConnectionTokenError: any other refusal — read ``error_code``. A name
-        that is not one of this agent's own connections or its workspace's
-        (unknown, or someone else's) is ``403 AUTH_AGENT_KEY_OUT_OF_SCOPE``
-        (``details["required_scope"]`` is ``connections:token``) and arrives as
-        this class, not a subclass: the control plane does not say which names
-        exist.
+    :raises ConnectionTokenError: any other refusal — read ``error_code``.
     :raises AgentTransportError: the request never reached the control plane.
     """
     if isinstance(min_valid_seconds, bool) or not isinstance(min_valid_seconds, int):
@@ -120,9 +178,17 @@ def connection(
                 MIN_VALID_SECONDS_MAX, min_valid_seconds
             )
         )
+    try:
+        connection_id = str(uuid.UUID(str(connection_id)))
+    except ValueError:
+        raise ValueError(
+            "connection_id must be a connection id (see aetherfy_agent.list_connections()), got {0!r}".format(
+                connection_id
+            )
+        )
 
     with _cache_lock:
-        cached = _cache.get(name)
+        cached = _cache.get(connection_id)
     if cached is not None and _fresh_enough(*cached, min_valid_seconds):
         return cached[0]
 
@@ -136,7 +202,7 @@ def connection(
     api_key = _require("AETHERFY_API_KEY", "the key a connection token is issued to")
     status, body = _http.request_json(
         "POST",
-        "{0}/connections/{1}/token".format(api_url.rstrip("/"), quote(name, safe="")),
+        "{0}/connections/{1}/token".format(api_url.rstrip("/"), connection_id),
         api_key=api_key,
         ua=_user_agent(),
         body={"min_valid_seconds": min_valid_seconds},
@@ -144,41 +210,27 @@ def connection(
 
     if status == 200 and isinstance(body, dict) and body.get("access_token"):
         token = ConnectionToken(
+            id=str(body.get("id") or connection_id),
             access_token=str(body["access_token"]),
             token_type=str(body.get("token_type") or "Bearer"),
             expires_at=_parse_expiry(body.get("expires_at")),
             provider=str(body.get("provider")),
-            name=str(body.get("name") or name),
+            name=str(body.get("name") or ""),
             account_label=body.get("account_label"),
             scopes=tuple(body.get("scopes") or ()),
         )
         with _cache_lock:
-            _cache[name] = (token, monotonic())
+            _cache[connection_id] = (token, monotonic())
         return token
 
-    detail = body.get("detail") if isinstance(body, dict) else None
-    detail = detail if isinstance(detail, dict) else {}
-    message = detail.get(
-        "message"
-    ) or "The token for connection '{0}' was refused with status {1}.".format(
-        name, status
+    error = _refusal(
+        status,
+        body,
+        "The token for connection '{0}' was refused with status {1}.".format(
+            connection_id, status
+        ),
     )
-    code = detail.get("code")
-
-    # The status AND the code select a type; an unrecognised pairing arrives as
-    # ConnectionTokenError reporting exactly what came back.
-    if status == 404 and code == CONNECTION_NOT_FOUND:
-        raise ConnectionNotFound(message, details=detail)
-    if status == 409 and code == CONNECTION_NAME_AMBIGUOUS:
-        raise ConnectionNameAmbiguous(message, details=detail)
-    if status == 409 and code == CONNECTION_NEEDS_REAUTH:
+    if isinstance(error, (ConnectionNeedsReauth, ConnectionNotFound)):
         with _cache_lock:
-            _cache.pop(name, None)
-        raise ConnectionNeedsReauth(message, details=detail)
-    if status == 502 and code == CONNECTION_PROVIDER_UNAVAILABLE:
-        raise ConnectionUnavailable(message, details=detail)
-    if status == 403 and code == CONNECTION_REQUIRES_AGENT_KEY:
-        raise ConnectionAccessDenied(message, details=detail)
-    raise ConnectionTokenError(
-        message, status_code=status, error_code=code, details=detail
-    )
+            _cache.pop(connection_id, None)
+    raise error
