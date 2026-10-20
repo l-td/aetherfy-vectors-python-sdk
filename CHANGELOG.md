@@ -158,6 +158,17 @@ described here.
   retry was skipped on a workspaced client: the refreshed schema was looked up
   by the bare name and not found.
 
+### Added
+- **`aetherfy_agent.token(audience, scopes=None)`** exchanges the agent's own
+  `AETHERFY_API_KEY` for a short-lived agent token (`POST /agent-tokens`) and
+  returns an `AgentToken` (`token`, `expires_at`). The token names one audience,
+  carries a subset of the key's scopes, and stops working within fifteen
+  minutes or when the deployment ends. The only audience today is the control
+  plane, so a token is a narrower credential for it, not something to give a
+  third party. Cached per key, audience and scopes until a minute before
+  it expires. A refusal raises the new `TokenError`, carrying the platform's
+  `error_code`.
+
 ### Changed
 - `PartialUpsertError`'s message no longer counts the points of a failed chunk
   as failed: it reports them as of unknown outcome. A chunk that timed out or
