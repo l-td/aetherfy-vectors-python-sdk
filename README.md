@@ -727,9 +727,9 @@ is refused with `RunReadError` and `error_code` `AUTH_AGENT_KEY_OUT_OF_SCOPE`.
 Full contract, including the environment variables behind every call:
 [docs.aetherfy.com/agents/task-contract](https://docs.aetherfy.com/agents/task-contract).
 
-### Connections: Google, Slack and Notion tokens
+### Connections: OAuth access tokens
 
-Connect Google, Slack or Notion to an agent (or its workspace) once, on the
+Connect Google, Slack, Notion, Microsoft 365, HubSpot or Atlassian to an agent (or its workspace) once, on the
 Aetherfy dashboard. Agent code then asks for a fresh access token by the
 connection's name; Aetherfy runs the OAuth sign-in and the refreshes, and no
 refresh token reaches the agent.

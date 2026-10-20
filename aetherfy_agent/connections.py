@@ -1,5 +1,5 @@
 """
-Connections: a fresh OAuth access token for Google, Slack or Notion, by name.
+Connections: a fresh OAuth access token for a connected provider (Google, Slack, Notion, Microsoft 365, HubSpot, Atlassian), by name.
 
 The platform runs the OAuth sign-in on the dashboard and keeps the grant; this
 agent never sees a client secret or a refresh token. It asks the control plane

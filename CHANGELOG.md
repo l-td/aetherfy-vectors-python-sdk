@@ -160,7 +160,7 @@ described here.
 
 ### Added
 - **`aetherfy_agent.connection(name, *, min_valid_seconds=300)`** returns a
-  fresh OAuth access token (`ConnectionToken`) for a Google, Slack or Notion
+  fresh OAuth access token (`ConnectionToken`) for a Google, Slack, Notion, Microsoft 365, HubSpot or Atlassian
   connection made on the Aetherfy dashboard, from the control plane's
   `POST /connections/{name}/token`. Tokens are cached per name in the process
   until they would have less than `max(min_valid_seconds, 60)` seconds left;
