@@ -18,6 +18,7 @@ from aetherfy_vectors.models import (
     Collection,
 )
 from aetherfy_vectors.exceptions import (
+    AetherfyVectorsException,
     AuthenticationError,
     ValidationError,
     CollectionNotFoundError,
@@ -275,7 +276,8 @@ class TestCollectionManagement:
     def test_collection_exists_false(self, client, mock_requests, mock_error_response):
         """Test collection_exists returns False for non-existing collection."""
         mock_requests.request.return_value = mock_error_response(
-            message="Collection not found", status_code=404
+            message="Collection not found", status_code=404,
+            error_code="COLLECTION_NOT_FOUND"
         )
 
         result = client.collection_exists("nonexistent_collection")
@@ -316,26 +318,26 @@ class TestCollectionManagement:
         with pytest.raises(ServiceUnavailableError):
             client.collection_exists("any_collection")
 
-    def test_collection_exists_returns_false_on_non_dict_404_body(
+    def test_collection_exists_raises_on_a_404_that_names_no_collection(
         self, client, mock_requests
     ):
-        """Returning False on 404 must work even when the upstream body is
-        a bare JSON string (e.g. "Not Found") instead of a dict.
+        """Only COLLECTION_NOT_FOUND is a False. A 404 without it (here a bare
+        JSON string, e.g. from something in front of the API) is not proof the
+        collection is missing, so it is raised rather than read as empty.
 
-        This is the path that surfaced the parse_error_response crash in
-        e2e: the backend returns a non-dict body on 404, parse_error_response
-        previously crashed with AttributeError before collection_exists
-        ever saw an exception class to inspect.
+        The body still parses: parse_error_response once crashed with
+        AttributeError on a non-dict body.
         """
-        # Build a Response stand-in whose .json() returns a bare string.
         response = Mock()
         response.status_code = 404
         response.content = b'"Not Found"'
         response.json.return_value = "Not Found"
         mock_requests.request.return_value = response
 
-        result = client.collection_exists("nonexistent_collection")
-        assert result is False
+        with pytest.raises(AetherfyVectorsException) as exc:
+            client.collection_exists("nonexistent_collection")
+        assert not isinstance(exc.value, CollectionNotFoundError)
+        assert exc.value.status_code == 404
 
     def test_create_collection_prepopulates_schema_cache(
         self, client, mock_requests, mock_successful_response
@@ -353,7 +355,7 @@ class TestCollectionManagement:
         config = VectorConfig(size=384, distance=DistanceMetric.COSINE)
         client.create_collection("fresh_coll", config)
 
-        cached = client._get_cached_schema("fresh_coll")
+        cached = client._get_cached_schema(client._scope_collection("fresh_coll"))
         assert cached is not None
         assert cached["size"] == 384
         assert cached["distance"] == "Cosine"
@@ -414,18 +416,18 @@ class TestCollectionManagement:
         # Seed both caches as if the collection had been used before.
         config = VectorConfig(size=128, distance=DistanceMetric.COSINE)
         client.create_collection("doomed", config)
-        client._payload_schema_cache["doomed"] = {
+        client._payload_schema_cache[client._scope_collection("doomed")] = {
             "schema": {"fields": []},
             "etag": "v1",
             "enforcement_mode": "warn",
         }
-        assert client._get_cached_schema("doomed") is not None
-        assert "doomed" in client._payload_schema_cache
+        assert client._get_cached_schema(client._scope_collection("doomed")) is not None
+        assert client._scope_collection("doomed") in client._payload_schema_cache
 
         client.delete_collection("doomed")
 
-        assert client._get_cached_schema("doomed") is None
-        assert "doomed" not in client._payload_schema_cache
+        assert client._get_cached_schema(client._scope_collection("doomed")) is None
+        assert client._scope_collection("doomed") not in client._payload_schema_cache
 
     def test_collection_exists_fast_path_uses_cache(
         self, client, mock_requests, mock_successful_response
@@ -437,7 +439,7 @@ class TestCollectionManagement:
         races Qdrant's internal replication and can briefly 4xx.
         """
         # Seed the cache directly to isolate the fast path from create.
-        client._schema_cache["already_known"] = {
+        client._schema_cache[client._scope_collection("already_known")] = {
             "size": 128,
             "distance": "Cosine",
             "etag": None,
@@ -462,24 +464,25 @@ class TestCollectionManagement:
         next operation goes back to the network and gets the truth.
         """
         # Pre-seed both caches as if a prior create/upsert had populated them.
-        client._schema_cache["ghost"] = {
+        client._schema_cache[client._scope_collection("ghost")] = {
             "size": 4,
             "distance": "Cosine",
             "etag": None,
             "full_config": {},
         }
-        client._payload_schema_cache["ghost"] = {
+        client._payload_schema_cache[client._scope_collection("ghost")] = {
             "schema": None,
             "etag": None,
             "enforcement_mode": "off",
         }
 
         # The PUT returns 404. retry_with_backoff treats 404 as
-        # non-retryable (is_retryable_error → False), so a single 404
+        # never retried (a 4xx; retry_policy), so a single 404
         # response is enough to surface the exception immediately.
         mock_requests.request.return_value = mock_error_response(
             message="Collection not found",
             status_code=404,
+            error_code="COLLECTION_NOT_FOUND",
         )
 
         # The exception propagates — that's the contract — but the side
@@ -488,8 +491,8 @@ class TestCollectionManagement:
             client.upsert("ghost", sample_points)
 
         # Both caches must be dropped for the scoped name.
-        assert client._get_cached_schema("ghost") is None
-        assert "ghost" not in client._payload_schema_cache
+        assert client._get_cached_schema(client._scope_collection("ghost")) is None
+        assert client._scope_collection("ghost") not in client._payload_schema_cache
 
     def test_get_collection_404_evicts_cache(
         self, client, mock_requests, mock_error_response
@@ -498,13 +501,13 @@ class TestCollectionManagement:
 
         Same self-healing contract as upsert, exercised on the read path.
         """
-        client._schema_cache["ghost"] = {
+        client._schema_cache[client._scope_collection("ghost")] = {
             "size": 128,
             "distance": "Cosine",
             "etag": None,
             "full_config": {},
         }
-        client._payload_schema_cache["ghost"] = {
+        client._payload_schema_cache[client._scope_collection("ghost")] = {
             "schema": None,
             "etag": None,
             "enforcement_mode": "off",
@@ -513,13 +516,14 @@ class TestCollectionManagement:
         mock_requests.request.return_value = mock_error_response(
             message="Collection not found",
             status_code=404,
+            error_code="COLLECTION_NOT_FOUND",
         )
 
         with pytest.raises(Exception):
             client.get_collection("ghost")
 
-        assert client._get_cached_schema("ghost") is None
-        assert "ghost" not in client._payload_schema_cache
+        assert client._get_cached_schema(client._scope_collection("ghost")) is None
+        assert client._scope_collection("ghost") not in client._payload_schema_cache
 
     def test_non_404_error_does_not_evict_cache(
         self, client, mock_requests, mock_error_response, sample_points
@@ -531,7 +535,7 @@ class TestCollectionManagement:
         collection intact upstream — wiping the cache here would force a
         round trip on the next call for no reason. Pin the contract.
         """
-        client._schema_cache["intact"] = {
+        client._schema_cache[client._scope_collection("intact")] = {
             "size": 4,
             "distance": "Cosine",
             "etag": None,
@@ -547,7 +551,7 @@ class TestCollectionManagement:
             client.upsert("intact", sample_points)
 
         # Cache survives the transient error.
-        assert client._get_cached_schema("intact") is not None
+        assert client._get_cached_schema(client._scope_collection("intact")) is not None
 
     def test_get_collection_success(
         self, client, mock_requests, mock_successful_response

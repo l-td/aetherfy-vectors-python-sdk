@@ -10,9 +10,29 @@ import random
 import re
 import time
 from typing import Any, Dict, List, Optional, Union, Callable
-from urllib.parse import quote, urlparse
 
 from .exceptions import ValidationError, AetherfyVectorsException
+
+
+def server_fields(error: Optional[BaseException]) -> Dict[str, Any]:
+    """What an exception built from a server's answer must carry on.
+
+    When code catches a server error and raises another exception in its
+    place (a more specific class, a clearer message), the new one is built
+    from the same answer, so it carries the same ``error_code``,
+    ``status_code``, ``request_id`` and ``details``: ``raise
+    SchemaNotFoundError(name, **server_fields(e))``. A branch on ``code``
+    must see the server's code whichever class it arrives as. Anything that
+    is not an SDK error (or None) carries nothing.
+    """
+    if not isinstance(error, AetherfyVectorsException):
+        return {}
+    return {
+        "request_id": error.request_id,
+        "status_code": error.status_code,
+        "details": error.details,
+        "error_code": error.error_code,
+    }
 
 
 def validate_vector(
@@ -225,19 +245,6 @@ def build_api_url(base_url: str, endpoint: str) -> str:
     return f"{base}/api/v1/{path}"
 
 
-def quote_collection_name(name: str) -> str:
-    """URL-quote a collection name for safe use as a path segment.
-
-    Workspace-scoped collection names contain ``/`` (the separator
-    between workspace and collection, e.g. ``"my-bot/customer-42"``).
-    Embedded literally in a URL path the slash splits the segment and
-    the request reaches the wrong route. ``quote(name, safe='')``
-    percent-encodes every reserved character (including ``/``) so the
-    segment lands intact at the server.
-    """
-    return quote(name, safe="")
-
-
 def parse_error_response(
     response_data: Any, status_code: int
 ) -> AetherfyVectorsException:
@@ -341,12 +348,22 @@ def parse_error_response(
             retry_after=retry_after,
             error_code=error_code,
         )
-    elif status_code == 403 and error_code == "AGENT_KEY_WORKSPACE_FORBIDDEN":
-        from .exceptions import AgentWorkspaceForbiddenError
+    elif status_code == 403:
+        if error_code == "AGENT_KEY_WORKSPACE_FORBIDDEN":
+            from .exceptions import AgentWorkspaceForbiddenError
 
-        workspace = details.get("workspace") if isinstance(details, dict) else None
-        return AgentWorkspaceForbiddenError(
-            workspace,
+            workspace = details.get("workspace") if isinstance(details, dict) else None
+            return AgentWorkspaceForbiddenError(
+                workspace,
+                request_id=request_id,
+                status_code=status_code,
+                details=details,
+                error_code=error_code,
+            )
+        # Every other refusal of this key, e.g. AUTH_AGENT_KEY_OUT_OF_SCOPE
+        # (an agent key on an account-only route).
+        return AuthenticationError(
+            message,
             request_id=request_id,
             status_code=status_code,
             details=details,
@@ -381,6 +398,40 @@ def parse_error_response(
                 details=details,
                 error_code=error_code,
             )
+        elif error_code == "SCHEMA_NOT_DEFINED":
+            from .exceptions import SchemaNotFoundError
+
+            d = details if isinstance(details, dict) else {}
+            return SchemaNotFoundError(
+                d.get("collection_name", "unknown"),
+                request_id=request_id,
+                status_code=status_code,
+                details=details,
+                error_code=error_code,
+            )
+        elif error_code == "WORKSPACE_NOT_FOUND":
+            from .exceptions import WorkspaceNotFoundError
+
+            d = details if isinstance(details, dict) else {}
+            return WorkspaceNotFoundError(
+                d.get("workspace"),
+                d.get("workspace_id"),
+                message=message,
+                request_id=request_id,
+                status_code=status_code,
+                details=details,
+                error_code=error_code,
+            )
+        # A 404 whose code this SDK does not know: still a typed not-found.
+        from .exceptions import NotFoundError
+
+        return NotFoundError(
+            message,
+            request_id=request_id,
+            status_code=status_code,
+            details=details,
+            error_code=error_code,
+        )
     elif status_code == 400:
         if error_code == "COLLECTION_LIMIT_EXCEEDED":
             from .exceptions import QuotaExceededError
@@ -439,6 +490,15 @@ def parse_error_response(
                 error_code=error_code,
             )
         return ConflictError(
+            message,
+            request_id=request_id,
+            status_code=status_code,
+            details=details,
+            error_code=error_code,
+        )
+    elif status_code == 422:
+        # Unprocessable: VALIDATION_ERROR, COLLECTION_SDK_MANAGED, ...
+        return ValidationError(
             message,
             request_id=request_id,
             status_code=status_code,
@@ -519,20 +579,26 @@ def format_points_for_upsert(points: List[Dict[str, Any]]) -> List[Dict[str, Any
 
 def retry_with_backoff(
     func: Callable,
+    retry_class: str,
     max_retries: int = 3,
     base_delay: float = 1.0,
     max_delay: float = 30.0,
-    retry_condition: Optional[Callable[[Exception], bool]] = None,
     deadline: Optional[float] = None,
 ):
-    """Retry function with exponential backoff.
+    """Retry ``func`` with exponential backoff, under the retry rule.
+
+    Which failures are retried is decided by retry_policy for the
+    operation's class, never by the error's type alone: a refusal before
+    anything ran is retried for any class, an ambiguous failure only for
+    ``retry_policy.REPEATABLE``, a 4xx never.
 
     Args:
         func: Function to retry.
+        retry_class: ``retry_policy.REPEATABLE`` or ``retry_policy.ONCE``:
+            whether repeating the operation gives the same result.
         max_retries: Maximum number of retries.
         base_delay: Base delay between retries in seconds.
         max_delay: Maximum delay cap in seconds.
-        retry_condition: Optional function to determine if error is retryable.
         deadline: Optional ``time.monotonic()`` instant after which no retry
             may start. A backoff sleep that would end at or past it is not
             taken: the last error is raised instead. ``func`` owns bounding
@@ -544,7 +610,7 @@ def retry_with_backoff(
     Raises:
         Last exception if all retries fail.
     """
-    from .exceptions import is_retryable_error
+    from .retry_policy import should_retry_class
 
     last_exception = None
 
@@ -554,10 +620,7 @@ def retry_with_backoff(
         except Exception as e:
             last_exception = e
 
-            # Check if error is retryable
-            should_retry = (
-                retry_condition(e) if retry_condition else is_retryable_error(e)
-            )
+            should_retry = should_retry_class(retry_class, e)
 
             if should_retry and attempt < max_retries:
                 delay = min(base_delay * (2**attempt), max_delay)

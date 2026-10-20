@@ -1,16 +1,18 @@
 """
 Workspaced URL contract tests for AetherfyVectorsClient.
 
-Pins the post-A/B (vectordb PR 1) wire URL shape: when ``workspace`` is
-set on the client, every collection-scoped HTTP call must use the
-nested form ``workspaces/{ws}/collections/{name}[/<suffix>]`` with a
-bare collection name (no slash) in the URL/body. The legacy
-slash-in-name encoding (``name: "ws/coll"`` in POST body,
-``collections/ws%2Fcoll`` in URLs) is rejected by vectordb
-post-cutover.
+Every collection lives in a workspace, so every collection-scoped HTTP call
+uses one of two nested forms, with a bare collection name in the URL/body:
+
+- ``workspaces/{name}/collections/{coll}[/<suffix>]`` for a workspace name;
+- ``workspace-ids/{id}/collections/{coll}[/<suffix>]`` for workspace="auto",
+  the agent's workspace id from ``AETHERFY_WORKSPACE_ID``.
+
+There is no bare ``collections/...`` form: vectordb answers it with
+400 WORKSPACE_REQUIRED.
 
 The tests assert on the ``requests`` mock's call args — exact URLs,
-exact body shapes — so any regression to the flat form fails loudly.
+exact body shapes — so any regression fails loudly.
 """
 
 import pytest
@@ -155,17 +157,31 @@ class TestWorkspacedPointOps:
         )
 
 
-class TestWorkspacelessRegression:
-    """Sanity: when workspace is unset, the SDK keeps using flat /collections URLs."""
+class TestWorkspaceIdForm:
+    """workspace="auto" addresses the agent's workspace by id, on the wire."""
 
-    def test_create_collection_uses_flat_url_when_workspaceless(self, mock_requests):
-        client = AetherfyVectorsClient(
-            api_key=API_KEY, endpoint=ENDPOINT, timeout=10.0
-        )
+    WS_ID = "0f8e2b9a-7c41-4d2e-9b3a-5e6f7a8b9c0d"
+
+    @pytest.fixture
+    def id_client(self, mock_requests, monkeypatch):
+        monkeypatch.setenv("AETHERFY_WORKSPACE_ID", self.WS_ID)
+        return AetherfyVectorsClient(api_key=API_KEY, endpoint=ENDPOINT, timeout=10.0)
+
+    def test_create_collection_uses_the_id_form(self, id_client, mock_requests):
         mock_requests.request.return_value = _ok_response({"success": True}, 201)
-        client.create_collection(COLL, {"size": 128, "distance": "Cosine"})
+        id_client.create_collection(COLL, {"size": 128, "distance": "Cosine"})
         url = _last_request_url(mock_requests)
         body = _last_request_json(mock_requests)
-        assert url.endswith("/collections")
-        assert "/workspaces/" not in url
+        assert url == f"{ENDPOINT}/api/v1/workspace-ids/{self.WS_ID}/collections"
         assert body["name"] == COLL
+
+    def test_point_op_uses_the_id_form(self, id_client, mock_requests):
+        mock_requests.request.return_value = _ok_response(
+            {"result": {"count": 0}, "status": "ok"}
+        )
+        id_client.count(COLL)
+        url = _last_request_url(mock_requests)
+        assert url == (
+            f"{ENDPOINT}/api/v1/workspace-ids/{self.WS_ID}"
+            f"/collections/{COLL}/points/count"
+        )

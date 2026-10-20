@@ -30,7 +30,8 @@ def get_version():
         for line in f:
             if line.startswith("__version__"):
                 return line.split('"')[1]
-    return "1.0.0"
+    # No fallback: a guessed version would be published as if it were real.
+    raise RuntimeError(f"no __version__ line in {version_file}")
 
 setup(
     name="aetherfy-vectors",

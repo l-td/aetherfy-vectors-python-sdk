@@ -44,7 +44,7 @@ class TestGetUsageStats:
 
     def test_success(self, client, sample_usage_stats):
         with patch.object(
-            client.session, "get", return_value=_response(200, sample_usage_stats)
+            client.session, "request", return_value=_response(200, sample_usage_stats)
         ) as mock_get:
             stats = client.get_usage_stats()
 
@@ -58,38 +58,45 @@ class TestGetUsageStats:
         assert stats.usage_percentage == 25
 
         mock_get.assert_called_once()
-        args, kwargs = mock_get.call_args
+        kwargs = mock_get.call_args.kwargs
         # The endpoint, pinned: this is the contract the backend keeps serving.
-        assert "analytics/usage" in args[0]
-        # Sent with the client's auth headers and timeout, not bare defaults.
-        assert kwargs["headers"] == client.auth_headers
+        assert kwargs["method"] == "GET"
+        assert kwargs["url"].endswith("/api/v1/analytics/usage")
+        # Sent on the client's session (its auth headers) with its timeout.
+        assert client.session.headers["Authorization"] == (
+            client.auth_headers["Authorization"]
+        )
         assert kwargs["timeout"] == client.timeout
 
     def test_non_200_raises(self, client):
         with patch.object(
             client.session,
-            "get",
+            "request",
             return_value=_response(403, {"error": {"code": "ACCOUNT_SUSPENDED"}}),
-        ):
-            with pytest.raises(AetherfyVectorsException):
+        ) as sent:
+            with pytest.raises(AetherfyVectorsException) as exc_info:
                 client.get_usage_stats()
+        assert exc_info.value.error_code == "ACCOUNT_SUSPENDED"
+        assert sent.call_count == 1  # a 4xx is never retried
 
     def test_empty_response_body_raises(self, client):
         """A 500 with no body must still raise, not crash on .json()."""
-        with patch.object(
-            client.session, "get", return_value=_response(500, {}, content=None)
+        with patch("time.sleep"), patch.object(
+            client.session, "request", return_value=_response(500, {}, content=None)
         ):
             with pytest.raises(AetherfyVectorsException):
                 client.get_usage_stats()
 
     def test_request_exception_is_wrapped(self, client):
         with patch.object(
-            client.session, "get", side_effect=requests.RequestException("Network error")
+            client.session,
+            "request",
+            side_effect=requests.RequestException("Network error"),
         ):
             with pytest.raises(AetherfyVectorsException) as exc_info:
                 client.get_usage_stats()
 
-        assert "Failed to retrieve usage statistics" in str(exc_info.value)
+        assert "Request failed" in str(exc_info.value)
         assert "Network error" in str(exc_info.value)
 
 

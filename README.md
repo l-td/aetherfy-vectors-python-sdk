@@ -15,7 +15,7 @@ no infrastructure to run.
 - **🌍 Global Performance**: Low latency from anywhere in the world
 - **⚡ Intelligent Caching**: High cache hit rates for optimal performance
 - **🛡️ Zero DevOps**: No infrastructure management or regional deployment needed
-- **🤝 Workspace Scoping**: Multi-agent tenancy, auto-detected inside deployed agents
+- **🤝 Workspaces**: every collection lives in one; inside a deployed agent the agent's own is used
 - **📊 Built-in Analytics**: Real-time performance metrics and usage insights
 - **🔧 Auto-Failover**: Intelligent routing and retry mechanisms
 - **🔐 Enterprise Security**: API key authentication and audit logging
@@ -36,7 +36,7 @@ vectors — Aetherfy stores and searches them, it does not generate them.
 ```python
 from aetherfy_memory import MemoryClient
 
-memory = MemoryClient()  # reads AETHERFY_API_KEY; workspace auto-detected
+memory = MemoryClient()  # inside an Aetherfy agent: its key and its workspace
 
 # --- A namespace: any named scope ---------------------------------------
 memory.create_namespace("customer-42")
@@ -69,18 +69,20 @@ no collection slot and a plan's collection limit does not cap how many
 conversations you can have. One collection means one dimension for all of
 them, so `create_thread` takes no `vector_size`: it comes from the client.
 
-That collection is `__threads__<workspace>` in a workspace and `__threads__`
-outside one: collection names are unique per account, so each workspace's
-conversations need a name of their own. It is managed by the SDK. Aetherfy
-refuses to move it to another workspace (a moved one would be read by no
-client of either workspace).
+That collection is `__threads__`, one in each workspace (collection names are
+unique per workspace). It is managed by the SDK, and Aetherfy refuses to move
+or rename it: it holds the conversations of every agent in its workspace, so
+moving it would hand them to another workspace's agents. An agent that moves
+to another workspace leaves its conversation history behind in the old one.
 
 ```python
 memory = MemoryClient(thread_vector_size=1536)   # threads, for OpenAI small
 ```
 
 Deployed on Aetherfy, `MemoryClient()` takes no arguments at all: the control
-plane injects `AETHERFY_API_KEY` and the workspace at deploy time.
+plane injects `AETHERFY_API_KEY` and `AETHERFY_WORKSPACE_ID` (the agent's
+workspace) at deploy time. Anywhere else, name a workspace:
+`MemoryClient(workspace="default")`.
 
 Full memory API — iteration, bulk loading, metadata — under
 [Memory SDK](#-memory-sdk--iter-bulk-load-set_metadata) below.
@@ -107,7 +109,7 @@ client = QdrantClient(host="localhost", port=6333)
 
 # After (aetherfy-vectors): the import and the constructor change
 from aetherfy_vectors import AetherfyVectorsClient
-client = AetherfyVectorsClient(api_key="afy_live_your_api_key_here")
+client = AetherfyVectorsClient(api_key="afy_live_your_api_key_here", workspace="default")
 
 # Calls to the listed methods stay as they are
 results = client.search(collection_name="my_collection", query_vector=[0.1, 0.2, 0.3])
@@ -133,7 +135,7 @@ from aetherfy_vectors import AetherfyVectorsClient
 from aetherfy_vectors.models import VectorConfig, DistanceMetric
 
 # Initialize client
-client = AetherfyVectorsClient(api_key="afy_live_your_api_key_here")
+client = AetherfyVectorsClient(api_key="afy_live_your_api_key_here", workspace="default")
 
 # Create a collection
 client.create_collection(
@@ -252,7 +254,7 @@ accepted — `search`, `scroll`, `scroll_iter`, `count`, `delete`.
 ### Context Manager Support
 
 ```python
-with AetherfyVectorsClient(api_key="your_key") as client:
+with AetherfyVectorsClient(api_key="your_key", workspace="default") as client:
     results = client.search("collection", [0.1, 0.2, 0.3])
     # Automatic cleanup
 ```
@@ -450,11 +452,15 @@ PRS violations raise `ValidationError` (400) or surface as 413
 
 ## 🤝 Multi-Agent Workspaces
 
-Workspaces let multiple agents share vector collections. A collection belongs to one workspace, and that decides where it is reachable from: agents in the same workspace see each other's collections, and agents in other workspaces (or outside any) cannot reach them.
+Every collection lives in exactly one workspace, and every account starts with
+one named `default`. A workspace decides where a collection is reachable from:
+agents in the same workspace see each other's collections, and an agent reaches
+another workspace only if the account owner granted it access.
 
-Collection names are unique per **account**, not per workspace: a workspace decides where a collection is reachable from, not what it may be called. `documents` in `invoice-pipeline` and `documents` outside any workspace cannot both exist; the second create answers 409 `COLLECTION_NAME_TAKEN`.
+Collection names are unique **per workspace**: `invoices` in `customer-a` and
+`invoices` in `customer-b` are two collections.
 
-### Creating a workspace-scoped client
+### Choosing the workspace
 
 ```python
 from aetherfy_vectors import AetherfyVectorsClient
@@ -464,6 +470,28 @@ client = AetherfyVectorsClient(
     workspace="invoice-pipeline",  # All operations are scoped to this workspace
 )
 ```
+
+`workspace` defaults to `"auto"`: inside an agent deployed on Aetherfy, the
+agent's own workspace, by id, from `AETHERFY_WORKSPACE_ID` (the control plane
+injects it on every agent). A workspace rename never breaks an agent, because
+it is addressed by id.
+
+```python
+import os
+
+# Inside a deployed agent: its own workspace, nothing to configure.
+client = AetherfyVectorsClient(api_key=os.environ["AETHERFY_API_KEY"])
+```
+
+There is no "no workspace". `workspace=None`, an empty name, and `"auto"`
+outside an agent (where `AETHERFY_WORKSPACE_ID` is not set) raise `ValueError`
+at construction, saying to pass a workspace name or run inside an agent.
+`client.workspace` is the name (None when built from the id) and
+`client.workspace_id` the id (None when given a name).
+
+`"auto"` is only the agent's home workspace. Code that works across several
+workspaces (one per customer, say) passes each workspace's name explicitly,
+one client per workspace.
 
 ### How scoping works
 
@@ -497,30 +525,68 @@ classifier = AetherfyVectorsClient(api_key=api_key, workspace="invoice-pipeline"
 results = classifier.search("raw-invoices", query_vector=embedding, limit=20)
 ```
 
-### Workspace auto-detection from environment
-
-`workspace` defaults to `"auto"`: the client reads `AETHERFY_WORKSPACE` from the environment, and uses no workspace when it is unset. The control plane sets that variable only on an agent that was deployed into a workspace, so an agent without one stays workspaceless:
+### Workspace errors
 
 ```python
-import os
+from aetherfy_vectors import WorkspaceNotFoundError
 
-# In an agent deployed into a workspace, AETHERFY_WORKSPACE is injected
-client = AetherfyVectorsClient(api_key=os.environ["AETHERFY_API_KEY"])
-# → workspace is auto-detected from AETHERFY_WORKSPACE env var
-# → in an agent with no workspace, the variable is absent and the client
-#   is workspaceless
+try:
+    client.get_collections()
+except WorkspaceNotFoundError as e:
+    # No such workspace in this account. A typo is never read as "empty".
+    print(f"Unknown workspace: {e.workspace or e.workspace_id}")
 ```
 
-### No workspace
+`collection_exists()` returns False only when the workspace exists and the
+collection is not in it; an unknown workspace raises.
+
+### When a request is retried
+
+One rule, the same in the Python and JS SDKs (`aetherfy_vectors/retry_policy.py`). Up to 3
+retries, waiting about 1 s, 2 s, then 4 s (each jittered to 50-100%), within
+a call's timeout.
+
+| Failure | Retried for |
+|---|---|
+| Refused before anything ran: 503 `WORKSPACE_LOOKUP_UNAVAILABLE`, `COLLECTION_LOOKUP_UNAVAILABLE`, `PLACEMENT_UNAVAILABLE`; a connection never made (DNS, refused, connect timeout); 429 with a Retry-After | every operation |
+| Ambiguous, the request may have run: a read timeout, a reset after sending, any other 5xx | only operations whose repeat gives the same result (below) |
+| Any other 4xx | never |
+
+| Operations | Class |
+|---|---|
+| `get_collections`, `get_collection`, `collection_exists`, `get_schema`, `analyze_schema`, `search`, `retrieve`, `scroll`, `count`, `get_usage_stats` | reads: repeatable |
+| `upsert`, `set_payload`, `overwrite_payload`, `delete_payload`, `create_field_index`, `set_schema` | writes keyed by id: repeatable |
+| `create_collection`, `delete_collection`, `delete` (points), `delete_schema`, `delete_field_index` | once: a repeat after a hidden success reports a false error, so an ambiguous failure is raised after one attempt |
+
+`set_schema` is repeatable because it is sent without `If-Match`: a repeat writes
+the same schema again. A conditional write would get a false 412 on a repeat
+after a hidden success, so it would be classed once.
+
+When the retries run out, the last error is raised (`ServiceUnavailableError`, `RequestTimeoutError` or `NetworkError`).
+
+The client already retries under this rule. To retry more around your own
+operation, say whether repeating it gives the same result: `REPEATABLE` (a
+read, a write keyed by id) or `ONCE` (a create, a delete). The same failures
+are retried as above; a 4xx never is.
 
 ```python
-# No workspace — the collection is reachable from outside any workspace.
-# Pass None explicitly to ignore AETHERFY_WORKSPACE inside a workspaced agent.
-client = AetherfyVectorsClient(api_key="afy_live_your_key", workspace=None)
-client.create_collection("my-global-collection", VectorConfig(size=768, distance=DistanceMetric.COSINE))
+from aetherfy_vectors import retry_with_backoff, REPEATABLE
+
+results = retry_with_backoff(
+    lambda: client.search("collection", vector),
+    REPEATABLE,
+    max_retries=3,
+    base_delay=1.0,
+)
 ```
 
-> **Tip:** Create workspaces explicitly in the Aetherfy control plane before use (`afy workspaces create invoice-pipeline`). Agents deployed to a workspace automatically receive the workspace name via `AETHERFY_WORKSPACE`.
+Renaming a collection, and moving one to another workspace, are done from the
+dashboard or the CLI (`afy collections update`), not from the SDK. Code still
+using the old name gets `CollectionNotFoundError`.
+
+> **Tip:** Create workspaces in the dashboard or with the CLI
+> (`afy workspaces create invoice-pipeline`). Agents deployed to a workspace
+> receive its id as `AETHERFY_WORKSPACE_ID`.
 
 ## 🤖 Running as an Agent
 
@@ -742,7 +808,7 @@ export AETHERFY_VECTORS_API_KEY="afy_live_your_api_key_here"
 Or pass it directly:
 
 ```python
-client = AetherfyVectorsClient(api_key="afy_live_your_api_key_here")
+client = AetherfyVectorsClient(api_key="afy_live_your_api_key_here", workspace="default")
 ```
 
 Relevant environment variables:
@@ -751,7 +817,7 @@ Relevant environment variables:
 |----------|---------|
 | `AETHERFY_API_KEY` | Primary API key |
 | `AETHERFY_VECTORS_API_KEY` | Alternative API key (useful when the same process talks to multiple Aetherfy services) |
-| `AETHERFY_WORKSPACE` | Used when the client is constructed with `workspace="auto"` (set automatically on deployed agents) |
+| `AETHERFY_WORKSPACE_ID` | The agent's workspace id, read by `workspace="auto"` (the default). Set automatically on deployed agents |
 | `AETHERFY_VECTORS_URL` | Pin the client to a specific endpoint URL. Set automatically by the control-plane on deployed agents. Wins over `api_region=` if both are set. |
 | `AETHERFY_VECTORS_API_REGION` | Equivalent to `api_region=` constructor arg. Local-dev / debugging only. |
 
@@ -765,6 +831,7 @@ you can pin a client to a specific regional endpoint:
 ```python
 client = AetherfyVectorsClient(
     api_key="afy_test_...",
+    workspace="default",
     api_region="eu-central-1",  # 'us-east-1' | 'eu-central-1' | 'ap-southeast-1'
 )
 ```
@@ -926,12 +993,16 @@ from aetherfy_vectors.exceptions import (
     SchemaNotFoundError,
     CollectionInUseError,
     QuotaExceededError,
+    WorkspaceNotFoundError,
+    NotFoundError,              # parent of every not-found error above
 )
 
 try:
     results = client.search("nonexistent", [0.1, 0.2, 0.3])
 except CollectionNotFoundError as e:
     print(f"Collection not found: {e}")
+except WorkspaceNotFoundError as e:
+    print(f"Workspace not found: {e.workspace or e.workspace_id}")
 except AuthenticationError as e:
     print(f"Invalid API key: {e}")
 except RateLimitExceededError as e:
@@ -950,8 +1021,8 @@ client = AetherfyVectorsClient(
     api_key="your_api_key",                   # Required (or set AETHERFY_API_KEY)
     endpoint="https://vectors.aetherfy.com",  # Optional: Custom endpoint
     timeout=30.0,                             # Optional: Request timeout (seconds)
-    workspace=None,                           # Optional: None, a workspace name, or "auto"
-                                              #           to read AETHERFY_WORKSPACE
+    workspace="default",                      # A workspace name, or "auto" (the default):
+                                              #   inside an agent, AETHERFY_WORKSPACE_ID
 )
 ```
 
@@ -1014,7 +1085,7 @@ def health_check():
 4. **Update initialization**:
    ```python
    # client = QdrantClient(host="localhost", port=6333)
-   client = AetherfyVectorsClient(api_key="your_api_key")
+   client = AetherfyVectorsClient(api_key="your_api_key", workspace="default")
    ```
 
 5. **Run your tests.** Calls to the methods in the table below, with

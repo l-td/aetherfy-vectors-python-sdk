@@ -21,27 +21,17 @@ DEFAULT_VECTOR_SIZE = 384
 # so a collection per conversation capped a Free account at three
 # conversations ever.
 #
-# ONE PER WORKSPACE, NAMED FOR IT: `__threads__` outside any workspace,
-# `__threads__<workspace>` in one. Collection names are unique per ACCOUNT
-# (the server answers 409 COLLECTION_NAME_TAKEN for a name another workspace
-# holds), so one `__threads__` per workspace could exist in exactly one
-# workspace: the second workspace's first thread failed. A workspace name is
-# unique per account and cannot be renamed, so the name is stable and cannot
-# collide; it is `[a-z0-9-]{3,63}`, so `__threads__` + it stays inside the
-# server's `[a-zA-Z0-9_-]{1,100}` (vectordb utils/collectionScoping.js).
+# ONE PER WORKSPACE, a plain `__threads__` in each: collection names are
+# unique per workspace, so every workspace has its own.
 #
-# The prefix is unreachable from the user-facing name regex in client.py,
+# The name is unreachable from the user-facing name regex in client.py,
 # which requires a leading letter or digit, so no namespace can collide with
-# it. The control plane refuses to move a collection with this prefix between
-# workspaces (a moved threads collection would be one no client of either
-# workspace reads); an e2e pair test holds the two prefixes equal.
+# it. The server treats it as the SDK's own (COLLECTION_SDK_MANAGED): it is
+# never moved to another workspace, because it holds every agent's
+# conversations in this one, and it cannot be renamed. An e2e pair test
+# holds this name equal to the server's.
 # ---------------------------------------------------------------------------
-THREADS_COLLECTION_PREFIX = "__threads__"
-
-
-def threads_collection_name(workspace: Optional[str]) -> str:
-    """The threads collection of `workspace` (None: outside any workspace)."""
-    return THREADS_COLLECTION_PREFIX + (workspace or "")
+THREADS_COLLECTION = "__threads__"
 
 
 # The tenant key. A NORMAL customer payload key, not a reserved/attested one:

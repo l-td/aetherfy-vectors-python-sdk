@@ -6,7 +6,7 @@ aetherfy_vectors.qdrant_compat for the exact contract) that provides global
 vector database operations with automatic replication, caching, and sub-50ms latency worldwide.
 """
 
-__version__ = "1.2.0"
+__version__ = "1.2.2"
 __author__ = "Aetherfy"
 __email__ = "developers@aetherfy.com"
 
@@ -28,6 +28,8 @@ from .exceptions import (
     CollectionInUseError,
     CollectionInOtherRegionError,
     AgentWorkspaceForbiddenError,
+    WorkspaceNotFoundError,
+    NotFoundError,
     QuotaExceededError,
 )
 from .models import (
@@ -41,6 +43,8 @@ from .schema import (
     FieldDefinition,
     AnalysisResult,
 )
+from .retry_policy import REPEATABLE, ONCE
+from .utils import retry_with_backoff
 
 __all__ = [
     "AetherfyVectorsClient",
@@ -60,6 +64,8 @@ __all__ = [
     "CollectionInUseError",
     "CollectionInOtherRegionError",
     "AgentWorkspaceForbiddenError",
+    "WorkspaceNotFoundError",
+    "NotFoundError",
     "QuotaExceededError",
     "SearchResult",
     "Point",
@@ -68,4 +74,8 @@ __all__ = [
     "Schema",
     "FieldDefinition",
     "AnalysisResult",
+    # The retry helper and the operation classes it takes (retry_policy.py).
+    "retry_with_backoff",
+    "REPEATABLE",
+    "ONCE",
 ]

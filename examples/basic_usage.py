@@ -16,6 +16,7 @@ def main():
     # You can also set the AETHERFY_API_KEY environment variable
     client = AetherfyVectorsClient(
         api_key="afy_live_your_api_key_here",  # Replace with your actual API key
+        workspace="default",  # Every collection lives in a workspace; every account starts with "default"
         timeout=30.0  # Optional: request timeout in seconds
     )
     

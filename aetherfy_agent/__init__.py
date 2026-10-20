@@ -411,7 +411,7 @@ def spawn(child: str, payload: Optional[Dict[str, Any]] = None) -> Spawn:
             child_agent_id=str(body.get("child_agent_id")),
             region=str(body.get("region")),
             status=str(body.get("status")),
-            workspace=body.get("workspace"),
+            workspace=str(body.get("workspace")),
             estimated_start=body.get("estimated_start"),
         )
 

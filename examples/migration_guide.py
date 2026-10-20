@@ -26,7 +26,8 @@ def demonstrate_migration():
     
     # NEW: Initialize Aetherfy client (only change needed)
     client = AetherfyVectorsClient(
-        api_key="afy_live_your_api_key_here"  # Only new requirement
+        api_key="afy_live_your_api_key_here",  # New: your API key
+        workspace="default",  # New: the workspace the collections live in
         # endpoint="https://vectors.aetherfy.com"  # Optional, this is default
         # timeout=30.0  # Optional, same as before
     )
@@ -164,7 +165,7 @@ def demonstrate_migration():
         print("\n8. Context manager usage...")
         
         # IDENTICAL API:
-        with AetherfyVectorsClient(api_key="afy_live_your_api_key_here") as ctx_client:
+        with AetherfyVectorsClient(api_key="afy_live_your_api_key_here", workspace="default") as ctx_client:
             collections = ctx_client.get_collections()
             print(f"✓ Context manager works identically ({len(collections)} collections)")
         

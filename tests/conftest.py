@@ -12,6 +12,19 @@ from aetherfy_vectors import AetherfyVectorsClient
 from aetherfy_vectors.models import Collection, VectorConfig, DistanceMetric
 
 
+# The workspace id the control plane would inject into an agent. Every
+# collection lives in a workspace, so a client built with the default
+# workspace="auto" outside an agent is refused; the suite runs as if inside
+# one. Tests of that refusal clear the variable themselves.
+TEST_WORKSPACE_ID = "11111111-2222-4333-8444-555555555555"
+
+
+@pytest.fixture(autouse=True)
+def _agent_workspace_id(monkeypatch):
+    monkeypatch.setenv("AETHERFY_WORKSPACE_ID", TEST_WORKSPACE_ID)
+    return TEST_WORKSPACE_ID
+
+
 @pytest.fixture
 def api_key():
     """Test API key fixture."""

@@ -58,7 +58,7 @@ class TestETagValidation:
 
         # Should have called request 3 times (GET collection, GET schema, PUT upsert)
         assert mock_requests.request.call_count == 3
-        assert "test-collection" in client._schema_cache
+        assert client._scope_collection("test-collection") in client._schema_cache
 
     def test_schema_cache_reused_on_subsequent_upserts(
         self,
@@ -171,27 +171,27 @@ class TestETagValidation:
         assert "schema changed" in str(exc_info.value).lower()
 
         # Cache should be cleared
-        assert "test-collection" not in client._schema_cache
+        assert client._scope_collection("test-collection") not in client._schema_cache
 
     def test_clear_schema_cache_single_collection(self, client):
         """Test clearing cache for a single collection"""
         # Populate cache
-        client._schema_cache["collection1"] = {"size": 768, "etag": "abc"}
-        client._schema_cache["collection2"] = {"size": 384, "etag": "def"}
+        client._schema_cache[client._scope_collection("collection1")] = {"size": 768, "etag": "abc"}
+        client._schema_cache[client._scope_collection("collection2")] = {"size": 384, "etag": "def"}
 
         # Clear one collection
         client.clear_schema_cache("collection1")
 
         # collection1 should be cleared
-        assert "collection1" not in client._schema_cache
+        assert client._scope_collection("collection1") not in client._schema_cache
         # collection2 should remain
-        assert "collection2" in client._schema_cache
+        assert client._scope_collection("collection2") in client._schema_cache
 
     def test_clear_schema_cache_all_collections(self, client):
         """Test clearing cache for all collections"""
         # Populate cache
-        client._schema_cache["collection1"] = {"size": 768, "etag": "abc"}
-        client._schema_cache["collection2"] = {"size": 384, "etag": "def"}
+        client._schema_cache[client._scope_collection("collection1")] = {"size": 768, "etag": "abc"}
+        client._schema_cache[client._scope_collection("collection2")] = {"size": 384, "etag": "def"}
 
         # Clear all
         client.clear_schema_cache()
