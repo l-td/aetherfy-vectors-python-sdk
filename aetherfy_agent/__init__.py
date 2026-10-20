@@ -39,6 +39,12 @@ from urllib.parse import quote
 from . import _http
 from .exceptions import (
     AGENT_RUN_CONCURRENCY_LIMIT_EXCEEDED,
+    ConnectionAccessDenied,
+    ConnectionGrantNotEnabled,
+    ConnectionNeedsReauth,
+    ConnectionNotFound,
+    ConnectionTokenError,
+    ConnectionUnavailable,
     DEPLOYMENT_ACCESS_DENIED,
     DEPLOYMENT_NOT_FOUND,
     DEPLOYMENT_WAIT_TIMEOUT_INVALID,
@@ -56,7 +62,7 @@ from .exceptions import (
     TooManyRunsInFlight,
     WaitTimeoutInvalid,
 )
-from .models import MachineShape, Run, Spawn
+from .models import ConnectionInfo, ConnectionToken, MachineShape, Run, Spawn
 
 # ONE distribution, ONE version. `aetherfy_vectors.__version__` is what
 # setup.py reads to stamp the wheel, so re-exporting it here means the
@@ -73,6 +79,8 @@ __all__ = [
     "write_result",
     "result",
     "wait",
+    "connection",
+    "list_connections",
     # PUBLIC IN BOTH LANGUAGES OR NEITHER. The JavaScript helper exports these
     # three from its entry point, so a task ported between the two would find
     # the bound readable in one and not the other. A caller sizing its own
@@ -83,6 +91,8 @@ __all__ = [
     "MachineShape",
     "Run",
     "Spawn",
+    "ConnectionInfo",
+    "ConnectionToken",
     "AgentError",
     "AgentTransportError",
     "NotRunningOnAgent",
@@ -95,6 +105,12 @@ __all__ = [
     "SpawnError",
     "TooManyRunsInFlight",
     "WaitTimeoutInvalid",
+    "ConnectionTokenError",
+    "ConnectionNotFound",
+    "ConnectionGrantNotEnabled",
+    "ConnectionNeedsReauth",
+    "ConnectionUnavailable",
+    "ConnectionAccessDenied",
 ]
 
 T = TypeVar("T")
@@ -709,3 +725,8 @@ def _message_of(body: Any) -> Optional[str]:
     detail = _detail_of(body)
     message = detail.get("message")
     return message if isinstance(message, str) else None
+
+
+# At the END, not with the imports above: connections.py reads _require and
+# _user_agent from this module at call time, and both are defined above.
+from .connections import connection, list_connections  # noqa: E402

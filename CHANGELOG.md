@@ -158,6 +158,27 @@ described here.
   retry was skipped on a workspaced client: the refreshed schema was looked up
   by the bare name and not found.
 
+### Added
+- **`aetherfy_agent.connection(connection_id, *, min_valid_seconds=300)`** returns
+  a fresh OAuth access token (`ConnectionToken`) for a Google, Slack, Notion,
+  Microsoft 365, HubSpot or Atlassian connection made on the Aetherfy dashboard,
+  from the control plane's `POST /connections/{connection_id}/token`. A connection
+  is addressed by its **id** (a malformed one raises `ValueError` before any
+  request). Tokens are cached per id in the process until they would have less
+  than `max(min_valid_seconds, 60)` seconds left; a token with no expiry (Notion)
+  is asked for again after five minutes.
+  **`aetherfy_agent.list_connections()`** returns the connections this agent's key
+  may use (`ConnectionInfo`: `id`, `name`, `provider`, `scope`, `account_label`,
+  `status`, `scopes`), from `GET /connections/usable`.
+  Refusals are typed: `ConnectionNotFound` (`404`: no such connection, or not one
+  the agent may use), `ConnectionGrantNotEnabled` (`403
+  CONNECTION_GRANT_NOT_ENABLED`: the connection is in a granted workspace whose
+  grant's connections switch is off), `ConnectionNeedsReauth`,
+  `ConnectionUnavailable` (retryable) and `ConnectionAccessDenied`, all under
+  `ConnectionTokenError`. Only an agent machine's own key is answered. A malformed
+  id is refused by the key's policy, `403 AUTH_AGENT_KEY_OUT_OF_SCOPE`, as the
+  generic `ConnectionTokenError`.
+
 ### Changed
 - `PartialUpsertError`'s message no longer counts the points of a failed chunk
   as failed: it reports them as of unknown outcome. A chunk that timed out or

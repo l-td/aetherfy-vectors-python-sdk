@@ -727,6 +727,39 @@ is refused with `RunReadError` and `error_code` `AUTH_AGENT_KEY_OUT_OF_SCOPE`.
 Full contract, including the environment variables behind every call:
 [docs.aetherfy.com/agents/task-contract](https://docs.aetherfy.com/agents/task-contract).
 
+### Connections: OAuth access tokens
+
+Connect Google, Slack, Notion, Microsoft 365, HubSpot or Atlassian to an agent (or
+its workspace) once, on the Aetherfy dashboard. Agent code then asks for a fresh
+access token by the connection's **id**; Aetherfy runs the OAuth sign-in and the
+refreshes, and no refresh token reaches the agent.
+
+```python
+from aetherfy_agent import connection, list_connections
+from aetherfy_agent.exceptions import ConnectionNeedsReauth, ConnectionUnavailable
+
+google = next(c for c in list_connections() if c.provider == "google")
+try:
+    token = connection(google.id, min_valid_seconds=300)
+except ConnectionNeedsReauth:
+    print("reconnect it on the dashboard")
+except ConnectionUnavailable:
+    print("the provider did not answer; retry shortly")
+else:
+    headers = {"Authorization": f"{token.token_type} {token.access_token}"}
+```
+
+`list_connections()` returns the connections this agent's key may use (each a
+`ConnectionInfo` with `id`, `name`, `provider`, `scope`, `account_label`, `status`).
+The `name` is a label for people; code asks by `id`. Only an agent machine's own
+`AETHERFY_API_KEY` is answered. A token is reused until it would have less than
+`min_valid_seconds` (and never less than a minute) left. An agent may use its own
+connections, its workspace's, and those of a workspace it is granted only when that
+grant's connections switch is on: a connection in a granted workspace whose switch is
+off is `ConnectionGrantNotEnabled`, and an id that is not a connection the agent may
+use is `ConnectionNotFound`. The full contract is the Connections page of the
+Aetherfy agent docs.
+
 ## 🧩 Payload Schemas
 
 Collections can carry an optional payload schema that the SDK validates against **before** upsert — catching malformed payloads client-side without a round trip. Schemas are cached and automatically revalidated when they change server-side (via ETag).
