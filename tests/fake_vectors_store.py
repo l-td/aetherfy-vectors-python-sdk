@@ -19,6 +19,23 @@ would hide the defect instead of catching it.
 from typing import Any, Dict, List, Optional, Union
 
 from aetherfy_vectors.models import Collection, DistanceMetric, VectorConfig
+from aetherfy_vectors.performance_modes import PerformanceMode
+from aetherfy_vectors.utils import parse_error_response
+
+# vectordb's PERFORMANCE_MODE_COOLDOWN_SECONDS and COMPACT_MIN_DIMENSIONS
+# (backend/utils/performanceModes.js). Copied, not imported: the server is
+# another repo, and tests/test_performance_mode.py pins the behaviour.
+COOLDOWN_SECONDS = 900
+COMPACT_MIN_DIMENSIONS = 512
+
+
+def _wire_error(status: int, code: str, message: str, **details: Any):
+    """The exception the SDK raises for vectordb's authored envelope
+    ``{"error": {"code", "message", "details"}}``."""
+    error: Dict[str, Any] = {"code": code, "message": message}
+    if details:
+        error["details"] = details
+    return parse_error_response({"error": error}, status)
 
 
 def _lookup(payload: Dict[str, Any], key: str) -> Any:
@@ -101,6 +118,8 @@ class FakeVectorsClient:
 
     def __init__(self, workspace: Optional[str] = "my-bot"):
         self.workspace = workspace
+        # A test advances this to cross the performance-mode cooldown.
+        self.now = 0.0
         self.collections: Dict[str, Dict[str, Any]] = {}
         self.indexes: List[tuple] = []
         # Flip to make every read behave as if the must_not clause had been
@@ -109,10 +128,80 @@ class FakeVectorsClient:
 
     # -- collections --------------------------------------------------------
 
-    def create_collection(self, name: str, config: VectorConfig, **kwargs):
+    def create_collection(
+        self,
+        name: str,
+        config: VectorConfig,
+        performance_mode: Optional[Union[PerformanceMode, str]] = None,
+        **kwargs,
+    ):
         assert name not in self.collections, f"{name} already exists"
-        self.collections[name] = {"config": config, "points": {}}
-        return Collection(name=name, config=config)
+        mode = self._valid_mode(performance_mode) or PerformanceMode.EXACT
+        self._check_suitable(mode, config.size)
+        self.collections[name] = {
+            "config": config,
+            "points": {},
+            "mode": mode,
+            "mode_changed_at": None,
+        }
+        return Collection(name=name, config=config, performance_mode=mode)
+
+    # vectordb's answers, in the order it gives them: an unknown mode is a 400
+    # before anything is read, compact below the floor a 422.
+    @staticmethod
+    def _valid_mode(value) -> Optional[PerformanceMode]:
+        if value is None:
+            return None
+        try:
+            return PerformanceMode(getattr(value, "value", value))
+        except ValueError:
+            raise _wire_error(
+                400,
+                "VALIDATION_ERROR",
+                "performance_mode must be one of: exact, balanced, fast, compact",
+                field="performance_mode",
+            )
+
+    @staticmethod
+    def _check_suitable(mode: PerformanceMode, size: int) -> None:
+        if mode is PerformanceMode.COMPACT and size < COMPACT_MIN_DIMENSIONS:
+            raise _wire_error(
+                422,
+                "PERFORMANCE_MODE_UNSUITABLE",
+                f"performance_mode 'compact' needs vectors of at least "
+                f"{COMPACT_MIN_DIMENSIONS} dimensions; this collection's are {size}.",
+                field="performance_mode",
+                suggested_mode="balanced",
+            )
+
+    def update_collection(
+        self,
+        name: str,
+        *,
+        description: Any = None,
+        performance_mode: Optional[Union[PerformanceMode, str]] = None,
+        **kwargs,
+    ) -> bool:
+        col = self.collections[name]
+        mode = self._valid_mode(performance_mode)
+        if mode is None:
+            return True
+        self._check_suitable(mode, col["config"].size)
+        if mode is col["mode"]:
+            return True  # a no-op: no cooldown consumed
+        changed = col["mode_changed_at"]
+        if changed is not None and self.now - changed < COOLDOWN_SECONDS:
+            raise _wire_error(
+                409,
+                "PERFORMANCE_MODE_CHANGE_TOO_SOON",
+                "The performance mode was changed less than 15 minutes ago.",
+                field="performance_mode",
+                retry_after_seconds=int(COOLDOWN_SECONDS - (self.now - changed)),
+                cooldown_seconds=COOLDOWN_SECONDS,
+            )
+        col["mode"] = mode
+        col["mode_changed_at"] = self.now
+        return True
 
     def collection_exists(self, name: str, **kwargs) -> bool:
         return name in self.collections
@@ -124,6 +213,7 @@ class FakeVectorsClient:
             config=col["config"],
             points_count=len(col["points"]),
             status="green",
+            performance_mode=col["mode"],
         )
 
     def get_collections(self, **kwargs) -> List[Collection]:

@@ -140,12 +140,30 @@ QDRANT_COMPAT: Dict[str, Dict[str, QdrantArgRule]] = {
         "hnsw_config": _refuse(_NOT_APPLIED),
         "optimizers_config": _refuse(_NOT_APPLIED),
         "wal_config": _refuse(_NOT_APPLIED),
-        "quantization_config": _refuse(_NOT_APPLIED),
+        "quantization_config": _refuse(
+            _NOT_APPLIED
+            + "; choose a layout with create_collection(performance_mode=...)"
+        ),
         "strict_mode_config": _refuse(_NOT_APPLIED),
         "init_from": _refuse(
             "creating a collection from another one is not supported; it "
             "would be created empty"
         ),
+    },
+    "update_collection": {
+        name: _refuse(
+            "the service fixes every storage, index and optimizer setting; "
+            "choose a layout with update_collection(performance_mode=...)"
+        )
+        for name in (
+            "optimizers_config",
+            "collection_params",
+            "vectors_config",
+            "hnsw_config",
+            "quantization_config",
+            "sparse_vectors_config",
+            "strict_mode_config",
+        )
     },
     "delete": dict(_WRITE_ARGS),
     "delete_payload": dict(_WRITE_ARGS),

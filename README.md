@@ -556,6 +556,7 @@ a call's timeout.
 |---|---|
 | `get_collections`, `get_collection`, `collection_exists`, `get_schema`, `analyze_schema`, `search`, `retrieve`, `scroll`, `count`, `get_usage_stats` | reads: repeatable |
 | `upsert`, `set_payload`, `overwrite_payload`, `delete_payload`, `create_field_index`, `set_schema` | writes keyed by id: repeatable |
+| `update_collection` | repeatable: a repeat after a hidden success asks for the mode the collection now has, which does nothing |
 | `create_collection`, `delete_collection`, `delete` (points), `delete_schema`, `delete_field_index` | once: a repeat after a hidden success reports a false error, so an ambiguous failure is raised after one attempt |
 
 `set_schema` is repeatable because it is sent without `If-Match`: a repeat writes
@@ -761,6 +762,52 @@ print(analysis.suggested_schema)   # a Schema you can set_schema() directly
 
 Schema violations raise `SchemaValidationError` (with a list of per-field errors). If the server reports a stale schema (`412 Precondition Failed`), the SDK auto-refreshes the cache and retries.
 
+## 🎚️ Performance modes
+
+A collection's **performance mode** is a preset for how its vectors are stored
+and searched. You pick one of four names; the service applies the settings.
+
+| Mode | What it does |
+|---|---|
+| `exact` (the default) | Full-precision vectors in memory, and search reads them. The layout every collection had before modes existed. |
+| `balanced` | Searches a compact 8-bit copy of each vector and keeps the originals on disk to rescore the best candidates. Far less memory than `exact`. |
+| `fast` | The same compact copy, with the originals kept in memory too. Uses **more** memory than `exact`, not less. |
+| `compact` | A 2-bit copy with the originals on disk: the smallest footprint and the lossiest mode. Needs vectors of at least 512 dimensions. |
+
+```python
+from aetherfy_vectors import PerformanceMode
+
+collection = client.create_collection(
+    "docs",
+    {"size": 1536, "distance": "Cosine"},
+    performance_mode=PerformanceMode.BALANCED,  # or the string "balanced"
+)
+print(collection.performance_mode)  # PerformanceMode.BALANCED
+
+# Change it later. The collection stays usable while its storage is rewritten
+# in the background (its status reads "yellow" until that finishes).
+client.update_collection("docs", performance_mode="fast")
+```
+
+- Quantized modes lose some recall. Searching with oversampling and rescoring
+  recovers most of it:
+  `client.search("docs", query, limit=10, search_params={"quantization": {"rescore": True, "oversampling": 2.0}})`.
+  `compact` loses the most, and how much depends on the embedding model: test
+  it on your own data before you rely on it.
+- A collection can change mode once every 15 minutes. A change inside that
+  window raises `ConflictError` with `error_code` `PERFORMANCE_MODE_CHANGE_TOO_SOON`;
+  the seconds left are `e.details["details"]["retry_after_seconds"]`. It is not
+  retried for you, because waiting inside the call cannot help. Asking for the
+  mode a collection already has does nothing and does not start the wait.
+- `compact` on a collection of fewer than 512 dimensions raises
+  `ValidationError` with `error_code` `PERFORMANCE_MODE_UNSUITABLE`.
+- Re-creating a collection that exists never changes its mode, and the returned
+  `Collection` shows the mode it has, not the one you asked for.
+- `update_collection(name, description=...)` changes the description too;
+  `description=None` clears it. Pass at least one of the two.
+- Every mode is available on every plan. Storage is metered the same way in
+  every mode.
+
 ## 📊 Performance Comparison
 
 | Feature | Local Qdrant | Aetherfy Vectors |
@@ -841,8 +888,12 @@ collection placement, pass `regions=` to `create_collection` (see below).
 # scope. (Distinct from the constructor's `api_region`, which only picks
 # the endpoint to connect to.)
 collection = client.create_collection(
-    collection_name, vectors_config, distance=None, description=None, regions=None
+    collection_name, vectors_config, distance=None, description=None, regions=None,
+    performance_mode=None,  # "exact" | "balanced" | "fast" | "compact"; see Performance modes
 )
+
+# Change the description or the performance mode; returns True
+client.update_collection(name, description="notes", performance_mode="balanced")
 
 # List collections
 collections = client.get_collections()
@@ -1079,8 +1130,8 @@ def health_check():
 
 These qdrant-client methods exist here under the same name, taking the same
 keyword arguments:
-`create_collection`, `delete_collection`, `get_collections`, `get_collection`,
-`collection_exists`, `upsert`, `delete`, `retrieve`, `search`, `scroll`,
+`create_collection`, `update_collection`, `delete_collection`, `get_collections`,
+`get_collection`, `collection_exists`, `upsert`, `delete`, `retrieve`, `search`, `scroll`,
 `count`, `set_payload`, `overwrite_payload`, `delete_payload`, `close`.
 
 The contract is qdrant-client **1.15.1**'s signatures, the last release that
@@ -1100,10 +1151,11 @@ by one:
 | `create_collection` | `sparse_vectors_config` | refused unless `None` | Only dense vectors are supported |
 | `create_collection` | `shard_number`, `sharding_method` | refused unless `None` | Sharding is managed by the service |
 | `create_collection` | `replication_factor`, `write_consistency_factor` | refused unless `None` | Replication across regions is managed by the service (`regions=`) |
-| `create_collection` | `on_disk_payload`, `hnsw_config`, `optimizers_config`, `wal_config`, `quantization_config`, `strict_mode_config` | refused unless `None` | Storage and index settings are fixed by the service and would not be applied |
+| `create_collection` | `on_disk_payload`, `hnsw_config`, `optimizers_config`, `wal_config`, `quantization_config`, `strict_mode_config` | refused unless `None` | Storage and index settings are fixed by the service and would not be applied; choose a layout with `performance_mode=` |
+| `update_collection` | `optimizers_config`, `collection_params`, `vectors_config`, `hnsw_config`, `quantization_config`, `sparse_vectors_config`, `strict_mode_config` | refused unless `None` | The service fixes every storage, index and optimizer setting; change a layout with `performance_mode=` |
 | `create_collection` | `init_from` | refused unless `None` | Creating a collection from another one is not supported |
 | `close` | `grpc_grace` | accepted, no effect | There is no gRPC channel to wait on |
-| `create_collection`, `delete_collection`, `retrieve`, `scroll`, `search`, `count` | `timeout` | honoured | A deadline for the whole call, retries and backoff included, as in qdrant-client. The constructor's `timeout` is different: it bounds each attempt, and writes are retried up to 3 times |
+| `create_collection`, `update_collection`, `delete_collection`, `retrieve`, `scroll`, `search`, `count` | `timeout` | honoured | A deadline for the whole call, retries and backoff included, as in qdrant-client. The constructor's `timeout` is different: it bounds each attempt, and writes are retried up to 3 times |
 | `scroll` | `order_by` | honoured | A payload key or `{"key": ..., "direction": ...}`, sent as-is |
 
 A refused argument raises `TypeError` naming it and the reason, so a

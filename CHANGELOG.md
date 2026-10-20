@@ -5,6 +5,28 @@ All notable changes to the Aetherfy Vectors Python SDK will be documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Performance modes.** `create_collection(..., performance_mode=)` takes a
+  `PerformanceMode` (or its name): `exact` (the default, the layout every
+  collection had), `balanced`, `fast` or `compact`. `Collection.performance_mode`
+  reports it on create, `get_collection` and `get_collections`.
+  `aetherfy_vectors.PerformanceMode` and `aetherfy_vectors.performance_modes`
+  are new. An unknown mode is a `ValueError` before any request.
+- **`update_collection(name, *, description=, performance_mode=, timeout=)`**
+  (new, qdrant-client's name) changes a collection's description or performance
+  mode and returns `True`. A change inside the 15-minute cooldown is a
+  `ConflictError` with `error_code` `PERFORMANCE_MODE_CHANGE_TOO_SOON`; `compact`
+  below 512 dimensions is a `ValidationError` with `PERFORMANCE_MODE_UNSUITABLE`.
+  It is classed repeatable for retries (`retry_policy.OPERATIONS`).
+- qdrant-client's `update_collection` parameters (`optimizers_config`,
+  `collection_params`, `vectors_config`, `hnsw_config`, `quantization_config`,
+  `sparse_vectors_config`, `strict_mode_config`) are refused unless `None`, in
+  `qdrant_compat` and the README table. The refusal of `create_collection`'s
+  `quantization_config` now points at `performance_mode=`.
+
 ## [1.2.2] - 2026-10-16
 
 ### Fixed
