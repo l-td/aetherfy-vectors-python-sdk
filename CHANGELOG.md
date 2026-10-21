@@ -5,6 +5,24 @@ All notable changes to the Aetherfy Vectors Python SDK will be documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-10-21
+
+### Changed (breaking)
+
+- **BREAKING: a plan limit is `403 PLAN_LIMIT_EXCEEDED`, and it is the
+  `QuotaExceededError`.** The vector API answers a plan limit with the control
+  plane's shape: `limit` names the axis (`max_collections`), `current` is the
+  count in use and the plan's number sits under the axis' own name. The SDK
+  maps it to `QuotaExceededError`: `quota_type` is the axis without its `max_`
+  prefix (`collections`), `current` the count in use and `limit` the plan's
+  number; `error_code` is `PLAN_LIMIT_EXCEEDED` and `details` holds the whole
+  answer, the axis name included. `MemoryClient.create_namespace` raises the
+  same error when the collection it creates hits the limit.
+- **BREAKING: the `400 COLLECTION_LIMIT_EXCEEDED` mapping is removed.** The
+  server no longer sends that code; a 400 with it is a `ValidationError` like
+  any other 400. Code that branched on `e.error_code == "COLLECTION_LIMIT_EXCEEDED"`
+  branches on `PLAN_LIMIT_EXCEEDED`, or catches `QuotaExceededError`.
+
 ## [1.2.2] - 2026-10-16
 
 ### Fixed

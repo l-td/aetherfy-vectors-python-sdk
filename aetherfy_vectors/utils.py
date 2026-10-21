@@ -349,6 +349,26 @@ def parse_error_response(
             error_code=error_code,
         )
     elif status_code == 403:
+        if error_code == "PLAN_LIMIT_EXCEEDED":
+            from .exceptions import QuotaExceededError
+
+            # The plan-limit answer, the control plane's shape: `limit` NAMES
+            # the axis ("max_collections"), `current` is the count in use and
+            # the plan's number sits under the axis' own name.
+            d = details if isinstance(details, dict) else {}
+            axis = d.get("limit")
+            plan_value = d.get(axis) if isinstance(axis, str) else None
+            current = d.get("current")
+            return QuotaExceededError(
+                message,
+                axis.removeprefix("max_") if isinstance(axis, str) else "plan",
+                current=current if isinstance(current, int) else None,
+                limit=plan_value if isinstance(plan_value, int) else None,
+                request_id=request_id,
+                status_code=status_code,
+                details=details,
+                error_code=error_code,
+            )
         if error_code == "AGENT_KEY_WORKSPACE_FORBIDDEN":
             from .exceptions import AgentWorkspaceForbiddenError
 
@@ -433,21 +453,6 @@ def parse_error_response(
             error_code=error_code,
         )
     elif status_code == 400:
-        if error_code == "COLLECTION_LIMIT_EXCEEDED":
-            from .exceptions import QuotaExceededError
-
-            current = details.get("current") if isinstance(details, dict) else None
-            limit = details.get("limit") if isinstance(details, dict) else None
-            return QuotaExceededError(
-                message,
-                "collections",
-                current=current,
-                limit=limit,
-                request_id=request_id,
-                status_code=status_code,
-                details=details,
-                error_code=error_code,
-            )
         return ValidationError(
             message,
             request_id=request_id,

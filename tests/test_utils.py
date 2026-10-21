@@ -349,22 +349,39 @@ class TestParseErrorResponse:
         error = parse_error_response(response_data, 400)
         assert isinstance(error, ValidationError)
 
-    def test_parse_error_response_400_collection_limit_exceeded(self):
-        """Test that COLLECTION_LIMIT_EXCEEDED maps to QuotaExceededError, not ValidationError."""
+    def test_parse_error_response_403_plan_limit_exceeded(self):
+        """403 PLAN_LIMIT_EXCEEDED maps to QuotaExceededError, not AuthenticationError."""
+        response_data = {
+            "error": {
+                "code": "PLAN_LIMIT_EXCEEDED",
+                "message": "Collection limit reached. Your free plan allows 3 collections.",
+                "limit": "max_collections",
+                "current": 3,
+                "max_collections": 3,
+                "upgrade_url": "/billing/upgrade",
+            }
+        }
+        error = parse_error_response(response_data, 403)
+        assert isinstance(error, QuotaExceededError)
+        assert error.error_code == "PLAN_LIMIT_EXCEEDED"
+        assert error.quota_type == "collections"
+        assert error.current == 3
+        assert error.limit == 3
+        assert "Collection limit reached" in str(error)
+
+    def test_parse_error_response_400_collection_limit_exceeded_is_no_longer_a_quota_error(self):
+        """The old 400 shape is gone: it is an ordinary ValidationError now."""
         response_data = {
             "error": {
                 "code": "COLLECTION_LIMIT_EXCEEDED",
-                "message": "Collection limit reached. Your free plan allows 3 collections.",
+                "message": "old shape",
                 "current": 3,
                 "limit": 3,
             }
         }
         error = parse_error_response(response_data, 400)
-        assert isinstance(error, QuotaExceededError)
-        assert error.quota_type == "collections"
-        assert error.current == 3
-        assert error.limit == 3
-        assert "Collection limit reached" in str(error)
+        assert isinstance(error, ValidationError)
+        assert not isinstance(error, QuotaExceededError)
 
     def test_parse_error_response_429_storage_limit_exceeded(self):
         """Test that STORAGE_LIMIT_EXCEEDED maps to QuotaExceededError, not RateLimitExceededError."""
