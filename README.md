@@ -972,6 +972,8 @@ from aetherfy_vectors.exceptions import (
     SchemaNotFoundError,
     CollectionInUseError,
     QuotaExceededError,
+    PermissionDeniedError,
+    InvalidFilterError,
     WorkspaceNotFoundError,
     NotFoundError,              # parent of every not-found error above
 )
@@ -983,14 +985,26 @@ except CollectionNotFoundError as e:
 except WorkspaceNotFoundError as e:
     print(f"Workspace not found: {e.workspace or e.workspace_id}")
 except AuthenticationError as e:
-    print(f"Invalid API key: {e}")
+    print(f"Invalid API key: {e}")        # 401 only: the key itself is wrong
+except PermissionDeniedError as e:
+    # 403: the key is valid and this request is not allowed. Subclasses say
+    # why: AccessLevelInsufficientError (.workspace, .level, .required_level),
+    # CollectionProtectedError (.collection_name), AgentWorkspaceForbiddenError
+    # (.workspace) and AgentKeyOutOfScopeError (.agent_id).
+    print(f"Not allowed: {e}")
+except InvalidFilterError as e:
+    # 400: a filter key the API does not know
+    print(f"Bad filter key {e.key!r} at {e.field}; did you mean {e.suggestion!r}?")
 except RateLimitExceededError as e:
     print(f"Rate limit exceeded. Retry after: {e.retry_after}s")
 except SchemaValidationError as e:
     for violation in e.errors:
         print(violation)
 except QuotaExceededError as e:
-    print(f"Quota '{e.quota_type}' exceeded: {e.current}/{e.limit}")
+    # A plan limit: .limit names it ("max_collections"), .allowed is the plan's
+    # number (False for a feature the plan lacks, None for no cap), .current the
+    # usage now (None for a yes/no feature) and .upgrade_url where to raise it.
+    print(f"Quota '{e.quota_type}' exceeded: {e.current}/{e.allowed}; see {e.upgrade_url}")
 ```
 
 ## 🔧 Configuration Options

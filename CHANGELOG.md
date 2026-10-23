@@ -5,23 +5,71 @@ All notable changes to the Aetherfy Vectors Python SDK will be documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.3.0] - 2026-10-21
+## [1.3.0] - 2026-10-23
+
+This release contains changes marked BREAKING below. They ship in a minor
+version, not 2.0.0, because the package has no users yet; the labels stay
+because they are true.
 
 ### Changed (breaking)
 
 - **BREAKING: a plan limit is `403 PLAN_LIMIT_EXCEEDED`, and it is the
-  `QuotaExceededError`.** The vector API answers a plan limit with the control
-  plane's shape: `limit` names the axis (`max_collections`), `current` is the
-  count in use and the plan's number sits under the axis' own name. The SDK
-  maps it to `QuotaExceededError`: `quota_type` is the axis without its `max_`
-  prefix (`collections`), `current` the count in use and `limit` the plan's
-  number; `error_code` is `PLAN_LIMIT_EXCEEDED` and `details` holds the whole
-  answer, the axis name included. `MemoryClient.create_namespace` raises the
-  same error when the collection it creates hits the limit.
+  `QuotaExceededError`.** The body is `{code, message, upgrade_url, limit,
+  allowed, current}`: `limit` names the limit (`max_collections`), `allowed` is
+  the plan's number (`False` for a feature the plan lacks, `None` for no cap),
+  `current` the usage now (`None` for a yes/no feature) and `upgrade_url` where
+  to raise the cap. `QuotaExceededError` carries `quota_type` (the limit without
+  its `max_` prefix), `limit`, `allowed`, `current` and `upgrade_url`.
+  `MemoryClient.create_namespace` raises it when the collection it creates hits
+  the limit. **`limit` changed meaning**: it is the limit's name (a string), no
+  longer the plan's number; read `allowed` for the number.
 - **BREAKING: the `400 COLLECTION_LIMIT_EXCEEDED` mapping is removed.** The
   server no longer sends that code; a 400 with it is a `ValidationError` like
-  any other 400. Code that branched on `e.error_code == "COLLECTION_LIMIT_EXCEEDED"`
-  branches on `PLAN_LIMIT_EXCEEDED`, or catches `QuotaExceededError`.
+  any other 400.
+- **BREAKING: a 403 is no longer an `AuthenticationError`.** `AuthenticationError`
+  is the 401 ("the key is wrong"). A 403 ("the key is fine, this is not allowed")
+  is a new `PermissionDeniedError`, and every 403 code the SDK knows has its own
+  subclass, mapped by code first and then by status:
+  `AccessLevelInsufficientError` (`AGENT_ACCESS_LEVEL_INSUFFICIENT`: `workspace`,
+  `level`, `required_level`), `CollectionProtectedError` (`COLLECTION_PROTECTED`:
+  `collection_name`), `AgentKeyOutOfScopeError` (`AUTH_AGENT_KEY_OUT_OF_SCOPE`:
+  `agent_id`, `required_scope`) and `AgentWorkspaceForbiddenError`
+  (`AGENT_KEY_WORKSPACE_FORBIDDEN`: `workspace`), which now extends
+  `PermissionDeniedError`. An unknown 403 code is a plain `PermissionDeniedError`.
+  Every error keeps the server's code in `error_code` and the whole body in
+  `details`. `QuotaExceededError` stays outside this family: the key may do the
+  thing, the account is at its cap. Code that caught `AuthenticationError` for a
+  403 catches `PermissionDeniedError`.
+- **BREAKING: the SDK no longer checks a filter's clause names.** A plain-dict
+  filter is sent as written, and the API answers an unknown key (`mustNot`,
+  `fitler`) with a 400 that the SDK raises as `InvalidFilterError` or
+  `InvalidRequestFieldError`, instead of raising `ValidationError` before the
+  request. The old local check refused `min_should`, which the API accepts; it
+  and `Filter(min_should=...)` now work. The API's message names the key's path
+  and the nearest valid key.
+
+### Added
+
+- `InvalidFilterError` (400 `INVALID_FILTER`: `field`, the key's JSON path;
+  `key`; `suggestion`, the nearest valid key or `None`) and
+  `InvalidRequestFieldError` (400 `INVALID_REQUEST_FIELD`: an unknown member of
+  a request body, or one the endpoint does not support such as `update_filter`
+  on an upsert; the same three fields). Both are `ValidationError`s.
+- `Filter.min_should`.
+- **A 503's `Retry-After` is honoured.** `ServiceUnavailableError.retry_after`
+  carries the seconds the server asked for (a number or an HTTP date; `None`
+  when absent or unreadable), and a retried request waits that long instead of
+  its own backoff: at most 30 seconds, and never past the call's own deadline.
+  An absent or unreadable header keeps the exponential backoff.
+
+### Fixed
+
+- `QuotaExceededError` for the storage quota (`429 STORAGE_LIMIT_EXCEEDED`)
+  always had `current` and `limit` empty: the numbers are under
+  `error.details` as `current_bytes` and `limit_bytes`. They are now `current`
+  and `allowed`.
+- Comments and docstrings that said the API forwards a request body without
+  checking it. It refuses an unknown member or filter key.
 
 ## [1.2.2] - 2026-10-16
 

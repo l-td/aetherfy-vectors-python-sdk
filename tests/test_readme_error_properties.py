@@ -126,9 +126,13 @@ BASE_PROPERTY_ALLOWLIST: Dict[str, str] = {}
 # update this list in the same commit. That edit is the conscious act a count
 # floor cannot force.
 EXPECTED_CLAIMS: List[str] = [
+    "InvalidFilterError.field",
+    "InvalidFilterError.key",
+    "InvalidFilterError.suggestion",
+    "QuotaExceededError.allowed",
     "QuotaExceededError.current",
-    "QuotaExceededError.limit",
     "QuotaExceededError.quota_type",
+    "QuotaExceededError.upgrade_url",
     "RateLimitExceededError.retry_after",
     "SchemaValidationError.errors",
     "WorkspaceNotFoundError.workspace",
@@ -518,13 +522,18 @@ def test_the_census_reds_when_the_readme_documents_less():
     still passes. Deleting one handler is that failure in miniature.
     """
     original = read_readme()
-    handler = (
-        "except QuotaExceededError as e:\n"
-        "    print(f\"Quota '{e.quota_type}' exceeded: {e.current}/{e.limit}\")\n"
-    )
-    assert handler in original, (
+    start = original.find("except QuotaExceededError as e:\n")
+    assert start != -1, (
         "the mutation target has moved; this proof would silently check nothing"
     )
+    # The whole handler: `except` and the indented lines after it.
+    end = start + len("except QuotaExceededError as e:\n")
+    for line in original[end:].splitlines(keepends=True):
+        if not line.startswith("    "):
+            break
+        end += len(line)
+    handler = original[start:end]
+    assert "e.allowed" in handler
     shrunk = original.replace(handler, "", 1)
     assert shrunk != original
 

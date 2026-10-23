@@ -8,16 +8,16 @@ claim about the second thing. This double stores points and evaluates
 must / must_not / should the way the engine does, so a test can assert on
 surviving DATA rather than on recorded calls.
 
-Deliberately STRICTER than nothing and LOOSER than Qdrant: it supports exactly
-the condition shapes the documented Aetherfy filter vocabulary has (match and
-range, under the three clause arrays). An unknown condition shape raises here
-rather than silently matching everything — the fail-open behaviour of the real
-proxy is the hazard being defended against, so a stand-in that reproduced it
-would hide the defect instead of catching it.
+Deliberately LOOSER than the engine: it supports exactly the condition shapes
+the memory layer uses (match, range and has_id, under the four clause keys). A
+clause key it does not know is refused the way the API refuses it (400
+INVALID_FILTER, as InvalidFilterError), and an unknown condition shape raises
+rather than silently matching everything.
 """
 
 from typing import Any, Dict, List, Optional, Union
 
+from aetherfy_vectors.exceptions import InvalidFilterError
 from aetherfy_vectors.models import Collection, DistanceMetric, VectorConfig
 
 
@@ -34,9 +34,8 @@ def _match_condition(
     payload: Dict[str, Any], cond: Dict[str, Any], point_id: Any = None
 ) -> bool:
     if "has_id" in cond:
-        # A first-class Qdrant condition (HasIdCondition in the pinned
-        # 1.15.0 schema), so the double supports it rather than treating it
-        # as an unknown shape.
+        # A first-class condition, so the double supports it rather than
+        # treating it as an unknown shape.
         return point_id in cond["has_id"]
     if "key" not in cond:
         raise AssertionError(f"unsupported filter condition: {cond!r}")
@@ -68,20 +67,24 @@ def matches(
 ) -> bool:
     """Evaluate a filter the way Aetherfy documents it: the three clause
     arrays compose as a conjunction — everything in ``must`` holds AND at
-    least one ``should`` holds AND nothing in ``must_not`` holds.
+    least one ``should`` holds AND nothing in ``must_not`` holds AND at least
+    ``min_count`` of ``min_should``'s conditions hold.
 
-    ``fail_open_on_must_not`` reproduces the ONE failure mode the docs
-    promise: the proxy forwards a filter verbatim and never validates it, so
-    a mistyped clause "is passed along and quietly does nothing — a
-    successful response with unfiltered results rather than a 400". Set it to
-    exercise the client-side guards that exist precisely because the filter
-    can fail open.
+    ``fail_open_on_must_not`` makes the ``must_not`` clause match nothing, as
+    if the engine had lost it. Set it to exercise the SDK's own second guard
+    (a thread's marker point must never read as a message), which does not
+    rely on the filter alone.
     """
     if not flt:
         return True
-    unknown = set(flt) - {"must", "must_not", "should"}
+    unknown = set(flt) - {"must", "must_not", "should", "min_should"}
     if unknown:
-        raise AssertionError(f"unknown filter clause(s): {sorted(unknown)}")
+        key = sorted(unknown)[0]
+        raise InvalidFilterError(
+            f"Unrecognised filter key '{key}' at filter.{key}.",
+            field=f"filter.{key}",
+            key=key,
+        )
     if not all(
         _match_condition(payload, c, point_id) for c in flt.get("must") or []
     ):
@@ -93,6 +96,13 @@ def matches(
     should = flt.get("should") or []
     if should and not any(_match_condition(payload, c, point_id) for c in should):
         return False
+    min_should = flt.get("min_should")
+    if min_should:
+        held = sum(
+            1 for c in min_should["conditions"] if _match_condition(payload, c, point_id)
+        )
+        if held < min_should["min_count"]:
+            return False
     return True
 
 
@@ -103,8 +113,8 @@ class FakeVectorsClient:
         self.workspace = workspace
         self.collections: Dict[str, Dict[str, Any]] = {}
         self.indexes: List[tuple] = []
-        # Flip to make every read behave as if the must_not clause had been
-        # mistyped: the documented fail-open. See `matches`.
+        # Flip to make every read behave as if the engine had lost the
+        # must_not clause. See `matches`.
         self.fail_open_on_must_not = False
 
     # -- collections --------------------------------------------------------

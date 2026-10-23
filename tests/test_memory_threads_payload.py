@@ -27,7 +27,7 @@ from aetherfy_memory.models import (
     THREAD_MARKER_KEY,
     THREADS_COLLECTION,
 )
-from aetherfy_vectors.exceptions import PointNotFoundError
+from aetherfy_vectors.exceptions import InvalidFilterError, PointNotFoundError
 from aetherfy_vectors.models import DistanceMetric, VectorConfig
 
 from .fake_vectors_store import FakeVectorsClient, unit_vector
@@ -487,11 +487,28 @@ def test_a_caller_filter_still_narrows(memory):
     assert [h["payload"]["content"] for h in narrowed] == ["keep"]
 
 
-def test_a_caller_clause_typo_still_fails_loudly(memory):
+def test_a_caller_clause_typo_is_forwarded_and_refused_by_the_api(memory):
+    """The merge neither drops an unknown clause nor judges it: it reaches the
+    API, which answers 400 INVALID_FILTER (the double answers the same way)."""
     a = memory.create_thread("a")
-    with pytest.raises(Exception) as excinfo:
+    with pytest.raises(InvalidFilterError) as excinfo:
         a.count(filter={"mustNot": [{"key": "role", "match": {"value": "user"}}]})
-    assert "mustNot" in str(excinfo.value)
+    assert excinfo.value.key == "mustNot"
+
+
+def test_a_caller_min_should_is_accepted_and_cannot_widen_the_scope(memory):
+    a = memory.create_thread("a")
+    b = memory.create_thread("b")
+    _msgs(a, 2, "a")
+    _msgs(b, 2, "b")
+
+    other_thread = {"key": THREAD_ID_KEY, "match": {"value": "b"}}
+    widen = {"min_should": {"conditions": [other_thread], "min_count": 1}}
+    assert a.count(filter=widen) == 0
+
+    own = {"key": THREAD_ID_KEY, "match": {"value": "a"}}
+    keep = {"min_should": {"conditions": [own, other_thread], "min_count": 1}}
+    assert a.count(filter=keep) == 2
 
 
 # ===========================================================================

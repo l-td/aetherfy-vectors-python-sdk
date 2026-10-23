@@ -355,10 +355,10 @@ class TestParseErrorResponse:
             "error": {
                 "code": "PLAN_LIMIT_EXCEEDED",
                 "message": "Collection limit reached. Your free plan allows 3 collections.",
+                "upgrade_url": "https://app.aetherfy.com/dashboard/settings/billing",
                 "limit": "max_collections",
+                "allowed": 3,
                 "current": 3,
-                "max_collections": 3,
-                "upgrade_url": "/billing/upgrade",
             }
         }
         error = parse_error_response(response_data, 403)
@@ -366,7 +366,9 @@ class TestParseErrorResponse:
         assert error.error_code == "PLAN_LIMIT_EXCEEDED"
         assert error.quota_type == "collections"
         assert error.current == 3
-        assert error.limit == 3
+        assert error.limit == "max_collections"
+        assert error.allowed == 3
+        assert error.upgrade_url == "https://app.aetherfy.com/dashboard/settings/billing"
         assert "Collection limit reached" in str(error)
 
     def test_parse_error_response_400_collection_limit_exceeded_is_no_longer_a_quota_error(self):
@@ -389,15 +391,15 @@ class TestParseErrorResponse:
             "error": {
                 "code": "STORAGE_LIMIT_EXCEEDED",
                 "message": "Storage limit exceeded. Your free plan allows 512 MB.",
-                "current": 536870912,
-                "limit": 536870912,
+                "details": {"current_bytes": 536870912, "limit_bytes": 536870912},
             }
         }
         error = parse_error_response(response_data, 429)
         assert isinstance(error, QuotaExceededError)
         assert error.quota_type == "storage"
         assert error.current == 536870912
-        assert error.limit == 536870912
+        assert error.allowed == 536870912
+        assert error.limit is None
         assert "Storage limit exceeded" in str(error)
 
     def test_parse_error_response_429_rate_limit(self):

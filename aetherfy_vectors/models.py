@@ -158,14 +158,19 @@ class Filter:
     must: Optional[List[Dict[str, Any]]] = None
     must_not: Optional[List[Dict[str, Any]]] = None
     should: Optional[List[Dict[str, Any]]] = None
+    # At least `min_count` of `conditions` must hold:
+    # {"conditions": [...], "min_count": 2}.
+    min_should: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert filter to dictionary format."""
-        result = {}
+        result: Dict[str, Any] = {}
         if self.must:
             result["must"] = self.must
         if self.must_not:
             result["must_not"] = self.must_not
         if self.should:
             result["should"] = self.should
+        if self.min_should:
+            result["min_should"] = self.min_should
         return result

@@ -5,7 +5,7 @@ These exceptions provide specific error handling for various scenarios
 that can occur when interacting with the global vector database service.
 """
 
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Union
 
 
 class AetherfyVectorsException(Exception):
@@ -38,10 +38,83 @@ class AetherfyVectorsException(Exception):
 
 
 class AuthenticationError(AetherfyVectorsException):
-    """Invalid or missing API key."""
+    """The API key is missing, wrong or revoked (HTTP 401).
+
+    A 403 is never this error: there the key is fine and the request is not
+    allowed (see :class:`PermissionDeniedError`).
+    """
 
     def __init__(self, message: str = "Invalid or missing API key", **kwargs):
         super().__init__(message, **kwargs)
+
+
+class PermissionDeniedError(AetherfyVectorsException):
+    """The key is valid, and this request is not allowed (HTTP 403).
+
+    Raised for any 403 whose code the SDK has no more specific class for;
+    ``error_code`` and ``details`` carry what the server said. The more
+    specific classes below are all subclasses, so one ``except
+    PermissionDeniedError`` handles every refusal of a valid key.
+    """
+
+    def __init__(self, message: str = "This request is not allowed", **kwargs):
+        super().__init__(message, **kwargs)
+
+
+class AccessLevelInsufficientError(PermissionDeniedError):
+    """An agent's key holds a lower access level in the workspace than the
+    request needs (403 ``AGENT_ACCESS_LEVEL_INSUFFICIENT``).
+
+    ``level`` is the level the key holds and ``required_level`` the level the
+    request needed, each ``"read"``, ``"read_write"`` or ``"full"``;
+    ``workspace`` names the workspace, or is None when it was addressed by id.
+    Not retryable: the account owner raises the level.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        workspace: Optional[str] = None,
+        level: Optional[str] = None,
+        required_level: Optional[str] = None,
+        **kwargs,
+    ):
+        super().__init__(message, **kwargs)
+        self.workspace = workspace
+        self.level = level
+        self.required_level = required_level
+
+
+class CollectionProtectedError(PermissionDeniedError):
+    """An agent's key tried to remove data from a protected collection
+    (403 ``COLLECTION_PROTECTED``), which no agent key may do whatever its
+    access level. ``collection_name`` names the collection.
+    """
+
+    def __init__(self, message: str, collection_name: Optional[str] = None, **kwargs):
+        super().__init__(message, **kwargs)
+        self.collection_name = collection_name
+
+
+class AgentKeyOutOfScopeError(PermissionDeniedError):
+    """An agent's key called something only an account key may call
+    (403 ``AUTH_AGENT_KEY_OUT_OF_SCOPE``): the account-level routes, or
+    renaming a collection.
+
+    ``agent_id`` is the agent whose key it was and ``required_scope`` the
+    scope the call needs, or None where it needs an account key.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        agent_id: Optional[str] = None,
+        required_scope: Optional[str] = None,
+        **kwargs,
+    ):
+        super().__init__(message, **kwargs)
+        self.agent_id = agent_id
+        self.required_scope = required_scope
 
 
 class RateLimitExceededError(AetherfyVectorsException):
@@ -64,10 +137,22 @@ class RateLimitExceededError(AetherfyVectorsException):
 
 
 class ServiceUnavailableError(AetherfyVectorsException):
-    """Backend service is temporarily unavailable."""
+    """Backend service is temporarily unavailable.
 
-    def __init__(self, message: str = "Service temporarily unavailable", **kwargs):
+    ``retry_after`` is the number of seconds the server asked to wait
+    (its ``Retry-After`` header), or None when it sent none or an unreadable
+    one. The SDK's own retry waits it, up to a cap and never past the call's
+    deadline.
+    """
+
+    def __init__(
+        self,
+        message: str = "Service temporarily unavailable",
+        retry_after: Optional[float] = None,
+        **kwargs,
+    ):
         super().__init__(message, **kwargs)
+        self.retry_after = retry_after
 
 
 class ValidationError(AetherfyVectorsException):
@@ -75,6 +160,52 @@ class ValidationError(AetherfyVectorsException):
 
     def __init__(self, message: str = "Invalid request parameters", **kwargs):
         super().__init__(message, **kwargs)
+
+
+class InvalidRequestFieldError(ValidationError):
+    """The request carries a member the API does not take (400
+    ``INVALID_REQUEST_FIELD``): an unknown top-level member of a request body,
+    or one the endpoint does not support.
+
+    ``field`` is the member's path in the body, ``key`` the member itself and
+    ``suggestion`` the nearest valid member, or None when nothing is close.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        field: Optional[str] = None,
+        key: Optional[str] = None,
+        suggestion: Optional[str] = None,
+        **kwargs,
+    ):
+        super().__init__(message, **kwargs)
+        self.field = field
+        self.key = key
+        self.suggestion = suggestion
+
+
+class InvalidFilterError(ValidationError):
+    """A filter carries a key the API does not know (400 ``INVALID_FILTER``).
+
+    ``field`` is the key's JSON path (``filter.must[0].mach``), ``key`` the
+    unknown key and ``suggestion`` the nearest valid key, or None when
+    nothing is close. The sibling of :class:`InvalidRequestFieldError`, which
+    is the same answer for a member of the request body outside any filter.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        field: Optional[str] = None,
+        key: Optional[str] = None,
+        suggestion: Optional[str] = None,
+        **kwargs,
+    ):
+        super().__init__(message, **kwargs)
+        self.field = field
+        self.key = key
+        self.suggestion = suggestion
 
 
 class NotFoundError(AetherfyVectorsException):
@@ -218,7 +349,7 @@ class CollectionInOtherRegionError(AetherfyVectorsException):
         self.requesting_region = requesting_region
 
 
-class AgentWorkspaceForbiddenError(AetherfyVectorsException):
+class AgentWorkspaceForbiddenError(PermissionDeniedError):
     """An agent's API key addressed a workspace it has not been granted.
 
     The key Aetherfy injects into a deployed agent reaches its own workspace
@@ -277,20 +408,38 @@ class WorkspaceNotFoundError(NotFoundError):
 
 
 class QuotaExceededError(AetherfyVectorsException):
-    """Tier quota exceeded (e.g. collection count limit)."""
+    """A plan limit or the storage quota is reached.
+
+    Raised for 403 ``PLAN_LIMIT_EXCEEDED`` and 429 ``STORAGE_LIMIT_EXCEEDED``.
+    It is not a :class:`PermissionDeniedError`: the key may do this, the
+    account is at its cap.
+
+    * ``quota_type``: what ran out (``"collections"``, ``"storage"``, ...).
+    * ``limit``: the limit's name as the server sends it (``"max_collections"``),
+      or None where it names none (storage).
+    * ``allowed``: the plan's number, ``False`` for a feature the plan does
+      not include, or None where the plan has no cap.
+    * ``current``: the usage now, or None for a yes/no feature (the server
+      sends none).
+    * ``upgrade_url``: where to raise the cap, or None.
+    """
 
     def __init__(
         self,
         message: str,
         quota_type: str,
         current: Optional[int] = None,
-        limit: Optional[int] = None,
+        limit: Optional[str] = None,
+        allowed: Union[int, bool, None] = None,
+        upgrade_url: Optional[str] = None,
         **kwargs,
     ):
         super().__init__(message, **kwargs)
         self.quota_type = quota_type
         self.current = current
         self.limit = limit
+        self.allowed = allowed
+        self.upgrade_url = upgrade_url
 
 
 class SchemaNotFoundError(NotFoundError):

@@ -16,7 +16,7 @@ from aetherfy_memory import MemoryClient, NamespaceNotFoundError
 from aetherfy_vectors import AetherfyVectorsClient, WorkspaceNotFoundError
 from aetherfy_vectors.exceptions import (
     AetherfyVectorsException,
-    AuthenticationError,
+    AgentKeyOutOfScopeError,
     CollectionNotFoundError,
     ConflictError,
     PointNotFoundError,
@@ -82,7 +82,7 @@ COLLECTION_NOT_FOUND = body(
                 required_scope=None,
                 documentation_url="https://docs.aetherfy.com/platform/api-keys",
             ),
-            AuthenticationError,
+            AgentKeyOutOfScopeError,
         ),
         (503, body("WORKSPACE_LOOKUP_UNAVAILABLE"), ServiceUnavailableError),
         (
@@ -306,7 +306,7 @@ def test_control_collection_not_found_evicts_the_schema_cache(wired):
 
 def test_usage_stats_with_an_agent_key_is_the_typed_scope_refusal(wired):
     """GET /analytics/usage is account-only: an agent key gets 403
-    AUTH_AGENT_KEY_OUT_OF_SCOPE (vectordb utils/agentRoutePolicy.js)."""
+    AUTH_AGENT_KEY_OUT_OF_SCOPE."""
     client, _ = wired
     client.session.request = Mock(
         return_value=_response(
@@ -314,9 +314,10 @@ def test_usage_stats_with_an_agent_key_is_the_typed_scope_refusal(wired):
         )
     )
 
-    with pytest.raises(AuthenticationError) as exc:
+    with pytest.raises(AgentKeyOutOfScopeError) as exc:
         client.get_usage_stats()
     assert exc.value.error_code == "AUTH_AGENT_KEY_OUT_OF_SCOPE"
+    assert exc.value.agent_id == "a1"
 
 
 # ===========================================================================

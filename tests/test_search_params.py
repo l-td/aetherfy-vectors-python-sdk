@@ -65,16 +65,18 @@ class TestSearchParamsSerialization:
     def test_params_are_not_enumerated_or_translated(
         self, searching_client, mock_requests
     ):
-        """The SDK must not know the schema. An arbitrary key the SDK has
-        never heard of — including one Qdrant may add tomorrow — passes
-        through byte-identically, snake_case and nesting intact. If this test
-        ever needs updating for a new param name, the pass-through has grown
-        an allowlist and become a compatibility treadmill."""
+        """The SDK must not know the schema. Whatever the caller passes goes
+        through byte-identically, snake_case and nesting intact; the API
+        judges the names (an unknown one is a 400 INVALID_REQUEST_FIELD, see
+        test_invalid_filter.py). If this test ever needs a list of names in
+        the SDK, the pass-through has grown an allowlist and become a
+        compatibility treadmill."""
         opaque = {
             "hnsw_ef": 512,
             "exact": False,
             "quantization": {"rescore": True, "oversampling": 2.0},
-            "some_param_invented_after_this_sdk_shipped": ["a", 1, None],
+            "indexed_only": True,
+            "acorn": {"enable": True, "max_selectivity": 0.4},
         }
 
         searching_client.search("test_collection", QUERY_VECTOR, search_params=opaque)

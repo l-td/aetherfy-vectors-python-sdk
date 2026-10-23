@@ -9,6 +9,7 @@ import json
 import random
 import re
 import time
+from email.utils import parsedate_to_datetime
 from typing import Any, Dict, List, Optional, Union, Callable
 
 from .exceptions import ValidationError, AetherfyVectorsException
@@ -164,22 +165,19 @@ def validate_point_id(point_id: Union[str, int]) -> None:
     )
 
 
-# Filter clause vocabulary, in the order the request body carries it.
+# Filter clauses, in the order the request body carries them.
 #
-# The three keys are already the WIRE names — Python's vocabulary is
-# snake_case, so `must_not` needs no translation and `Filter.to_dict()` has
-# always emitted it correctly. What was missing is the other half of the
-# contract: every filter-taking method also accepts a plain dict, and that
-# dict was forwarded to the engine VERBATIM. A caller who wrote
-# `{"mustNot": [...]}` — the spelling the JS SDK uses, and the natural guess
-# for anyone arriving from those docs — had the whole exclusion clause
-# dropped on the floor. No error, no warning; the points they meant to
-# exclude came back in the results.
+# The API judges every key of a filter: an unknown one is a 400
+# INVALID_FILTER naming its path and the nearest valid key, which becomes
+# `InvalidFilterError`. The SDK therefore keeps no clause vocabulary of its
+# own to check against (a local list can only lag the API: it refused
+# `min_should` for as long as it existed), and a plain dict is forwarded as
+# written. The names below fix only the ORDER of the keys the SDK knows.
 #
 # Insertion order IS the emitted order. Server cache keys are derived from
 # the request body BYTES, so a fixed order means two callers who wrote the
 # same clauses in different orders share one cache entry instead of two.
-_FILTER_CLAUSES = ("must", "must_not", "should")
+_FILTER_CLAUSES = ("must", "must_not", "should", "min_should")
 
 
 def serialize_filter(filter_obj: Any, method_name: str) -> Optional[Dict[str, Any]]:
@@ -195,10 +193,9 @@ def serialize_filter(filter_obj: Any, method_name: str) -> Optional[Dict[str, An
         bytes unchanged).
 
     Raises:
-        ValidationError: If a dict carries a key outside must/must_not/should.
-            Unknown keys FAIL rather than pass through: silently forwarding
-            an unrecognized clause is exactly how the camelCase spelling
-            stayed invisible.
+        ValidationError: If ``filter_obj`` is neither a ``Filter`` nor a dict.
+            The keys of a dict are not judged here: the API answers an
+            unknown one with ``InvalidFilterError``.
     """
     # Import here: models imports nothing from utils today, and a
     # module-level import would create a cycle if that ever changes.
@@ -213,21 +210,17 @@ def serialize_filter(filter_obj: Any, method_name: str) -> Optional[Dict[str, An
     if not isinstance(filter_obj, dict):
         raise ValidationError(
             f"{method_name}: filter must be a Filter or a dict with "
-            f"must / must_not / should clauses, got "
+            f"must / must_not / should / min_should clauses, got "
             f"{type(filter_obj).__name__}."
         )
 
-    unknown = [k for k in filter_obj if k not in _FILTER_CLAUSES]
-    if unknown:
-        hint = ""
-        if "mustNot" in unknown:
-            hint = " Write the clause as `must_not`; `mustNot` is the JavaScript SDK's spelling."
-        raise ValidationError(
-            f"{method_name}: unknown filter clause(s): {', '.join(sorted(unknown))}. "
-            f"Valid clauses are must, must_not, should.{hint}"
-        )
-
-    return {k: filter_obj[k] for k in _FILTER_CLAUSES if filter_obj.get(k) is not None}
+    known = {k: filter_obj[k] for k in _FILTER_CLAUSES if filter_obj.get(k) is not None}
+    others = {
+        k: v
+        for k, v in filter_obj.items()
+        if k not in _FILTER_CLAUSES and v is not None
+    }
+    return {**known, **others}
 
 
 def build_api_url(base_url: str, endpoint: str) -> str:
@@ -245,8 +238,51 @@ def build_api_url(base_url: str, endpoint: str) -> str:
     return f"{base}/api/v1/{path}"
 
 
+def _is_count(value: Any) -> bool:
+    """A number the server counted with: an int, and not a bool."""
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _is_allowed(value: Any) -> bool:
+    """A plan limit's ``allowed``: a number, ``False``, or None for no cap."""
+    return _is_count(value) or value is False or value is None
+
+
+def _text(value: Any) -> Optional[str]:
+    """A string field of an error body, or None when absent or not a string."""
+    return value if isinstance(value, str) else None
+
+
+def parse_retry_after(value: Any, now: Optional[float] = None) -> Optional[float]:
+    """Seconds a ``Retry-After`` header asks to wait, or None when unreadable.
+
+    The header is either a number of seconds or an HTTP date. Anything else
+    (absent, empty, negative, not a string) is None, and the caller falls back
+    to its own backoff. ``now`` (epoch seconds) is for tests.
+    """
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        seconds = float(text)
+    except ValueError:
+        try:
+            when = parsedate_to_datetime(text)
+        except (TypeError, ValueError):
+            return None
+        if when.tzinfo is None:
+            return None
+        seconds = when.timestamp() - (time.time() if now is None else now)
+        return max(seconds, 0.0)
+    if seconds != seconds or seconds < 0 or seconds == float("inf"):
+        return None
+    return seconds
+
+
 def parse_error_response(
-    response_data: Any, status_code: int
+    response_data: Any, status_code: int, headers: Any = None
 ) -> AetherfyVectorsException:
     """Parse error response from API and return appropriate exception.
 
@@ -261,6 +297,8 @@ def parse_error_response(
             input into a synthetic ``{"message": ...}`` so the rest of
             the mapping logic is uniform.
         status_code: HTTP status code.
+        headers: The response headers, when there are any: a 5xx refusal
+            carries the ``Retry-After`` it names.
 
     Returns:
         Appropriate exception instance.
@@ -327,13 +365,16 @@ def parse_error_response(
         if error_code == "STORAGE_LIMIT_EXCEEDED":
             from .exceptions import QuotaExceededError
 
-            current = details.get("current") if isinstance(details, dict) else None
-            limit = details.get("limit") if isinstance(details, dict) else None
+            # The numbers are nested: error.details.{current_bytes, limit_bytes}.
+            nested = details.get("details") if isinstance(details, dict) else None
+            nested = nested if isinstance(nested, dict) else {}
+            current = nested.get("current_bytes")
+            allowed = nested.get("limit_bytes")
             return QuotaExceededError(
                 message,
                 "storage",
-                current=current,
-                limit=limit,
+                current=current if _is_count(current) else None,
+                allowed=allowed if _is_count(allowed) else None,
                 request_id=request_id,
                 status_code=status_code,
                 details=details,
@@ -349,49 +390,69 @@ def parse_error_response(
             error_code=error_code,
         )
     elif status_code == 403:
-        if error_code == "PLAN_LIMIT_EXCEEDED":
-            from .exceptions import QuotaExceededError
-
-            # The plan-limit answer, the control plane's shape: `limit` NAMES
-            # the axis ("max_collections"), `current` is the count in use and
-            # the plan's number sits under the axis' own name.
-            d = details if isinstance(details, dict) else {}
-            axis = d.get("limit")
-            plan_value = d.get(axis) if isinstance(axis, str) else None
-            current = d.get("current")
-            return QuotaExceededError(
-                message,
-                axis.removeprefix("max_") if isinstance(axis, str) else "plan",
-                current=current if isinstance(current, int) else None,
-                limit=plan_value if isinstance(plan_value, int) else None,
-                request_id=request_id,
-                status_code=status_code,
-                details=details,
-                error_code=error_code,
-            )
-        if error_code == "AGENT_KEY_WORKSPACE_FORBIDDEN":
-            from .exceptions import AgentWorkspaceForbiddenError
-
-            workspace = details.get("workspace") if isinstance(details, dict) else None
-            return AgentWorkspaceForbiddenError(
-                workspace,
-                request_id=request_id,
-                status_code=status_code,
-                details=details,
-                error_code=error_code,
-            )
-        # Every other refusal of this key, e.g. AUTH_AGENT_KEY_OUT_OF_SCOPE
-        # (an agent key on an account-only route).
-        return AuthenticationError(
-            message,
+        # By code first, then by status: a 403 is "the key is valid and this
+        # is not allowed", never "the key is wrong" (that is the 401 above).
+        d = details if isinstance(details, dict) else {}
+        carried = dict(
             request_id=request_id,
             status_code=status_code,
             details=details,
             error_code=error_code,
         )
+        if error_code == "PLAN_LIMIT_EXCEEDED":
+            from .exceptions import QuotaExceededError
+
+            axis = d.get("limit")
+            current = d.get("current")
+            return QuotaExceededError(
+                message,
+                axis.removeprefix("max_") if isinstance(axis, str) else "plan",
+                current=current if _is_count(current) else None,
+                limit=axis if isinstance(axis, str) else None,
+                allowed=d.get("allowed") if _is_allowed(d.get("allowed")) else None,
+                upgrade_url=_text(d.get("upgrade_url")),
+                **carried,
+            )
+        if error_code == "AGENT_KEY_WORKSPACE_FORBIDDEN":
+            from .exceptions import AgentWorkspaceForbiddenError
+
+            return AgentWorkspaceForbiddenError(
+                _text(d.get("workspace")), message=None, **carried
+            )
+        if error_code == "AGENT_ACCESS_LEVEL_INSUFFICIENT":
+            from .exceptions import AccessLevelInsufficientError
+
+            return AccessLevelInsufficientError(
+                message,
+                workspace=_text(d.get("workspace")),
+                level=_text(d.get("level")),
+                required_level=_text(d.get("required_level")),
+                **carried,
+            )
+        if error_code == "COLLECTION_PROTECTED":
+            from .exceptions import CollectionProtectedError
+
+            return CollectionProtectedError(
+                message, collection_name=_text(d.get("collection_name")), **carried
+            )
+        if error_code == "AUTH_AGENT_KEY_OUT_OF_SCOPE":
+            from .exceptions import AgentKeyOutOfScopeError
+
+            return AgentKeyOutOfScopeError(
+                message,
+                agent_id=_text(d.get("agent_id")),
+                required_scope=_text(d.get("required_scope")),
+                **carried,
+            )
+        from .exceptions import PermissionDeniedError
+
+        return PermissionDeniedError(message, **carried)
     elif status_code in [502, 503, 504]:
         return ServiceUnavailableError(
             message,
+            retry_after=parse_retry_after(
+                headers.get("Retry-After") if hasattr(headers, "get") else None
+            ),
             request_id=request_id,
             status_code=status_code,
             details=details,
@@ -453,6 +514,33 @@ def parse_error_response(
             error_code=error_code,
         )
     elif status_code == 400:
+        d = details if isinstance(details, dict) else {}
+        if error_code == "INVALID_FILTER":
+            from .exceptions import InvalidFilterError
+
+            return InvalidFilterError(
+                message,
+                field=_text(d.get("field")),
+                key=_text(d.get("key")),
+                suggestion=_text(d.get("suggestion")),
+                request_id=request_id,
+                status_code=status_code,
+                details=details,
+                error_code=error_code,
+            )
+        if error_code == "INVALID_REQUEST_FIELD":
+            from .exceptions import InvalidRequestFieldError
+
+            return InvalidRequestFieldError(
+                message,
+                field=_text(d.get("field")),
+                key=_text(d.get("key")),
+                suggestion=_text(d.get("suggestion")),
+                request_id=request_id,
+                status_code=status_code,
+                details=details,
+                error_code=error_code,
+            )
         return ValidationError(
             message,
             request_id=request_id,
@@ -603,7 +691,8 @@ def retry_with_backoff(
             whether repeating the operation gives the same result.
         max_retries: Maximum number of retries.
         base_delay: Base delay between retries in seconds.
-        max_delay: Maximum delay cap in seconds.
+        max_delay: Maximum delay cap in seconds. It also caps a wait the
+            server asked for with ``Retry-After`` on a 503.
         deadline: Optional ``time.monotonic()`` instant after which no retry
             may start. A backoff sleep that would end at or past it is not
             taken: the last error is raised instead. ``func`` owns bounding
@@ -615,6 +704,7 @@ def retry_with_backoff(
     Raises:
         Last exception if all retries fail.
     """
+    from .exceptions import ServiceUnavailableError
     from .retry_policy import should_retry_class
 
     last_exception = None
@@ -628,9 +718,16 @@ def retry_with_backoff(
             should_retry = should_retry_class(retry_class, e)
 
             if should_retry and attempt < max_retries:
-                delay = min(base_delay * (2**attempt), max_delay)
-                # Add jitter (50-100% of delay)
-                delay = delay * (0.5 + 0.5 * random.random())
+                asked = getattr(e, "retry_after", None)
+                if isinstance(e, ServiceUnavailableError) and asked is not None:
+                    # The server said how long to wait: wait that, no jitter,
+                    # but never past the cap. The deadline check below still
+                    # applies, so a long ask cannot outlive the call.
+                    delay = min(asked, max_delay)
+                else:
+                    delay = min(base_delay * (2**attempt), max_delay)
+                    # Add jitter (50-100% of delay)
+                    delay = delay * (0.5 + 0.5 * random.random())
                 if deadline is not None and time.monotonic() + delay >= deadline:
                     break
                 time.sleep(delay)

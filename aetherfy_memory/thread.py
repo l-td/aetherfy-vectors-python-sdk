@@ -16,10 +16,9 @@ add-substitutable for a Namespace. Both share the read/scope surface via
 EVERY THREAD IN A WORKSPACE SHARES ONE COLLECTION (`__threads__`), and a
 thread is a FILTER over it: `thread_id` is stamped on every point and every
 read and write this class issues carries the matching clause. The clause is
-assembled here, never from a caller-supplied string, because the proxy
-forwards filters verbatim and a misspelled key fails OPEN -- a successful
-response with every thread's points in it. A caller's own filter is
-COMBINED with the thread clause, never substituted for it.
+assembled here, never from a caller-supplied string: the scope must not
+depend on anything a caller typed. A caller's own filter is COMBINED with
+the thread clause, never substituted for it.
 
 One MARKER point per thread (written by `create_thread`) is what makes an
 empty thread exist. It is not a message and must never read as one, so
@@ -89,12 +88,11 @@ class Thread(_Scope):
         arrays. Since Aetherfy composes the three clause arrays as a
         conjunction (everything in `must` holds AND at least one `should`
         holds AND nothing in `must_not` holds), no caller clause — `should`
-        included — can widen the result past this thread.
+        and `min_should` included — can widen the result past this thread.
 
-        `serialize_filter` does the `Filter` → dict normalisation and
-        rejects a clause name outside must / must_not / should, so a caller
-        typo at the clause level still fails loudly rather than being
-        merged in as an unknown key.
+        `serialize_filter` does the `Filter` → dict normalisation. A clause
+        name the SDK does not know is forwarded as it is, so the API refuses
+        it (`InvalidFilterError`) instead of the merge dropping it.
         """
         combined: Dict[str, Any] = {
             "must": [self._thread_clause()],
@@ -106,6 +104,9 @@ class Thread(_Scope):
             combined["must_not"].extend(caller.get("must_not") or [])
             if caller.get("should"):
                 combined["should"] = list(caller["should"])
+            for key, value in caller.items():
+                if key not in ("must", "must_not", "should"):
+                    combined[key] = value
         return combined
 
     def _own_filter(self) -> Dict[str, Any]:
@@ -123,11 +124,8 @@ class Thread(_Scope):
         """True iff `point` is a thread's marker rather than a message.
 
         The filter already excludes markers server-side. This is the second,
-        independent guard, and it earns its place because the FIRST one fails
-        open: the proxy forwards a filter verbatim and never validates it, so
-        a mistyped clause returns a successful response with unfiltered
-        results. A marker reading as a message would put an empty `role` and
-        an empty `content` into a caller's conversation.
+        independent guard: a marker reading as a message would put an empty
+        `role` and an empty `content` into a caller's conversation.
         """
         return (point.get("payload") or {}).get(THREAD_MARKER_KEY) is True
 
@@ -153,12 +151,10 @@ class Thread(_Scope):
         """Address these ids AND this thread, in one request.
 
         `has_id` is a first-class Qdrant condition — it is in the pinned
-        client's generated schema (@qdrant/js-client-rest 1.15.0, the
-        version the fleet runs) alongside FieldCondition in the Condition
-        union. That matters because the proxy forwards a filter verbatim
-        and an unrecognised key would quietly do nothing: here, silently
-        dropping the `has_id` clause would widen a single-point delete to
-        the whole thread. It is not an unverified guess.
+        client's generated schema alongside FieldCondition in the Condition
+        union, and the API refuses a filter key it does not know, so the
+        clause cannot be silently dropped and widen a single-point delete to
+        the whole thread.
 
         Scoping this way rather than checking ids client-side first means
         the ENGINE enforces the boundary, so a later caller who reaches

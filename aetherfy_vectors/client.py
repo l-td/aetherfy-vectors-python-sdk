@@ -577,7 +577,9 @@ class AetherfyVectorsClient:
                     # the collection no longer exists upstream (e.g. a
                     # cross-client delete). Drop the local caches so the
                     # next call doesn't keep believing the cached entry.
-                    error = parse_error_response(error_data, response.status_code)
+                    error = parse_error_response(
+                        error_data, response.status_code, response.headers
+                    )
                     if evict_caches_on_404 is not None and isinstance(
                         error, CollectionNotFoundError
                     ):
@@ -1833,11 +1835,13 @@ class AetherfyVectorsClient:
             data["score_threshold"] = score_threshold
 
         # Untranslated pass-through. Enumerating or validating param names here
-        # would make the SDK a compatibility treadmill behind Qdrant's own
-        # schema; the backend forwards the search body verbatim, so anything
-        # the engine accepts works without an SDK release. Added last and only
-        # when present, so the default body is byte-for-byte what it was
-        # before this option existed (server cache keys are body-derived).
+        # would make the SDK a compatibility treadmill behind the engine's own
+        # schema. The API checks the names itself and answers an unknown one
+        # with a 400 INVALID_REQUEST_FIELD naming its path (the SDK raises
+        # InvalidRequestFieldError), so a misspelt parameter is never ignored
+        # silently. Added last and only when present, so the default body is
+        # byte-for-byte what it was before this option existed (server cache
+        # keys are body-derived).
         if search_params is not None:
             data["params"] = search_params
 

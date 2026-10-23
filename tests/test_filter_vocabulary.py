@@ -1,19 +1,17 @@
 """
 Wire contract for the filter clause vocabulary.
 
-Python's vocabulary IS the wire vocabulary — `Filter.to_dict()` has always
-emitted `must` / `must_not` / `should` correctly, which is why the JS SDK's
-`mustNot` defect had no direct Python analogue. But only half the contract
-was covered: every filter-taking method also accepts a plain dict, and that
-dict went to the engine VERBATIM. A caller who wrote `{"mustNot": [...]}` —
-the JavaScript spelling, and the natural guess for anyone arriving from
-those docs — had the entire exclusion clause dropped. No error, no warning;
-the points they meant to exclude came back in the results, which is easy to
-miss in a test that only asserts on the top hit.
+Python's vocabulary IS the wire vocabulary — `Filter.to_dict()` emits
+`must` / `must_not` / `should` / `min_should` as they go on the wire. A
+filter-taking method also accepts a plain dict, and a clause name the engine
+does not know used to be dropped without a word (`{"mustNot": [...]}`, the
+JavaScript spelling, excluded nothing).
 
-So the two SDKs now enforce the same discipline from opposite directions:
-each accepts its own idiom and rejects the other's LOUDLY, rather than
-forwarding a clause the engine will ignore.
+The API now judges every key of a filter and answers an unknown one with a
+400 INVALID_FILTER naming its path and the nearest valid key, so the SDK keeps
+no clause list of its own (one that can only lag the API: it refused
+`min_should` for as long as it existed) and forwards a dict as written. The
+mapping of that answer is tested in test_invalid_filter.py.
 
 Four call sites take a filter — search, scroll, delete-by-filter, count —
 and all four are covered here. `count` also gained `Filter` support; it
@@ -75,22 +73,24 @@ class TestSerializeFilter:
             "must": MUST
         }
 
-    def test_camel_case_clause_raises_and_names_the_right_spelling(self):
-        """The regression case: this used to reach the wire and be ignored."""
-        with pytest.raises(ValidationError) as exc:
-            serialize_filter({"mustNot": MUST_NOT}, "search")
-        assert "mustNot" in str(exc.value)
-        assert "must_not" in str(exc.value)
+    def test_min_should_is_a_clause_of_both_forms(self):
+        min_should = {"conditions": SHOULD, "min_count": 1}
+        assert serialize_filter(Filter(min_should=min_should), "search") == {
+            "min_should": min_should
+        }
+        assert serialize_filter({"must": MUST, "min_should": min_should}, "search") == {
+            "must": MUST,
+            "min_should": min_should,
+        }
 
-    def test_typo_raises(self):
-        with pytest.raises(ValidationError) as exc:
-            serialize_filter({"mustnot": MUST_NOT}, "search")
-        assert "mustnot" in str(exc.value)
-
-    def test_error_names_the_calling_method(self):
-        with pytest.raises(ValidationError) as exc:
-            serialize_filter({"nope": []}, "count")
-        assert str(exc.value).startswith("count: unknown filter clause")
+    def test_a_clause_the_sdk_does_not_know_is_forwarded_as_written(self):
+        """The API judges clause names (400 INVALID_FILTER with the path and
+        the nearest valid key), so the SDK neither keeps a list that can lag
+        it nor drops what it does not recognise. Known clauses keep their
+        fixed order; the rest follow in the caller's order."""
+        out = serialize_filter({"mustNot": MUST_NOT, "must": MUST, "nope": []}, "count")
+        assert list(out) == ["must", "mustNot", "nope"]
+        assert out["mustNot"] == MUST_NOT
 
     def test_non_dict_non_filter_raises(self):
         with pytest.raises(ValidationError) as exc:
@@ -158,9 +158,11 @@ class TestCallSites:
         ],
         ids=["search", "scroll", "count", "delete"],
     )
-    def test_camel_case_never_reaches_the_wire(self, monkeypatch, call):
+    def test_an_unknown_clause_reaches_the_api_to_be_judged(self, monkeypatch, call):
         client = self._client(monkeypatch)
         sent = self._capture(client, monkeypatch, {"result": []})
-        with pytest.raises(ValidationError):
+        try:
             call(client)
-        assert sent == {}, "the request must not be sent at all"
+        except Exception:
+            pass  # the fake answers a shape some methods do not parse
+        assert sent["data"]["filter"] == {"mustNot": MUST_NOT}
