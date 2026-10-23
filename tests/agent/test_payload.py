@@ -80,7 +80,7 @@ def test_falls_back_to_http_when_the_variable_is_unset(monkeypatch):
 
     def fake_request(method, url, *, api_key, ua, body=None, **kwargs):
         calls.append((method, url, api_key, ua, body))
-        return 200, {"payload": {"date": "2026-09-07"}}
+        return 200, {"payload": {"date": "2026-09-07"}}, None
 
     monkeypatch.setattr(aetherfy_agent._http, "request_json", fake_request)
 
@@ -105,7 +105,7 @@ def test_falls_back_to_http_when_the_file_is_missing(tmp_path, monkeypatch):
     monkeypatch.setattr(
         aetherfy_agent._http,
         "request_json",
-        lambda *a, **k: (200, {"payload": {"from": "fallback"}}),
+        lambda *a, **k: (200, {"payload": {"from": "fallback"}}, None),
     )
 
     assert payload() == {"from": "fallback"}
@@ -116,7 +116,7 @@ def test_fallback_empty_payload_is_an_empty_dict(monkeypatch):
     monkeypatch.setenv("AETHERFY_SPAWN_ID", "dep-42")
     monkeypatch.setenv("AETHERFY_API_KEY", "afy_test_key")
     monkeypatch.setattr(
-        aetherfy_agent._http, "request_json", lambda *a, **k: (200, {"payload": {}})
+        aetherfy_agent._http, "request_json", lambda *a, **k: (200, {"payload": {}}, None)
     )
 
     assert payload() == {}
@@ -132,6 +132,7 @@ def test_fallback_error_status_raises(monkeypatch):
         lambda *a, **k: (
             404,
             {"detail": {"code": "DEPLOYMENT_NOT_FOUND", "message": "no such run"}},
+            None,
         ),
     )
 
@@ -176,7 +177,7 @@ def test_the_spawn_id_is_quoted_in_the_fallback_url(monkeypatch):
 
     def transport(method, url, **kwargs):
         seen.append(url)
-        return 200, {"payload": {}}
+        return 200, {"payload": {}}, None
 
     monkeypatch.setattr(aetherfy_agent._http, "request_json", transport)
     aetherfy_agent.payload()

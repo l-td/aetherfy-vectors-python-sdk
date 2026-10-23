@@ -56,7 +56,7 @@ def test_the_headers_and_body_go_out_as_json(monkeypatch):
         seen["method"] = request.get_method()
         return FakeResponse(202, {"status": "queued"})
 
-    status, body = call(monkeypatch, urlopen)
+    status, body, _ = call(monkeypatch, urlopen)
 
     assert status == 202
     assert body == {"status": "queued"}
@@ -80,7 +80,7 @@ def test_an_http_error_status_is_returned_not_raised(monkeypatch):
             io.BytesIO(json.dumps(envelope).encode("utf-8")),
         )
 
-    status, body = call(monkeypatch, urlopen)
+    status, body, _ = call(monkeypatch, urlopen)
 
     assert status == 409
     assert body == envelope
@@ -123,7 +123,7 @@ def test_a_retried_connection_failure_can_succeed(monkeypatch):
             raise urllib.error.URLError("dns blip")
         return FakeResponse(202, {"status": "queued"})
 
-    status, body = call(monkeypatch, urlopen)
+    status, body, _ = call(monkeypatch, urlopen)
 
     assert len(attempts) == 2
     assert (status, body) == (202, {"status": "queued"})
@@ -146,7 +146,7 @@ def test_a_body_that_fails_mid_read_is_not_retried(monkeypatch):
         attempts.append(1)
         return Truncated()
 
-    status, body = call(monkeypatch, urlopen)
+    status, body, _ = call(monkeypatch, urlopen)
 
     assert len(attempts) == 1, "a body failure must not re-send the request"
     assert status == 202
@@ -161,7 +161,47 @@ def test_a_non_json_body_decodes_to_none(monkeypatch):
         response.__exit__ = lambda *exc: False
         return response
 
-    status, body = call(monkeypatch, urlopen)
+    status, body, _ = call(monkeypatch, urlopen)
 
     assert status == 403
     assert body is None
+
+
+# -- Retry-After --------------------------------------------------------------
+
+
+def _refusal(status, headers):
+    def urlopen(request, timeout=None):
+        raise urllib.error.HTTPError(
+            request.full_url, status, "x", headers, io.BytesIO(b"{}")
+        )
+
+    return urlopen
+
+
+@pytest.mark.parametrize("status", [429, 503])
+def test_the_retry_after_header_is_returned_in_seconds(monkeypatch, status):
+    _, _, retry_after = call(monkeypatch, _refusal(status, {"Retry-After": "7"}))
+    assert retry_after == 7.0
+
+
+@pytest.mark.parametrize("value", ["", "soon", "-3", "nan"])
+def test_an_unreadable_retry_after_is_none(monkeypatch, value):
+    _, _, retry_after = call(monkeypatch, _refusal(429, {"Retry-After": value}))
+    assert retry_after is None
+
+
+def test_a_refusal_without_the_header_has_none(monkeypatch):
+    assert call(monkeypatch, _refusal(503, {}))[2] is None
+
+
+def test_a_status_with_retry_after_is_still_never_retried(monkeypatch):
+    """The helper reports the time; waiting it is the caller's decision."""
+    attempts = []
+
+    def urlopen(request, timeout=None):
+        attempts.append(1)
+        return _refusal(429, {"Retry-After": "1"})(request, timeout)
+
+    call(monkeypatch, urlopen)
+    assert len(attempts) == 1

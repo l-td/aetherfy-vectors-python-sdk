@@ -70,6 +70,13 @@ because they are true.
   for the caller to decide. The call's own deadline still applies. An absent
   or unreadable header keeps the exponential backoff.
 
+- **The agent helper reports a refusal's `Retry-After`.** `SpawnError`,
+  `TooManyRunsInFlight` and `RunReadError` carry `retry_after`, the seconds the
+  control plane's `Retry-After` header asked to wait (`None` when absent or
+  unreadable). The helper still never retries a spawn or a read itself (a spawn
+  repeated after the control plane recorded it would be a second run); a caller
+  that retries waits at least that long, since a repeat before it is refused again.
+
 ### Fixed
 
 - `QuotaExceededError` for the storage quota (`429 STORAGE_LIMIT_EXCEEDED`)

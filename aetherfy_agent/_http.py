@@ -20,6 +20,8 @@ import urllib.error
 import urllib.request
 from typing import Any, Dict, Optional, Tuple
 
+from aetherfy_vectors.utils import parse_retry_after
+
 from .exceptions import AgentTransportError
 
 #: Sent on every request this module makes. Version-stamped so a platform-side
@@ -51,6 +53,12 @@ def _read_json(stream: Any) -> Any:
         return None
 
 
+def _retry_after_of(response: Any) -> Optional[float]:
+    """The ``Retry-After`` header of a response, in seconds, or None."""
+    headers = getattr(response, "headers", None)
+    return parse_retry_after(headers.get("Retry-After") if headers else None)
+
+
 def request_json(
     method: str,
     url: str,
@@ -60,9 +68,13 @@ def request_json(
     body: Optional[Dict[str, Any]] = None,
     timeout: float = DEFAULT_TIMEOUT,
     retry_connection_errors: bool = True,
-) -> Tuple[int, Any]:
+) -> Tuple[int, Any, Optional[float]]:
     """
-    Send one JSON request and return ``(status_code, parsed_body)``.
+    Send one JSON request and return ``(status_code, parsed_body, retry_after)``.
+
+    ``retry_after`` is the seconds the response's ``Retry-After`` header asked
+    to wait (a number or an HTTP date), or None when it sent none or an
+    unreadable one. Nothing here waits it: see below.
 
     An HTTP error status is a RETURN, not a raise: the caller maps 413 and 429
     onto its own types and needs the body to do it. Only a request that never
@@ -72,7 +84,9 @@ def request_json(
     socket on the way out, where nothing was recorded and repeating is safe. An
     HTTP status is never retried here: a 4xx repeated is a 4xx, and retrying a
     spawn that the control plane may already have recorded would create a
-    second run. The caller decides whether a 429 is worth waiting on.
+    second run. The caller decides whether a 429 is worth waiting on, and
+    ``retry_after`` is what it decides with: a retry before that time is
+    refused again.
     """
     data = None
     headers = {
@@ -98,14 +112,18 @@ def request_json(
         try:
             response = urllib.request.urlopen(request, timeout=timeout)
         except urllib.error.HTTPError as exc:  # a status, not a transport failure
-            return exc.code, _read_json(exc)
+            return exc.code, _read_json(exc), _retry_after_of(exc)
         except (urllib.error.URLError, OSError) as exc:
             last_error = exc
             if attempt + 1 >= attempts:
                 break
             continue
         with response:
-            return response.getcode(), _read_json(response)
+            return (
+                response.getcode(),
+                _read_json(response),
+                _retry_after_of(response),
+            )
 
     raise AgentTransportError(
         "{0} {1} did not reach the Aetherfy control plane after "

@@ -99,6 +99,7 @@ class SpawnError(AgentError):
         status_code: Optional[int] = None,
         error_code: Optional[str] = None,
         details: Optional[Dict[str, Any]] = None,
+        retry_after: Optional[float] = None,
     ):
         super().__init__(
             message,
@@ -106,6 +107,7 @@ class SpawnError(AgentError):
             details=details,
             error_code=error_code,
         )
+        self.retry_after = retry_after
 
 
 class PayloadTooLarge(SpawnError):
@@ -141,6 +143,9 @@ class TooManyRunsInFlight(SpawnError):
     runs-in-flight cap is full.
 
     Retryable, unlike the other two: wait for runs to finish and spawn again.
+    ``retry_after`` is the seconds the control plane's ``Retry-After`` header
+    asked to wait, or None; a spawn repeated before that time is refused
+    again. This helper never retries a spawn itself.
 
     THE CAP IS THE ACCOUNT'S, NOT THE AGENT'S, and it is set by the plan.
     ``limit`` names WHICH plan limit was hit — a stable string the platform
@@ -162,12 +167,14 @@ class TooManyRunsInFlight(SpawnError):
         limit: Optional[str] = None,
         max_in_flight_runs: Optional[int] = None,
         details: Optional[Dict[str, Any]] = None,
+        retry_after: Optional[float] = None,
     ):
         super().__init__(
             message,
             status_code=429,
             error_code=AGENT_RUN_CONCURRENCY_LIMIT_EXCEEDED,
             details=details,
+            retry_after=retry_after,
         )
         self.in_flight_count = in_flight_count
         self.limit = limit
@@ -246,6 +253,7 @@ class RunReadError(AgentError):
         status_code: Optional[int] = None,
         error_code: Optional[str] = None,
         details: Optional[Dict[str, Any]] = None,
+        retry_after: Optional[float] = None,
     ):
         super().__init__(
             message,
@@ -253,6 +261,7 @@ class RunReadError(AgentError):
             details=details,
             error_code=error_code,
         )
+        self.retry_after = retry_after
 
 
 class RunNotFound(RunReadError):

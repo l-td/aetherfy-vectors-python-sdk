@@ -222,7 +222,7 @@ def payload() -> Dict[str, Any]:
     url = "{0}/deployments/{1}/payload".format(
         api_url.rstrip("/"), quote(spawn_id, safe="")
     )
-    status, body = _http.request_json("GET", url, api_key=api_key, ua=_user_agent())
+    status, body, _ = _http.request_json("GET", url, api_key=api_key, ua=_user_agent())
     if status != 200:
         raise PayloadUnavailable(
             "The payload fallback ({0}) answered {1}: {2}".format(
@@ -368,7 +368,7 @@ def spawn(child: str, payload: Optional[Dict[str, Any]] = None) -> Spawn:
     api_key = _require("AETHERFY_API_KEY", "the key a spawn authenticates with")
     url = _spawn_url()
 
-    status, body = _http.request_json(
+    status, body, retry_after = _http.request_json(
         "POST",
         url,
         api_key=api_key,
@@ -420,8 +420,15 @@ def spawn(child: str, payload: Optional[Dict[str, Any]] = None) -> Spawn:
             limit=detail.get("limit"),
             max_in_flight_runs=detail.get("max_in_flight_runs"),
             details=detail,
+            retry_after=retry_after,
         )
-    raise SpawnError(message, status_code=status, error_code=code, details=detail)
+    raise SpawnError(
+        message,
+        status_code=status,
+        error_code=code,
+        details=detail,
+        retry_after=retry_after,
+    )
 
 
 def write_result(value: Any) -> None:
@@ -616,7 +623,7 @@ def _read_run(
     403 the other maps as a 404.
     """
     api_key = _require("AETHERFY_API_KEY", "the key a run is read with")
-    status, body = _http.request_json(
+    status, body, retry_after = _http.request_json(
         "GET",
         url,
         api_key=api_key,
@@ -661,7 +668,13 @@ def _read_run(
         raise RunAccessDenied(message, details=detail)
     if status == 422 and code == DEPLOYMENT_WAIT_TIMEOUT_INVALID:
         raise WaitTimeoutInvalid(message, details=detail)
-    raise RunReadError(message, status_code=status, error_code=code, details=detail)
+    raise RunReadError(
+        message,
+        status_code=status,
+        error_code=code,
+        details=detail,
+        retry_after=retry_after,
+    )
 
 
 def _spawn_url() -> str:

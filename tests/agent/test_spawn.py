@@ -49,6 +49,7 @@ def transport(monkeypatch):
     class Transport:
         def __init__(self):
             self.calls = []
+            self.retry_after = None
             self.reply = (202, ACCEPTED)
 
         def __call__(self, method, url, *, api_key, ua, body=None, **kwargs):
@@ -62,7 +63,8 @@ def transport(monkeypatch):
                     "kwargs": kwargs,
                 }
             )
-            return self.reply
+            status, body = self.reply
+            return status, body, self.retry_after
 
     fake = Transport()
     monkeypatch.setattr(aetherfy_agent._http, "request_json", fake)
@@ -381,3 +383,43 @@ def test_a_missing_api_key_names_the_variable(transport, monkeypatch):
     with pytest.raises(NotRunningOnAgent) as excinfo:
         spawn("nightly-rollup")
     assert excinfo.value.variable == "AETHERFY_API_KEY"
+
+
+# -- Retry-After --------------------------------------------------------------
+
+
+def test_a_429_carries_the_time_the_control_plane_asked_for(transport):
+    transport.retry_after = 12.0
+    transport.reply = (
+        429,
+        {
+            "detail": {
+                "code": "AGENT_RUN_CONCURRENCY_LIMIT_EXCEEDED",
+                "message": "full",
+                "in_flight_count": 5,
+                "limit": "max_in_flight_runs",
+                "max_in_flight_runs": 5,
+            }
+        },
+    )
+    with pytest.raises(TooManyRunsInFlight) as excinfo:
+        spawn("worker", {})
+    assert excinfo.value.retry_after == 12.0
+    assert len(transport.calls) == 1, "the helper never retries a spawn itself"
+
+
+def test_a_503_carries_the_time_too(transport):
+    transport.retry_after = 5.0
+    transport.reply = (503, {"detail": {"message": "busy"}})
+    with pytest.raises(SpawnError) as excinfo:
+        spawn("worker", {})
+    assert excinfo.value.status_code == 503
+    assert excinfo.value.retry_after == 5.0
+    assert len(transport.calls) == 1
+
+
+def test_a_refusal_without_the_header_has_no_time(transport):
+    transport.reply = (503, {"detail": {"message": "busy"}})
+    with pytest.raises(SpawnError) as excinfo:
+        spawn("worker", {})
+    assert excinfo.value.retry_after is None

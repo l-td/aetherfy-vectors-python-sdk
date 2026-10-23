@@ -57,6 +57,7 @@ def transport(monkeypatch):
     class Transport:
         def __init__(self):
             self.calls = []
+            self.retry_after = None
             self.reply = (200, FINISHED)
 
         def __call__(self, method, url, *, api_key, ua, body=None, **kwargs):
@@ -70,7 +71,8 @@ def transport(monkeypatch):
                     "kwargs": kwargs,
                 }
             )
-            return self.reply
+            status, body = self.reply
+            return status, body, self.retry_after
 
     fake = Transport()
     monkeypatch.setattr(aetherfy_agent._http, "request_json", fake)
@@ -448,3 +450,24 @@ def test_the_wait_route_quotes_the_id_too(transport):
         "https://agents.aetherfy.com/api/v1/deployments/..%2Fagents%2Fother"
         "/wait?timeout_seconds=5"
     )
+
+
+# -- Retry-After --------------------------------------------------------------
+
+
+@pytest.mark.parametrize("status", [429, 503])
+def test_a_read_refusal_carries_the_time_the_control_plane_asked_for(transport, status):
+    transport.retry_after = 9.0
+    transport.reply = (status, {"detail": {"message": "slow down"}})
+    with pytest.raises(RunReadError) as excinfo:
+        result("dep-1")
+    assert excinfo.value.status_code == status
+    assert excinfo.value.retry_after == 9.0
+    assert len(transport.calls) == 1, "the helper never retries a read itself"
+
+
+def test_a_read_refusal_without_the_header_has_no_time(transport):
+    transport.reply = (503, {"detail": {"message": "busy"}})
+    with pytest.raises(RunReadError) as excinfo:
+        result("dep-1")
+    assert excinfo.value.retry_after is None
