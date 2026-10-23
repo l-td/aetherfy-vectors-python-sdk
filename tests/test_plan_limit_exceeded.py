@@ -71,7 +71,6 @@ def test_create_collection_raises_the_quota_error(wired):
     err = exc.value
     assert err.error_code == "PLAN_LIMIT_EXCEEDED"
     assert err.status_code == 403
-    assert err.quota_type == "collections"
     assert err.limit == "max_collections"
     assert err.allowed == 3
     assert err.current == 3
@@ -87,7 +86,6 @@ def test_create_namespace_raises_the_same_quota_error(wired):
     with pytest.raises(QuotaExceededError) as exc:
         MemoryClient(client=client).create_namespace("kb")
 
-    assert exc.value.quota_type == "collections"
     assert exc.value.limit == "max_collections"
     assert exc.value.allowed == 3
     assert exc.value.current == 3
@@ -110,7 +108,6 @@ def test_a_yes_no_feature_has_no_current():
     assert "current" not in body["error"]
     err = parse_error_response(body, 403)
     assert isinstance(err, QuotaExceededError)
-    assert err.quota_type == "webhooks"
     assert err.limit == "webhooks"
     assert err.allowed is False
     assert err.current is None
@@ -119,7 +116,6 @@ def test_a_yes_no_feature_has_no_current():
 def test_another_axis_maps_the_same_way():
     err = parse_error_response(plan_limit("max_workspaces", allowed=1, current=1), 403)
     assert isinstance(err, QuotaExceededError)
-    assert err.quota_type == "workspaces"
     assert err.limit == "max_workspaces"
     assert err.allowed == 1
 
@@ -147,3 +143,26 @@ def test_a_plan_limit_is_not_a_permission_error():
     """The key may do this; the account is at its cap."""
     err = parse_error_response(PLAN_LIMIT, 403)
     assert not isinstance(err, PermissionDeniedError)
+
+
+def test_the_limit_has_one_name_and_the_storage_quota_none():
+    """``limit`` is what ran out; there is no second, shortened name for it, and
+    the storage quota is told apart by its code, with ``limit`` None."""
+    plan = parse_error_response(PLAN_LIMIT, 403)
+    assert plan.limit == "max_collections"
+    assert not hasattr(plan, "quota_type")
+
+    storage = parse_error_response(
+        {
+            "error": {
+                "code": "STORAGE_LIMIT_EXCEEDED",
+                "message": "full",
+                "details": {"current_bytes": 5, "limit_bytes": 5},
+            }
+        },
+        429,
+    )
+    assert isinstance(storage, QuotaExceededError)
+    assert storage.error_code == "STORAGE_LIMIT_EXCEEDED"
+    assert storage.limit is None
+    assert not hasattr(storage, "quota_type")

@@ -1004,7 +1004,7 @@ except QuotaExceededError as e:
     # A plan limit: .limit names it ("max_collections"), .allowed is the plan's
     # number (False for a feature the plan lacks, None for no cap), .current the
     # usage now (None for a yes/no feature) and .upgrade_url where to raise it.
-    print(f"Quota '{e.quota_type}' exceeded: {e.current}/{e.allowed}; see {e.upgrade_url}")
+    print(f"Quota {e.limit} exceeded: {e.current}/{e.allowed}; see {e.upgrade_url}")
 ```
 
 ## 🔧 Configuration Options

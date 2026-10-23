@@ -18,8 +18,10 @@ because they are true.
   allowed, current}`: `limit` names the limit (`max_collections`), `allowed` is
   the plan's number (`False` for a feature the plan lacks, `None` for no cap),
   `current` the usage now (`None` for a yes/no feature) and `upgrade_url` where
-  to raise the cap. `QuotaExceededError` carries `quota_type` (the limit without
-  its `max_` prefix), `limit`, `allowed`, `current` and `upgrade_url`.
+  to raise the cap. `QuotaExceededError` carries `limit`, `allowed`, `current`
+  and `upgrade_url`. There is no separate `quota_type`: `limit` is the one name
+  of what ran out, and the storage quota (`429 STORAGE_LIMIT_EXCEEDED`) is told
+  apart by its `error_code`, with `limit` `None`.
   `MemoryClient.create_namespace` raises it when the collection it creates hits
   the limit. **`limit` changed meaning**: it is the limit's name (a string), no
   longer the plan's number; read `allowed` for the number.
@@ -56,11 +58,17 @@ because they are true.
   a request body, or one the endpoint does not support such as `update_filter`
   on an upsert; the same three fields). Both are `ValidationError`s.
 - `Filter.min_should`.
-- **A 503's `Retry-After` is honoured.** `ServiceUnavailableError.retry_after`
-  carries the seconds the server asked for (a number or an HTTP date; `None`
-  when absent or unreadable), and a retried request waits that long instead of
-  its own backoff: at most 30 seconds, and never past the call's own deadline.
-  An absent or unreadable header keeps the exponential backoff.
+- **`Retry-After` is honoured, on a 503 and on a 429.**
+  `ServiceUnavailableError.retry_after` and `RateLimitExceededError.retry_after`
+  carry the seconds the server asked for (a number or an HTTP date; for a 429
+  the body's `retry_after` is the fallback; `None` when absent or unreadable).
+  A retried request waits exactly that long instead of its own backoff, and a
+  429 that carries one is waited for as well (it used to wait the jittered
+  backoff and could come back before the server was ready). An ask longer than
+  the retry cap (30 seconds, or the `max_delay` the caller set) is not cut to
+  the cap: nothing is retried and the error is raised with its `retry_after`,
+  for the caller to decide. The call's own deadline still applies. An absent
+  or unreadable header keeps the exponential backoff.
 
 ### Fixed
 

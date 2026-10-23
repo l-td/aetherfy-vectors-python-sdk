@@ -1,7 +1,7 @@
 """Guards the README's error-object promises against the classes that raise.
 
 WHY THIS EXISTS: the README tells integrators what a caught exception carries —
-`e.retry_after`, `e.quota_type`, `e.errors`. Nothing tied those claims to the
+`e.retry_after`, `e.limit`, `e.errors`. Nothing tied those claims to the
 classes. The README could document a property no constructor ever assigns and
 every suite in this repository would stay green while the reader's handler
 printed `None`. Publication makes the README the PyPI page, so those claims
@@ -131,7 +131,7 @@ EXPECTED_CLAIMS: List[str] = [
     "InvalidFilterError.suggestion",
     "QuotaExceededError.allowed",
     "QuotaExceededError.current",
-    "QuotaExceededError.quota_type",
+    "QuotaExceededError.limit",
     "QuotaExceededError.upgrade_url",
     "RateLimitExceededError.retry_after",
     "SchemaValidationError.errors",

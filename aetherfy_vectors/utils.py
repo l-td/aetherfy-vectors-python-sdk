@@ -372,7 +372,6 @@ def parse_error_response(
             allowed = nested.get("limit_bytes")
             return QuotaExceededError(
                 message,
-                "storage",
                 current=current if _is_count(current) else None,
                 allowed=allowed if _is_count(allowed) else None,
                 request_id=request_id,
@@ -380,7 +379,16 @@ def parse_error_response(
                 details=details,
                 error_code=error_code,
             )
-        retry_after = details.get("retry_after") if isinstance(details, dict) else None
+        # The header names the time; a body `retry_after` is the fallback.
+        retry_after = parse_retry_after(
+            headers.get("Retry-After") if hasattr(headers, "get") else None
+        )
+        if retry_after is None and isinstance(details, dict):
+            body_value = details.get("retry_after")
+            if isinstance(body_value, (int, float)) and not isinstance(
+                body_value, bool
+            ):
+                retry_after = body_value
         return RateLimitExceededError(
             message,
             request_id=request_id,
@@ -406,7 +414,6 @@ def parse_error_response(
             current = d.get("current")
             return QuotaExceededError(
                 message,
-                axis.removeprefix("max_") if isinstance(axis, str) else "plan",
                 current=current if _is_count(current) else None,
                 limit=axis if isinstance(axis, str) else None,
                 allowed=d.get("allowed") if _is_allowed(d.get("allowed")) else None,
@@ -691,8 +698,9 @@ def retry_with_backoff(
             whether repeating the operation gives the same result.
         max_retries: Maximum number of retries.
         base_delay: Base delay between retries in seconds.
-        max_delay: Maximum delay cap in seconds. It also caps a wait the
-            server asked for with ``Retry-After`` on a 503.
+        max_delay: Maximum delay cap in seconds. A ``Retry-After`` the server
+            sent (503, 429) longer than this is not retried at all: the error
+            is raised with its ``retry_after``.
         deadline: Optional ``time.monotonic()`` instant after which no retry
             may start. A backoff sleep that would end at or past it is not
             taken: the last error is raised instead. ``func`` owns bounding
@@ -704,7 +712,7 @@ def retry_with_backoff(
     Raises:
         Last exception if all retries fail.
     """
-    from .exceptions import ServiceUnavailableError
+    from .exceptions import RateLimitExceededError, ServiceUnavailableError
     from .retry_policy import should_retry_class
 
     last_exception = None
@@ -719,11 +727,19 @@ def retry_with_backoff(
 
             if should_retry and attempt < max_retries:
                 asked = getattr(e, "retry_after", None)
-                if isinstance(e, ServiceUnavailableError) and asked is not None:
-                    # The server said how long to wait: wait that, no jitter,
-                    # but never past the cap. The deadline check below still
-                    # applies, so a long ask cannot outlive the call.
-                    delay = min(asked, max_delay)
+                if (
+                    isinstance(e, (ServiceUnavailableError, RateLimitExceededError))
+                    and asked is not None
+                ):
+                    # The server said how long to wait. A retry before that
+                    # time is refused again, so an ask beyond the cap is not
+                    # cut to it: nothing is retried and the error, carrying
+                    # retry_after, goes to the caller. Within the cap the
+                    # wait is exactly the ask, with no jitter; the deadline
+                    # check below still applies.
+                    if asked > max_delay:
+                        break
+                    delay = asked
                 else:
                     delay = min(base_delay * (2**attempt), max_delay)
                     # Add jitter (50-100% of delay)

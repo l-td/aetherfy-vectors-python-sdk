@@ -118,12 +118,18 @@ class AgentKeyOutOfScopeError(PermissionDeniedError):
 
 
 class RateLimitExceededError(AetherfyVectorsException):
-    """Customer has exceeded their usage limits."""
+    """Customer has exceeded their usage limits.
+
+    ``retry_after`` is the number of seconds the server asked to wait (its
+    ``Retry-After`` header, else the body's ``retry_after``), or None. A 429
+    that carries one is retried after exactly that long when it is within the
+    retry cap; past the cap the error is raised for the caller to decide.
+    """
 
     def __init__(
         self,
         message: str = "Rate limit exceeded",
-        retry_after: Optional[int] = None,
+        retry_after: Optional[float] = None,
         **kwargs,
     ):
         super().__init__(message, **kwargs)
@@ -141,8 +147,9 @@ class ServiceUnavailableError(AetherfyVectorsException):
 
     ``retry_after`` is the number of seconds the server asked to wait
     (its ``Retry-After`` header), or None when it sent none or an unreadable
-    one. The SDK's own retry waits it, up to a cap and never past the call's
-    deadline.
+    one. The SDK's own retry waits it when it is within the cap (30 s) and
+    the call's deadline; a longer ask is never cut short: the error is raised
+    with ``retry_after`` for the caller to decide.
     """
 
     def __init__(
@@ -414,9 +421,9 @@ class QuotaExceededError(AetherfyVectorsException):
     It is not a :class:`PermissionDeniedError`: the key may do this, the
     account is at its cap.
 
-    * ``quota_type``: what ran out (``"collections"``, ``"storage"``, ...).
     * ``limit``: the limit's name as the server sends it (``"max_collections"``),
-      or None where it names none (storage).
+      or None for the storage quota, which is told apart by its ``error_code``
+      (``STORAGE_LIMIT_EXCEEDED``).
     * ``allowed``: the plan's number, ``False`` for a feature the plan does
       not include, or None where the plan has no cap.
     * ``current``: the usage now, or None for a yes/no feature (the server
@@ -427,7 +434,6 @@ class QuotaExceededError(AetherfyVectorsException):
     def __init__(
         self,
         message: str,
-        quota_type: str,
         current: Optional[int] = None,
         limit: Optional[str] = None,
         allowed: Union[int, bool, None] = None,
@@ -435,7 +441,6 @@ class QuotaExceededError(AetherfyVectorsException):
         **kwargs,
     ):
         super().__init__(message, **kwargs)
-        self.quota_type = quota_type
         self.current = current
         self.limit = limit
         self.allowed = allowed

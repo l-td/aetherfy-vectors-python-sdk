@@ -364,7 +364,6 @@ class TestParseErrorResponse:
         error = parse_error_response(response_data, 403)
         assert isinstance(error, QuotaExceededError)
         assert error.error_code == "PLAN_LIMIT_EXCEEDED"
-        assert error.quota_type == "collections"
         assert error.current == 3
         assert error.limit == "max_collections"
         assert error.allowed == 3
@@ -396,7 +395,7 @@ class TestParseErrorResponse:
         }
         error = parse_error_response(response_data, 429)
         assert isinstance(error, QuotaExceededError)
-        assert error.quota_type == "storage"
+        assert error.error_code == "STORAGE_LIMIT_EXCEEDED"
         assert error.current == 536870912
         assert error.allowed == 536870912
         assert error.limit is None
