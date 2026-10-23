@@ -1,0 +1,584 @@
+[
+  {
+    "body": {
+      "sample_size": 500
+    },
+    "method": "POST",
+    "name": "analyze-schema",
+    "route": "/collections/docs/schema/analyze"
+  },
+  {
+    "body": {
+      "exact": false,
+      "filter": {
+        "min_should": {
+          "conditions": [
+            {
+              "key": "category",
+              "match": {
+                "value": "books"
+              }
+            }
+          ],
+          "min_count": 1
+        },
+        "must": [
+          {
+            "key": "category",
+            "match": {
+              "value": "books"
+            }
+          }
+        ],
+        "must_not": [
+          {
+            "key": "in_stock",
+            "match": {
+              "value": false
+            }
+          }
+        ],
+        "should": [
+          {
+            "key": "tag",
+            "match": {
+              "value": "sale"
+            }
+          }
+        ]
+      }
+    },
+    "method": "POST",
+    "name": "count/all-options",
+    "route": "/collections/docs/points/count"
+  },
+  {
+    "body": {
+      "exact": true,
+      "filter": {
+        "must": [
+          {
+            "key": "thread_id",
+            "match": {
+              "value": "t1"
+            }
+          },
+          {
+            "has_id": [
+              1,
+              2
+            ]
+          }
+        ],
+        "must_not": [
+          {
+            "key": "thread_marker",
+            "match": {
+              "value": true
+            }
+          }
+        ]
+      }
+    },
+    "method": "POST",
+    "name": "count/thread-filter",
+    "route": "/collections/docs/points/count"
+  },
+  {
+    "body": {
+      "description": "d",
+      "name": "docs",
+      "regions": [
+        "us-east-1"
+      ],
+      "vectors": {
+        "distance": "Cosine",
+        "size": 2
+      }
+    },
+    "method": "POST",
+    "name": "create-collection",
+    "route": "/collections"
+  },
+  {
+    "body": {
+      "description": null,
+      "name": "docs",
+      "vectors": {
+        "distance": "Cosine",
+        "size": 2
+      }
+    },
+    "method": "POST",
+    "name": "create-collection/defaults",
+    "route": "/collections"
+  },
+  {
+    "body": {
+      "field_name": "tag",
+      "field_schema": "keyword"
+    },
+    "method": "PUT",
+    "name": "create-field-index",
+    "route": "/collections/docs/index"
+  },
+  {
+    "body": {
+      "keys": [
+        "metadata.a"
+      ],
+      "points": [
+        1
+      ]
+    },
+    "method": "POST",
+    "name": "delete-metadata-keys",
+    "route": "/collections/docs/points/payload/delete"
+  },
+  {
+    "body": {
+      "keys": [
+        "a"
+      ],
+      "points": [
+        1
+      ]
+    },
+    "method": "POST",
+    "name": "delete-payload",
+    "route": "/collections/docs/points/payload/delete"
+  },
+  {
+    "body": {
+      "filter": {
+        "min_should": {
+          "conditions": [
+            {
+              "key": "category",
+              "match": {
+                "value": "books"
+              }
+            }
+          ],
+          "min_count": 1
+        },
+        "must": [
+          {
+            "key": "category",
+            "match": {
+              "value": "books"
+            }
+          }
+        ],
+        "must_not": [
+          {
+            "key": "in_stock",
+            "match": {
+              "value": false
+            }
+          }
+        ],
+        "should": [
+          {
+            "key": "tag",
+            "match": {
+              "value": "sale"
+            }
+          }
+        ]
+      }
+    },
+    "method": "POST",
+    "name": "delete/filter",
+    "route": "/collections/docs/points/delete"
+  },
+  {
+    "body": {
+      "points": [
+        1,
+        2
+      ]
+    },
+    "method": "POST",
+    "name": "delete/ids",
+    "route": "/collections/docs/points/delete"
+  },
+  {
+    "body": {
+      "filter": {
+        "must": [
+          {
+            "key": "thread_id",
+            "match": {
+              "value": "t1"
+            }
+          },
+          {
+            "has_id": [
+              1,
+              2
+            ]
+          }
+        ],
+        "must_not": [
+          {
+            "key": "thread_marker",
+            "match": {
+              "value": true
+            }
+          }
+        ]
+      }
+    },
+    "method": "POST",
+    "name": "delete/thread-filter",
+    "route": "/collections/docs/points/delete"
+  },
+  {
+    "body": {
+      "key": "metadata",
+      "payload": {
+        "a": 1
+      },
+      "points": [
+        1
+      ]
+    },
+    "method": "POST",
+    "name": "merge-metadata",
+    "route": "/collections/docs/points/payload"
+  },
+  {
+    "body": {
+      "payload": {
+        "a": 1
+      },
+      "points": [
+        1
+      ]
+    },
+    "method": "PUT",
+    "name": "overwrite-payload",
+    "route": "/collections/docs/points/payload"
+  },
+  {
+    "body": {
+      "ids": [
+        1
+      ],
+      "with_payload": false,
+      "with_vector": true
+    },
+    "method": "POST",
+    "name": "retrieve",
+    "route": "/collections/docs/points/retrieve"
+  },
+  {
+    "body": {
+      "filter": {
+        "min_should": {
+          "conditions": [
+            {
+              "key": "category",
+              "match": {
+                "value": "books"
+              }
+            }
+          ],
+          "min_count": 1
+        },
+        "must": [
+          {
+            "key": "category",
+            "match": {
+              "value": "books"
+            }
+          }
+        ],
+        "must_not": [
+          {
+            "key": "in_stock",
+            "match": {
+              "value": false
+            }
+          }
+        ],
+        "should": [
+          {
+            "key": "tag",
+            "match": {
+              "value": "sale"
+            }
+          }
+        ]
+      },
+      "limit": 5,
+      "offset": 3,
+      "order_by": {
+        "direction": "desc",
+        "key": "ts"
+      },
+      "with_payload": false,
+      "with_vector": true
+    },
+    "method": "POST",
+    "name": "scroll/all-options",
+    "route": "/collections/docs/points/scroll"
+  },
+  {
+    "body": {
+      "filter": {
+        "must": [
+          {
+            "key": "thread_id",
+            "match": {
+              "value": "t1"
+            }
+          },
+          {
+            "has_id": [
+              1,
+              2
+            ]
+          }
+        ],
+        "must_not": [
+          {
+            "key": "thread_marker",
+            "match": {
+              "value": true
+            }
+          }
+        ]
+      },
+      "limit": 10,
+      "with_payload": true,
+      "with_vector": false
+    },
+    "method": "POST",
+    "name": "scroll/thread-filter",
+    "route": "/collections/docs/points/scroll"
+  },
+  {
+    "body": {
+      "filter": {
+        "min_should": {
+          "conditions": [
+            {
+              "key": "category",
+              "match": {
+                "value": "books"
+              }
+            }
+          ],
+          "min_count": 1
+        },
+        "must": [
+          {
+            "key": "category",
+            "match": {
+              "value": "books"
+            }
+          }
+        ],
+        "must_not": [
+          {
+            "key": "in_stock",
+            "match": {
+              "value": false
+            }
+          }
+        ],
+        "should": [
+          {
+            "key": "tag",
+            "match": {
+              "value": "sale"
+            }
+          }
+        ]
+      },
+      "limit": 5,
+      "offset": 1,
+      "params": {
+        "exact": false,
+        "hnsw_ef": 64,
+        "indexed_only": true
+      },
+      "query": [
+        0.1,
+        0.2
+      ],
+      "score_threshold": 0.5,
+      "with_payload": false,
+      "with_vector": true
+    },
+    "method": "POST",
+    "name": "search/all-options",
+    "route": "/collections/docs/points/query"
+  },
+  {
+    "body": {
+      "limit": 10,
+      "offset": 0,
+      "query": [
+        0.1,
+        0.2
+      ],
+      "with_payload": true,
+      "with_vector": false
+    },
+    "method": "POST",
+    "name": "search/defaults",
+    "route": "/collections/docs/points/query"
+  },
+  {
+    "body": {
+      "filter": {
+        "mustNot": []
+      },
+      "limit": 10,
+      "offset": 0,
+      "query": [
+        0.1,
+        0.2
+      ],
+      "with_payload": true,
+      "with_vector": false
+    },
+    "method": "POST",
+    "name": "search/misspelt-filter-key",
+    "route": "/collections/docs/points/query"
+  },
+  {
+    "body": {
+      "filter": {
+        "must": [
+          {
+            "key": "thread_id",
+            "match": {
+              "value": "t1"
+            }
+          },
+          {
+            "has_id": [
+              1,
+              2
+            ]
+          }
+        ],
+        "must_not": [
+          {
+            "key": "thread_marker",
+            "match": {
+              "value": true
+            }
+          }
+        ]
+      },
+      "limit": 10,
+      "offset": 0,
+      "query": [
+        0.1,
+        0.2
+      ],
+      "with_payload": true,
+      "with_vector": false
+    },
+    "method": "POST",
+    "name": "search/thread-filter",
+    "route": "/collections/docs/points/query"
+  },
+  {
+    "body": {
+      "limit": 10,
+      "offset": 0,
+      "params": {
+        "bogus": 1
+      },
+      "query": [
+        0.1,
+        0.2
+      ],
+      "with_payload": true,
+      "with_vector": false
+    },
+    "method": "POST",
+    "name": "search/unknown-search-param",
+    "route": "/collections/docs/points/query"
+  },
+  {
+    "body": {
+      "payload": {
+        "a": 1
+      },
+      "points": [
+        1
+      ]
+    },
+    "method": "POST",
+    "name": "set-payload",
+    "route": "/collections/docs/points/payload"
+  },
+  {
+    "body": {
+      "key": "nested",
+      "payload": {
+        "a": 1
+      },
+      "points": [
+        1
+      ]
+    },
+    "method": "POST",
+    "name": "set-payload/key",
+    "route": "/collections/docs/points/payload"
+  },
+  {
+    "body": {
+      "description": "d",
+      "enforcement_mode": "strict",
+      "schema": {
+        "fields": {}
+      }
+    },
+    "method": "PUT",
+    "name": "set-schema",
+    "route": "/collections/docs/schema"
+  },
+  {
+    "body": {
+      "points": [
+        {
+          "id": 1,
+          "vector": [
+            0.1,
+            0.2
+          ]
+        }
+      ]
+    },
+    "method": "PUT",
+    "name": "upsert",
+    "route": "/collections/docs/points"
+  },
+  {
+    "body": {
+      "points": [
+        {
+          "id": 2,
+          "payload": {
+            "a": "b"
+          },
+          "vector": [
+            0.1,
+            0.2
+          ]
+        }
+      ]
+    },
+    "method": "PUT",
+    "name": "upsert/payload",
+    "route": "/collections/docs/points"
+  }
+]
