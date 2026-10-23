@@ -18,7 +18,9 @@ from tests import request_bodies  # noqa: E402
 def main() -> int:
     rows = request_bodies.record()
     request_bodies.FIXTURE.parent.mkdir(parents=True, exist_ok=True)
-    request_bodies.FIXTURE.write_text(request_bodies.dump(rows), encoding="utf-8")
+    # LF endings, so the file is the same bytes on every platform.
+    with open(request_bodies.FIXTURE, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write(request_bodies.dump(rows))
     print(f"wrote {len(rows)} request bodies to {request_bodies.FIXTURE}")
     return 0
 
