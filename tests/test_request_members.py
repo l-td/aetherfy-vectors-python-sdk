@@ -11,23 +11,32 @@ import pytest
 
 from aetherfy_vectors import AetherfyVectorsClient
 from aetherfy_vectors.models import Filter
+from aetherfy_vectors.schema import Schema
 
-# The members each endpoint takes (path suffix -> members).
+# The members each endpoint takes ("METHOD path-suffix" -> members).
 ALLOWED = {
-    "points/query": {
+    "POST points/query": {
         "shard_key", "prefetch", "query", "using", "filter", "params",
         "score_threshold", "limit", "offset", "with_vector", "with_payload",
         "lookup_from", "with_vectors",
     },
-    "points/scroll": {
+    "POST points/scroll": {
         "shard_key", "offset", "limit", "filter", "with_payload", "with_vector",
         "order_by", "with_vectors",
     },
-    "points/count": {"shard_key", "filter", "exact"},
-    "points/delete": {"points", "shard_key", "filter"},
-    "points/payload": {"payload", "points", "filter", "shard_key", "key"},
-    "points/payload/delete": {"keys", "points", "filter", "shard_key"},
-    "points/retrieve": {"ids", "with_payload", "with_vector"},
+    "POST points/count": {"shard_key", "filter", "exact"},
+    "POST points/delete": {"points", "shard_key", "filter"},
+    "POST points/payload": {"payload", "points", "filter", "shard_key", "key"},
+    # The upsert is a streaming write: it takes the points and nothing else
+    # (a conditional upsert's update_filter / update_mode is refused).
+    "PUT points": {"points"},
+    "PUT points/payload": {"payload", "points", "filter", "shard_key", "key"},
+    "POST collections": {"name", "vectors", "description", "regions"},
+    "PUT index": {"field_name", "field_schema"},
+    "PUT schema": {"schema", "enforcement_mode", "description"},
+    "POST schema/analyze": {"sample_size"},
+    "POST points/payload/delete": {"keys", "points", "filter", "shard_key"},
+    "POST points/retrieve": {"ids", "with_payload", "with_vector"},
 }
 PARAMS = {"hnsw_ef", "exact", "quantization", "indexed_only", "acorn", "idf"}
 FILTER_KEYS = {"must", "must_not", "should", "min_should"}
@@ -79,6 +88,18 @@ def _drive(client):
         lambda: client.retrieve("docs", [1], with_payload=False, with_vectors=True),
         lambda: client.merge_metadata("docs", 1, {"a": 1}),
         lambda: client.delete_metadata_keys("docs", 1, ["a"]),
+        lambda: client.upsert("docs", [{"id": 1, "vector": [0.1, 0.2]}]),
+        lambda: client.create_collection(
+            "docs",
+            {"size": 2, "distance": "Cosine"},
+            description="d",
+            regions=["us-east-1"],
+        ),
+        lambda: client.create_field_index("docs", "tag", "keyword"),
+        lambda: client.set_schema(
+            "docs", Schema(fields={}), enforcement="strict", description="d"
+        ),
+        lambda: client.analyze_schema("docs", sample_size=500),
     ]
     for attempt in attempts:
         try:
@@ -87,16 +108,17 @@ def _drive(client):
             pass
 
 
-def _suffix(path):
-    for suffix in sorted(ALLOWED, key=len, reverse=True):
-        if path.endswith(suffix):
-            return suffix
+def _endpoint(method, path):
+    for key in sorted(ALLOWED, key=len, reverse=True):
+        verb, suffix = key.split(" ", 1)
+        if verb == method and path.endswith(suffix):
+            return key
     return None
 
 
-def refused(path, body):
+def refused(method, path, body):
     """The members of ``body`` the endpoint at ``path`` does not take."""
-    extra = set(body) - ALLOWED[_suffix(path)]
+    extra = set(body) - ALLOWED[_endpoint(method, path)]
     extra |= {f"filter.{k}" for k in set(body.get("filter") or {}) - FILTER_KEYS}
     extra |= {f"params.{k}" for k in set(body.get("params") or {}) - PARAMS}
     return extra
@@ -105,10 +127,15 @@ def refused(path, body):
 def test_every_member_of_every_request_is_one_the_endpoint_takes(recorded):
     client, calls = recorded
     _drive(client)
-    judged = [(m, p, d) for m, p, d in calls if _suffix(p) and isinstance(d, dict)]
-    assert {_suffix(p) for _, p, _ in judged} >= set(ALLOWED), "a shape was not built"
+    judged = [
+        (m, p, d) for m, p, d in calls if _endpoint(m, p) and isinstance(d, dict)
+    ]
+    built = {_endpoint(m, p) for m, p, _ in judged}
+    assert built >= set(ALLOWED), f"a shape was not built: {set(ALLOWED) - built}"
     for method, path, body in judged:
-        assert not refused(path, body), f"{method} {path} carries {refused(path, body)}"
+        assert not refused(method, path, body), (
+            f"{method} {path} carries {refused(method, path, body)}"
+        )
 
 
 def test_a_filter_with_min_should_is_sent_whole(recorded):
@@ -129,4 +156,21 @@ def test_a_filter_with_min_should_is_sent_whole(recorded):
 )
 def test_control_the_check_names_a_member_the_endpoint_does_not_take(body, expected):
     """CONTROL: the comparison is not vacuous (count takes filter and exact)."""
-    assert refused("/collections/docs/points/count", body) >= expected
+    assert refused("POST", "/collections/docs/points/count", body) >= expected
+
+
+@pytest.mark.parametrize(
+    "method,path,body,expected",
+    [
+        ("PUT", "/collections/docs/points", {"points": [], "update_filter": {}}, {"update_filter"}),
+        ("PUT", "/collections/docs/points/payload", {"payload": {}, "points": [], "bogus": 1}, {"bogus"}),
+        ("POST", "/collections", {"name": "x", "vectors": {}, "bogus": 1}, {"bogus"}),
+        ("PUT", "/collections/docs/index", {"field_name": "a", "field_type": "keyword"}, {"field_type"}),
+        ("PUT", "/collections/docs/schema", {"schema": {}, "mode": "strict"}, {"mode"}),
+        ("POST", "/collections/docs/schema/analyze", {"sample_size": 1, "limit": 2}, {"limit"}),
+    ],
+)
+def test_control_the_remaining_endpoints_are_judged_too(method, path, body, expected):
+    """CONTROL: upsert, payload overwrite, create, index, schema and analyze are
+    held to their members as well, not only the filter-taking reads."""
+    assert refused(method, path, body) == expected

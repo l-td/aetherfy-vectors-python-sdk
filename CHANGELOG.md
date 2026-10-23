@@ -60,8 +60,8 @@ because they are true.
 - `Filter.min_should`.
 - **`Retry-After` is honoured, on a 503 and on a 429.**
   `ServiceUnavailableError.retry_after` and `RateLimitExceededError.retry_after`
-  carry the seconds the server asked for (a number or an HTTP date; for a 429
-  the body's `retry_after` is the fallback; `None` when absent or unreadable).
+  carry the seconds the server asked for in the `Retry-After` header (a number
+  or an HTTP date; `None` when absent or unreadable; no body field is read).
   A retried request waits exactly that long instead of its own backoff, and a
   429 that carries one is waited for as well (it used to wait the jittered
   backoff and could come back before the server was ready). An ask longer than

@@ -379,16 +379,10 @@ def parse_error_response(
                 details=details,
                 error_code=error_code,
             )
-        # The header names the time; a body `retry_after` is the fallback.
+        # The header names the time to come back; no body field does.
         retry_after = parse_retry_after(
             headers.get("Retry-After") if hasattr(headers, "get") else None
         )
-        if retry_after is None and isinstance(details, dict):
-            body_value = details.get("retry_after")
-            if isinstance(body_value, (int, float)) and not isinstance(
-                body_value, bool
-            ):
-                retry_after = body_value
         return RateLimitExceededError(
             message,
             request_id=request_id,

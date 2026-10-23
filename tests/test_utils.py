@@ -292,9 +292,8 @@ class TestParseErrorResponse:
         response_data = {
             "message": "Rate limit exceeded",
             "request_id": "req_123",
-            "details": {"retry_after": 60},
         }
-        error = parse_error_response(response_data, 429)
+        error = parse_error_response(response_data, 429, {"Retry-After": "60"})
         assert isinstance(error, RateLimitExceededError)
         assert error.retry_after == 60
         # Test that string representation includes retry_after

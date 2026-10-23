@@ -121,7 +121,7 @@ class RateLimitExceededError(AetherfyVectorsException):
     """Customer has exceeded their usage limits.
 
     ``retry_after`` is the number of seconds the server asked to wait (its
-    ``Retry-After`` header, else the body's ``retry_after``), or None. A 429
+    ``Retry-After`` header), or None. A 429
     that carries one is retried after exactly that long when it is within the
     retry cap; past the cap the error is raised for the caller to decide.
     """
@@ -138,7 +138,7 @@ class RateLimitExceededError(AetherfyVectorsException):
     def __str__(self) -> str:
         base_msg = super().__str__()
         if self.retry_after:
-            base_msg += f" (Retry after {self.retry_after} seconds)"
+            base_msg += f" (Retry after {self.retry_after:g} seconds)"
         return base_msg
 
 

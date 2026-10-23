@@ -227,13 +227,26 @@ def test_a_429_carries_the_header():
     assert err.retry_after == 4.0
 
 
-def test_a_429_falls_back_to_the_bodys_retry_after():
+def test_a_429_body_value_without_the_header_is_ignored(clock):
+    # No server sends a retry time in a 429 body: only the header names one.
     err = parse_error_response(
-        {"error": {"code": "RATE_LIMIT_EXCEEDED", "message": "x", "retry_after": 9}},
+        {
+            "error": {
+                "code": "RATE_LIMIT_EXCEEDED",
+                "message": "x",
+                "retry_after": 9,
+                "details": {"retry_after": 9, "reset_in_seconds": 9},
+            }
+        },
         429,
         {},
     )
-    assert err.retry_after == 9
+    assert err.retry_after is None
+    # and so nothing is retried
+    func = failing_then_ok(err)
+    with pytest.raises(RateLimitExceededError):
+        retry_with_backoff(func, REPEATABLE)
+    assert clock.slept == []
 
 
 def test_a_429_without_either_has_none():
