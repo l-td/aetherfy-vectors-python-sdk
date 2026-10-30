@@ -26,6 +26,11 @@ from aetherfy_vectors.exceptions import (
     CollectionInUseError,
 )
 
+# What a retried call waits between its four attempts (client.py: three retries
+# from a 1 s base, doubling), with the jitter off: asserted against the fake
+# clock, so nothing sleeps and the schedule is still pinned exactly.
+RETRY_SCHEDULE = [1.0, 2.0, 4.0]
+
 
 class TestClientInitialization:
     """Test client initialization and configuration."""
@@ -305,7 +310,7 @@ class TestCollectionManagement:
             client.collection_exists("any_collection")
 
     def test_collection_exists_reraises_on_service_unavailable(
-        self, client, mock_requests, mock_error_response
+        self, client, mock_requests, mock_error_response, clock, no_jitter
     ):
         """A 503 must raise so callers see the real cause, not "doesn't exist"."""
         from aetherfy_vectors.exceptions import ServiceUnavailableError
@@ -317,6 +322,9 @@ class TestCollectionManagement:
 
         with pytest.raises(ServiceUnavailableError):
             client.collection_exists("any_collection")
+
+        assert clock.slept == RETRY_SCHEDULE
+        assert mock_requests.request.call_count == len(RETRY_SCHEDULE) + 1
 
     def test_collection_exists_raises_on_a_404_that_names_no_collection(
         self, client, mock_requests
@@ -526,7 +534,13 @@ class TestCollectionManagement:
         assert client._scope_collection("ghost") not in client._payload_schema_cache
 
     def test_non_404_error_does_not_evict_cache(
-        self, client, mock_requests, mock_error_response, sample_points
+        self,
+        client,
+        mock_requests,
+        mock_error_response,
+        sample_points,
+        clock,
+        no_jitter,
     ):
         """503 / 401 / 500 must NOT evict caches.
 
@@ -549,6 +563,19 @@ class TestCollectionManagement:
 
         with pytest.raises(Exception):
             client.upsert("intact", sample_points)
+
+        # Both requests the upsert makes were retried to the end of the
+        # schedule, not given up on: the payload-schema read it tries first
+        # (tolerated when it fails), then the PUT of the points.
+        attempts = len(RETRY_SCHEDULE) + 1
+        requests_made = [
+            (c.kwargs["method"], c.kwargs["url"].rsplit("/", 1)[-1])
+            for c in mock_requests.request.call_args_list
+        ]
+        assert requests_made == [("GET", "schema")] * attempts + [
+            ("PUT", "points")
+        ] * attempts
+        assert clock.slept == RETRY_SCHEDULE * 2
 
         # Cache survives the transient error.
         assert client._get_cached_schema(client._scope_collection("intact")) is not None
@@ -826,12 +853,15 @@ class TestErrorHandling:
         with pytest.raises(CollectionNotFoundError):
             client.get_collection("nonexistent")
 
-    def test_request_timeout(self, client, mock_requests):
+    def test_request_timeout(self, client, mock_requests, clock, no_jitter):
         """Test request timeout handling."""
         mock_requests.request.side_effect = requests.Timeout("Request timed out")
 
         with pytest.raises(RequestTimeoutError):
             client.get_collections()
+
+        assert clock.slept == RETRY_SCHEDULE
+        assert mock_requests.request.call_count == len(RETRY_SCHEDULE) + 1
 
     def test_validation_error_invalid_collection_name(self, client):
         """Test validation error for invalid collection name."""

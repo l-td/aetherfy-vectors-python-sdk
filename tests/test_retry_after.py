@@ -6,7 +6,7 @@ exponential backoff. Time is a fake clock: nothing really sleeps.
 """
 
 from email.utils import parsedate_to_datetime
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 import pytest
 
@@ -21,30 +21,6 @@ from aetherfy_vectors.utils import (
     parse_retry_after,
     retry_with_backoff,
 )
-
-
-class Clock:
-    """A fake monotonic clock; sleeping advances it and is recorded."""
-
-    def __init__(self):
-        self.now = 1000.0
-        self.slept = []
-
-    def monotonic(self):
-        return self.now
-
-    def sleep(self, seconds):
-        self.slept.append(seconds)
-        self.now += seconds
-
-
-@pytest.fixture
-def clock():
-    c = Clock()
-    with patch("aetherfy_vectors.utils.time.monotonic", c.monotonic), patch(
-        "aetherfy_vectors.utils.time.sleep", c.sleep
-    ):
-        yield c
 
 
 def busy(retry_after):

@@ -25,6 +25,41 @@ def _agent_workspace_id(monkeypatch):
     return TEST_WORKSPACE_ID
 
 
+class Clock:
+    """A fake monotonic clock; sleeping advances it and is recorded."""
+
+    def __init__(self):
+        self.now = 1000.0
+        self.slept = []
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.slept.append(seconds)
+        self.now += seconds
+
+
+@pytest.fixture
+def clock():
+    """Time as a fake: nothing really sleeps, and every sleep is recorded in
+    ``clock.slept``. A test that retries asserts the schedule against it."""
+    c = Clock()
+    with patch("aetherfy_vectors.utils.time.monotonic", c.monotonic), patch(
+        "aetherfy_vectors.utils.time.sleep", c.sleep
+    ):
+        yield c
+
+
+@pytest.fixture
+def no_jitter():
+    """The backoff without its jitter: retry_with_backoff scales each delay by
+    ``0.5 + 0.5 * random.random()``, so 1.0 makes a wait exactly ``base * 2 **
+    attempt``, which a test can assert."""
+    with patch("aetherfy_vectors.utils.random.random", return_value=1.0):
+        yield
+
+
 @pytest.fixture
 def api_key():
     """Test API key fixture."""
