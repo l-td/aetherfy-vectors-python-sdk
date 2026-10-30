@@ -357,27 +357,35 @@ class TestAPIResponseCompatibility:
 class TestBackwardCompatibility:
     """Test backward compatibility features."""
 
-    def test_deprecated_parameter_support(
+    def test_a_dict_config_with_the_old_vector_size_name_means_size(
         self, client, mock_requests, mock_successful_response
     ):
-        """Test support for deprecated parameter names."""
+        """``vector_size`` is the qdrant-client-era spelling of ``size`` in a
+        dict config. create_collection maps it, and the request carries the
+        current field name: the old spelling never reaches the API."""
         mock_requests.request.return_value = mock_successful_response({})
 
-        # Test that old parameter names still work (if any)
-        # This would include any renamed parameters for compatibility
+        collection = client.create_collection(
+            "test_old_params", {"vector_size": 128, "distance": "Cosine"}
+        )
 
-        # Example: if 'vector_size' was renamed to 'size'
-        config = {"vector_size": 128, "distance": "Cosine"}  # Old format
+        assert collection.name == "test_old_params"
+        assert collection.config == VectorConfig(
+            size=128, distance=DistanceMetric.COSINE
+        )
+        sent = mock_requests.request.call_args.kwargs
+        assert sent["method"] == "POST"
+        assert sent["json"]["vectors"] == {"size": 128, "distance": "Cosine"}
 
-        # Should still work by internally mapping to new format
-        # (This would require implementation in the actual client)
-        try:
-            result = client.create_collection("test_old_params", config)
-            # If this doesn't raise an exception, backward compatibility works
-        except (KeyError, TypeError):
-            # If old parameters aren't supported, that's also valid
-            # as long as it's documented
-            pass
+    def test_a_dict_config_naming_no_size_at_all_is_refused_before_any_request(
+        self, client, mock_requests
+    ):
+        """The control for the mapping above: the size is read from ``size`` or
+        ``vector_size``, and a dict with neither is an error, not a default."""
+        with pytest.raises(ValueError, match="Vector size must be specified"):
+            client.create_collection("test_no_size", {"distance": "Cosine"})
+
+        mock_requests.request.assert_not_called()
 
     def test_context_manager_compatibility(self, api_key):
         """Test context manager usage (qdrant-client compatible)."""
