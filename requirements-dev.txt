@@ -1,30 +1,20 @@
 # Development dependencies for aetherfy-vectors
 
-# Include runtime dependencies
--r requirements.txt
+# Everything CI installs (the runtime dependencies, pytest, the qdrant-client
+# pin, black, flake8, mypy): see requirements-ci.txt. CI installs only that
+# file; the rest of this one is for a developer's machine.
+-r requirements-ci.txt
 
-# Testing framework and utilities
-pytest>=7.0.0,<9.0.0
-pytest-cov>=4.0.0,<5.0.0
+# More testing utilities
 pytest-mock>=3.8.0,<4.0.0
 pytest-asyncio>=0.21.0,<1.0.0
 responses>=0.21.0,<1.0.0
-# EXACT pin, not a range: tests/test_qdrant_compat.py derives the qdrant-client
-# compatibility contract from this version's real signatures, and must equal
-# aetherfy_vectors/qdrant_compat.py QDRANT_CLIENT_VERSION. 1.15.1 is the last
-# release with `search` (the method the README's migration example calls) and
-# supports Python 3.9. Upgrading means classifying what the new version added.
-qdrant-client==1.15.1
 
-# Code formatting and linting
-black>=22.0.0,<24.0.0
-flake8>=5.0.0,<7.0.0
+# More formatting and linting
 isort>=5.10.0,<6.0.0
 autoflake>=1.4.0,<3.0.0
 
-# Type checking
-mypy>=0.991,<2.0.0
-types-requests>=2.28.0
+# More type stubs
 types-setuptools>=57.0.0
 
 # Documentation generation

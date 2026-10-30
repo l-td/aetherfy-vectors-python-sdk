@@ -28,7 +28,7 @@ ours, and it takes no ``**kwargs`` at all.
 
 The table is checked, not trusted: tests/test_qdrant_compat.py derives every
 qdrant-client parameter from ``inspect.signature`` against the qdrant-client
-version pinned in requirements-dev.txt (``QDRANT_CLIENT_VERSION``), and fails if
+version pinned in requirements-ci.txt (``QDRANT_CLIENT_VERSION``), and fails if
 a parameter is neither named by our method nor classified here, or if an entry
 here names something qdrant-client does not have. Upgrading the pin is therefore
 a deliberate change that has to classify whatever the new version added.
@@ -42,7 +42,7 @@ the floor of this package, so every CI lane derives from the same version.
 from typing import Any, Dict, Mapping, NamedTuple, Tuple
 
 # The qdrant-client release the table below was derived from. Must equal the
-# pin in requirements-dev.txt and the installed version; the test checks both.
+# pin in requirements-ci.txt and the installed version; the test checks both.
 QDRANT_CLIENT_VERSION = "1.15.1"
 
 IGNORE = "ignore"

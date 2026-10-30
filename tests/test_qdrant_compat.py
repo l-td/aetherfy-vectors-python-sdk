@@ -15,7 +15,7 @@ What is pinned here:
     the pinned version, so a qdrant parameter that is neither ours nor
     classified fails here instead of drifting silently.
 
-qdrant-client is a dev dependency (requirements-dev.txt). It is imported
+qdrant-client is a dev dependency (requirements-ci.txt). It is imported
 unconditionally: a missing install must fail this file, never skip it, or
 the derivation would read as green while checking nothing.
 """
@@ -135,15 +135,15 @@ class TestClassificationIsDerived:
         assert installed == QDRANT_CLIENT_VERSION, (
             f"qdrant-client {installed} is installed but the contract was "
             f"derived from {QDRANT_CLIENT_VERSION}. Install the pin from "
-            "requirements-dev.txt, or, to upgrade, change the pin in BOTH "
+            "requirements-ci.txt, or, to upgrade, change the pin in BOTH "
             "places and classify what the new version added."
         )
 
-    def test_requirements_dev_pins_the_same_version(self):
-        text = (REPO_ROOT / "requirements-dev.txt").read_text(encoding="utf-8")
+    def test_requirements_ci_pins_the_same_version(self):
+        text = (REPO_ROOT / "requirements-ci.txt").read_text(encoding="utf-8")
         pins = re.findall(r"^qdrant-client==(\S+)", text, re.MULTILINE)
         assert pins == [QDRANT_CLIENT_VERSION], (
-            f"requirements-dev.txt pins qdrant-client {pins}; the contract was "
+            f"requirements-ci.txt pins qdrant-client {pins}; the contract was "
             f"derived from {QDRANT_CLIENT_VERSION}"
         )
 

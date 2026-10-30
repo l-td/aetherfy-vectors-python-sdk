@@ -1,0 +1,23 @@
+# What the CI jobs (.github/workflows/test.yml) run, and nothing else: the test
+# suite and its coverage report, the qdrant-client contract test, flake8, black
+# and mypy. requirements-dev.txt includes this file and adds the tools only a
+# developer's machine uses (docs, notebooks, profiling, security scans).
+
+# Include runtime dependencies
+-r requirements.txt
+
+# Testing framework and coverage
+pytest>=7.0.0,<9.0.0
+pytest-cov>=4.0.0,<5.0.0
+# EXACT pin, not a range: tests/test_qdrant_compat.py derives the qdrant-client
+# compatibility contract from this version's real signatures, and must equal
+# aetherfy_vectors/qdrant_compat.py QDRANT_CLIENT_VERSION. 1.15.1 is the last
+# release with `search` (the method the README's migration example calls) and
+# supports Python 3.9. Upgrading means classifying what the new version added.
+qdrant-client==1.15.1
+
+# Linting, formatting and type checking
+black>=22.0.0,<24.0.0
+flake8>=5.0.0,<7.0.0
+mypy>=0.991,<2.0.0
+types-requests>=2.28.0

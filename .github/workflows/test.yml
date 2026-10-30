@@ -29,11 +29,18 @@ jobs:
       uses: actions/setup-python@v7
       with:
         python-version: ${{ matrix.python-version }}
+        cache: pip
+        # requirements-ci.txt includes requirements.txt; setup.py reads it too.
+        cache-dependency-path: |
+          requirements.txt
+          requirements-ci.txt
 
+    # Only what the steps below run: requirements-dev.txt adds the docs,
+    # notebook, profiling and security tools that no job here uses.
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -r requirements-dev.txt
+        pip install -r requirements-ci.txt
         pip install -e .
 
     - name: Lint with flake8
