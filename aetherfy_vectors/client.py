@@ -770,10 +770,15 @@ class AetherfyVectorsClient:
                     ),
                 )
             else:
-                # Handle qdrant-client format
-                size = vectors_config.get("size", vectors_config.get("vector_size"))
+                # A dict config names its dimension `size`, the field the API takes. The
+                # qdrant-client-era `vector_size` spelling is not read: it is refused like
+                # any dict without a size.
+                size = vectors_config.get("size")
                 if size is None:
-                    raise ValueError("Vector size must be specified")
+                    raise ValueError(
+                        "Vector size must be specified: the config needs a 'size' key "
+                        f"(got keys {sorted(vectors_config)})"
+                    )
                 config = VectorConfig(
                     size=int(size),
                     distance=self._normalize_distance_metric(

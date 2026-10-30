@@ -25,6 +25,10 @@ because they are true.
   `MemoryClient.create_namespace` raises it when the collection it creates hits
   the limit. **`limit` changed meaning**: it is the limit's name (a string), no
   longer the plan's number; read `allowed` for the number.
+- **BREAKING: a dict `vectors_config` names its dimension `size`, and only `size`.**
+  `create_collection` no longer reads the qdrant-client-era `vector_size` key; a
+  dict without `size` raises `ValueError` naming the `size` key and the keys it
+  was given, before any request.
 - **BREAKING: the `400 COLLECTION_LIMIT_EXCEEDED` mapping is removed.** The
   server no longer sends that code; a 400 with it is a `ValidationError` like
   any other 400.

@@ -357,31 +357,39 @@ class TestAPIResponseCompatibility:
 class TestBackwardCompatibility:
     """Test backward compatibility features."""
 
-    def test_a_dict_config_with_the_old_vector_size_name_means_size(
+    def test_a_dict_config_names_its_dimension_size(
         self, client, mock_requests, mock_successful_response
     ):
-        """``vector_size`` is the qdrant-client-era spelling of ``size`` in a
-        dict config. create_collection maps it, and the request carries the
-        current field name: the old spelling never reaches the API."""
+        """A dict config's dimension is ``size``, the field the API takes, and
+        the request carries it unchanged."""
         mock_requests.request.return_value = mock_successful_response({})
 
         collection = client.create_collection(
-            "test_old_params", {"vector_size": 128, "distance": "Cosine"}
+            "test_size", {"size": 128, "distance": "Cosine"}
         )
 
-        assert collection.name == "test_old_params"
-        assert collection.config == VectorConfig(
-            size=128, distance=DistanceMetric.COSINE
-        )
+        assert collection.config == VectorConfig(size=128, distance=DistanceMetric.COSINE)
         sent = mock_requests.request.call_args.kwargs
-        assert sent["method"] == "POST"
         assert sent["json"]["vectors"] == {"size": 128, "distance": "Cosine"}
+
+    def test_the_old_vector_size_spelling_is_refused_naming_size(
+        self, client, mock_requests
+    ):
+        """``vector_size`` was the qdrant-client-era spelling; it is not read any
+        more. The dict is refused before any request, and the error names
+        ``size`` and shows the keys that were given."""
+        with pytest.raises(ValueError, match="needs a 'size' key") as refused:
+            client.create_collection(
+                "test_old_params", {"vector_size": 128, "distance": "Cosine"}
+            )
+
+        assert "vector_size" in str(refused.value)
+        mock_requests.request.assert_not_called()
 
     def test_a_dict_config_naming_no_size_at_all_is_refused_before_any_request(
         self, client, mock_requests
     ):
-        """The control for the mapping above: the size is read from ``size`` or
-        ``vector_size``, and a dict with neither is an error, not a default."""
+        """A dict with no size is an error, not a default."""
         with pytest.raises(ValueError, match="Vector size must be specified"):
             client.create_collection("test_no_size", {"distance": "Cosine"})
 
