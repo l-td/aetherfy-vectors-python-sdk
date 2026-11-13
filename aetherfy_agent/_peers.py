@@ -37,10 +37,16 @@ PEER_RETRY_CAP_SECONDS = 60
 
 
 def retry_delay(retry_after: Optional[float]) -> float:
-    """Seconds not to ask again after a failed lookup that carried this Retry-After (or none)."""
+    """Seconds not to ask again after a failed lookup that carried this Retry-After (or none).
+
+    BOTH ENDS ARE CLAMPED: a Retry-After below the floor (0, 1, a negative value) waits the floor, because the
+    control plane's own limiter sends small values and a wait of 0 would give a sick control plane a lookup on
+    every call; one above the cap waits the cap; none (or NaN) waits the floor."""
     if retry_after is None or retry_after != retry_after:  # none, or NaN
         return float(PEER_RETRY_FLOOR_SECONDS)
-    return float(min(max(retry_after, 0.0), PEER_RETRY_CAP_SECONDS))
+    return float(
+        min(max(retry_after, PEER_RETRY_FLOOR_SECONDS), PEER_RETRY_CAP_SECONDS)
+    )
 
 
 #: How long a looked-up address is served without asking the control plane

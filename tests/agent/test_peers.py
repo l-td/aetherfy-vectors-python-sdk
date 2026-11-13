@@ -1175,15 +1175,42 @@ def test_the_wait_is_the_retry_after_between_the_floor_and_the_cap(
     assert lookup.count == asked + 1
 
 
-def test_a_retry_after_of_zero_is_asked_again_at_once(lookup, clock):
+@pytest.mark.parametrize(
+    "retry_after, waits",
+    [
+        (None, 5.0),
+        (0.0, 5.0),
+        (1.0, 5.0),
+        (4.9, 5.0),
+        (-3.0, 5.0),
+        (float("nan"), 5.0),
+        (5.0, 5.0),
+        (20.0, 20.0),
+        (60.0, 60.0),
+        (120.0, 60.0),
+    ],
+    ids=["none", "zero", "one", "4.9", "negative", "nan", "5", "20", "60", "120"],
+)
+def test_retry_delay_clamps_both_ends(retry_after, waits):
+    """The floor applies to a GIVEN Retry-After too: the control plane's own limiter sends small values, and a
+    wait of 0 would give a sick control plane a lookup on every call."""
+    assert _peers.retry_delay(retry_after) == waits
+
+
+@pytest.mark.parametrize("retry_after", [0.0, 1.0, 4.9, -3.0], ids=["zero", "one", "4.9", "negative"])
+def test_a_small_retry_after_still_waits_the_floor_before_asking_again(lookup, clock, retry_after):
     _known_then_expired(lookup, clock)
-    lookup.replies["analyst"] = (503, envelope("SERVICE_UNAVAILABLE"))
-    lookup.retry_after = 0.0
+    lookup.replies["analyst"] = (429, envelope("RATE_LIMIT_EXCEEDED"))
+    lookup.retry_after = retry_after
     agent_url("analyst")
     asked = lookup.count
 
-    agent_url("analyst")
+    clock.advance(PEER_RETRY_FLOOR_SECONDS - 0.01)
+    assert agent_url("analyst") == OLD
+    assert lookup.count == asked  # still waiting: no request
 
+    clock.advance(0.02)
+    agent_url("analyst")
     assert lookup.count == asked + 1
 
 
