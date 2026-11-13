@@ -5,6 +5,28 @@ All notable changes to the Aetherfy Vectors Python SDK will be documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Agents find each other at call time.** `aetherfy_agent.agent_url(name,
+  fresh=False)` returns a peer's current public URL, `agent_urls(fresh=False)`
+  returns `{name: url}` for every addressable peer of the agent's workspace, and
+  `call_agent(name, path, method="GET", json=None, headers=None, timeout=30)`
+  makes the request and returns a `PeerResponse` (`status`, `headers`, `text`,
+  `json()`). Both lookups are remembered in the process for
+  `PEER_CACHE_SECONDS` (30); `fresh=True` skips that. `call_agent` looks the
+  peer up again once, and only when the address it used is gone (the name does
+  not resolve, the connection is refused, or the edge's `404` `AGENT_NOT_FOUND` /
+  `AGENT_NOT_REACHABLE`); every other status is returned as it came, and a reset
+  or a timeout raises `AgentTransportError` without a repeat, because the peer
+  may have acted. The Aetherfy key is sent to the lookup and
+  never to the peer. A peer the workspace does not have is `PeerNotFound`
+  (`404 AGENT_NOT_FOUND`), one nothing listens on is `PeerHasNoUrl`
+  (`409 PEER_HAS_NO_URL`), anything else is `PeerLookupError` carrying
+  `error_code`. Reads `AETHERFY_PEERS_URL`, a template like
+  `AETHERFY_SPAWN_URL`.
+
 ## [1.3.0] - 2026-10-23
 
 This release contains changes marked BREAKING below. They ship in a minor

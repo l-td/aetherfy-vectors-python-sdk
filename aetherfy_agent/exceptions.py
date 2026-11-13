@@ -20,6 +20,13 @@ rather than a widening of it, because the two calls fail at different things:
 a spawn is refused for what you asked to start, a read for what you asked to
 see. ``ResultTooLarge`` sits outside both — it is raised before anything leaves
 the machine.
+
+LOOKING A PEER UP is a third family, under ``PeerLookupError``, with the same
+rule again: the status and the code together select a subclass
+(``PeerNotFound``, ``PeerHasNoUrl``) and anything else arrives as the base
+reporting what came back. Reaching the peer itself, once it is found, raises
+nothing of the platform's: the peer is another service, and what it answers is
+returned as it came (see ``call_agent``).
 """
 
 from typing import Any, Dict, Optional
@@ -339,5 +346,100 @@ class WaitTimeoutInvalid(RunReadError):
             message,
             status_code=422,
             error_code=DEPLOYMENT_WAIT_TIMEOUT_INVALID,
+            details=details,
+        )
+
+
+#: The two control-plane error codes a peer lookup gives a type of its own. ONE
+#: definition each, for the same reason as the codes above: the code both
+#: SELECTS the type and is STAMPED on it.
+AGENT_NOT_FOUND = "AGENT_NOT_FOUND"
+PEER_HAS_NO_URL = "PEER_HAS_NO_URL"
+
+#: The code the edge in front of ``*.aetherfy.dev`` answers a RETIRED address
+#: with, beside ``AGENT_NOT_FOUND`` (which it uses for an address that never
+#: existed or was deleted). Not a lookup error: it arrives in the body of a
+#: peer's response, never from the control plane, and ``call_agent`` reads it
+#: to decide whether to look the peer up again.
+AGENT_NOT_REACHABLE = "AGENT_NOT_REACHABLE"
+
+
+class PeerLookupError(AgentError):
+    """
+    Raised when the control plane does not hand over a peer's address.
+
+    ``error_code`` is the platform's stable code (``detail.code`` in the
+    control-plane envelope) and is the thing to branch on; ``message`` is prose
+    that may be reworded at any time.
+
+    Same discipline as :class:`SpawnError`: the STATUS AND THE CODE together
+    select a subclass, and an unrecognised pairing arrives as this class
+    reporting exactly what came back — among them ``403
+    AUTH_AGENT_KEY_OUT_OF_SCOPE``, when this machine's own key may not look
+    peers up.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: Optional[int] = None,
+        error_code: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None,
+        retry_after: Optional[float] = None,
+    ):
+        super().__init__(
+            message,
+            status_code=status_code,
+            details=details,
+            error_code=error_code,
+        )
+        self.retry_after = retry_after
+
+
+class PeerNotFound(PeerLookupError):
+    """
+    Raised on ``404 AGENT_NOT_FOUND`` — this agent's own workspace holds no
+    agent of that name.
+
+    Peers are the agents of the caller's own workspace, found by the name the
+    agent has there; another workspace's agent is not a peer, and neither is a
+    name that was spelled differently when the agent was created.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        details: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__(
+            message,
+            status_code=404,
+            error_code=AGENT_NOT_FOUND,
+            details=details,
+        )
+
+
+class PeerHasNoUrl(PeerLookupError):
+    """
+    Raised on ``409 PEER_HAS_NO_URL`` — the peer exists, but nothing listens
+    for requests on it.
+
+    A peer that is not reachable by URL cannot be called, whatever else it can
+    do: it is not a service. Start it with :func:`~aetherfy_agent.spawn`
+    instead, or call a peer that serves HTTP.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        details: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__(
+            message,
+            status_code=409,
+            error_code=PEER_HAS_NO_URL,
             details=details,
         )

@@ -16,13 +16,16 @@ customer's problem.
 """
 
 import json
+import socket
 import urllib.error
 import urllib.request
-from typing import Any, Dict, Optional, Tuple
+from dataclasses import dataclass
+from typing import Any, Dict, Mapping, Optional, Tuple
 
 from aetherfy_vectors.utils import parse_retry_after
 
 from .exceptions import AgentTransportError
+from .models import PeerResponse
 
 #: Sent on every request this module makes. Version-stamped so a platform-side
 #: log can tell which helper release a run was built against.
@@ -128,4 +131,125 @@ def request_json(
     raise AgentTransportError(
         "{0} {1} did not reach the Aetherfy control plane after "
         "{2} attempt(s): {3}".format(method, url, attempts, last_error)
+    )
+
+
+class _DoNotFollow(urllib.request.HTTPRedirectHandler):
+    """
+    Answer a redirect with the redirect.
+
+    ``urllib`` otherwise follows it: a 301 or 302 on a POST silently becomes a
+    GET, a 307 or 308 on a POST is refused with an error of its own, and the
+    caller's headers are replayed to whatever host ``Location`` names. A peer's
+    3xx is the peer's answer, like any other status, and what to do about it is
+    the caller's to say. ``None`` is how a handler declines to follow; the 3xx
+    then surfaces as an ``HTTPError``, which :func:`request_peer` returns.
+    """
+
+    def redirect_request(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+
+#: What peer requests go through. ``urlopen`` cannot be told not to follow a
+#: redirect; an opener built without that handler can.
+_PEER_OPENER = urllib.request.build_opener(_DoNotFollow)
+
+
+@dataclass(frozen=True)
+class PeerAttempt:
+    """
+    One request to a peer: either its ``response``, or the ``failure`` that
+    kept any response from coming.
+
+    ``failure`` is set only when the request PROVABLY NEVER REACHED A PEER: the
+    name did not resolve, or the connection was refused. That is the one outcome
+    ``call_agent`` answers by looking the peer up again, because repeating the
+    request cannot run it twice. A reset or a timeout is NOT that: either can
+    come after the peer acted, so :func:`request_peer` raises
+    :class:`AgentTransportError` for it, as it does for a body that fails
+    mid-stream. A VALUE, NOT AN EXCEPTION, for the retryable case, so the
+    helper's exception hierarchy stays what a caller can catch.
+    """
+
+    response: Optional[PeerResponse] = None
+    failure: Optional[str] = None
+
+
+def encode_json(value: Any) -> bytes:
+    """A request body's JSON, as bytes. Here because ``call_agent`` has a
+    parameter of its own called ``json`` that hides the module."""
+    return json.dumps(value).encode("utf-8")
+
+
+def request_peer(
+    method: str,
+    url: str,
+    *,
+    ua: str,
+    body: Optional[bytes] = None,
+    headers: Optional[Mapping[str, str]] = None,
+    timeout: float = DEFAULT_TIMEOUT,
+) -> PeerAttempt:
+    """
+    Send one request to a PEER and return whatever it answered.
+
+    THE AETHERFY KEY IS NOT A PARAMETER, and that is the point: a peer is
+    another service, and a bearer token for the whole account sent to it would
+    hand the account to whatever that service logs. The only headers are the
+    explicit ``User-Agent`` this module always sets and the caller's own.
+
+    No retry here. Where a retry makes sense is the caller's to say: it needs
+    the peer looked up again first, and repeating the same address would only
+    repeat the failure.
+
+    An HTTP status of any kind is a RETURN, a 3xx included: it is not followed.
+    Only a request that never reached a peer (the name did not resolve, the
+    connection was refused) comes back with a ``failure`` and no ``response``;
+    a reset, a timeout, or a body that cannot be read after the status arrived
+    raises a plain :class:`AgentTransportError`, and is not retried, because
+    the peer may have acted on the request.
+    """
+    request_headers = {"User-Agent": ua}
+    if headers:
+        request_headers.update(headers)
+    request = urllib.request.Request(
+        url, data=body, headers=request_headers, method=method
+    )
+
+    try:
+        response = _PEER_OPENER.open(request, timeout=timeout)
+    except urllib.error.HTTPError as exc:  # a status, not a transport failure
+        return _peer_response(exc.code, exc.headers, exc, method, url)
+    except (urllib.error.URLError, OSError) as exc:
+        reason = exc.reason if isinstance(exc, urllib.error.URLError) else exc
+        if isinstance(reason, (socket.gaierror, ConnectionRefusedError)):
+            return PeerAttempt(failure="{0} {1}: {2}".format(method, url, exc))
+        raise AgentTransportError(
+            "{0} {1} got no answer and may or may not have run: {2}".format(
+                method, url, exc
+            )
+        )
+    with response:
+        return _peer_response(
+            response.getcode(), response.headers, response, method, url
+        )
+
+
+def _peer_response(
+    status: int, headers: Any, stream: Any, method: str, url: str
+) -> PeerAttempt:
+    try:
+        raw = stream.read()
+    except Exception as exc:
+        raise AgentTransportError(
+            "{0} {1} answered {2} but its body could not be read: {3}".format(
+                method, url, status, exc
+            )
+        )
+    return PeerAttempt(
+        response=PeerResponse(
+            status=status,
+            headers={name.lower(): value for name, value in (headers or {}).items()},
+            text=raw.decode("utf-8", errors="replace"),
+        )
     )

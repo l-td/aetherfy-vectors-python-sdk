@@ -8,6 +8,7 @@ equivalent stops being copied into every task.
 
     from aetherfy_agent import payload, machine, fan_out, spawn
     from aetherfy_agent import write_result, result, wait
+    from aetherfy_agent import agent_url, call_agent
 
     data = payload()                         # this run's input, {} when none
     shape = machine()                        # vcpus / memory_mb / region
@@ -18,11 +19,22 @@ equivalent stops being copied into every task.
     finished = wait(run.spawn_id)            # or result(...) for a plain read
     print(finished.result)
 
+    url = agent_url("analyst")               # a peer service's address, by name
+    reply = call_agent("analyst", "/summarise", method="POST", json={"id": 7})
+    print(reply.status, reply.json())
+
 TWO HALVES, and they are the same contract read from opposite ends. A task
 reads its payload and writes its result; whoever started it spawns and then
 reads that result back. ``payload``/``write_result`` are files on the machine
 and touch no network at all; ``spawn``/``result``/``wait`` are the control
 plane, and are the only calls here that do.
+
+A THIRD THING, for a service that talks to another service: ``agent_url`` and
+``agent_urls`` look a peer's public address up BY NAME at call time, and
+``call_agent`` makes the request. Nothing about a peer's address is baked into
+this machine's environment, so a peer that is recreated is found at its new
+address without a restart here. The lookup is the control plane's, and its
+answer is remembered in this process for ``PEER_CACHE_SECONDS``.
 
 It ships inside the ``aetherfy-vectors`` distribution beside
 ``aetherfy_vectors`` and ``aetherfy_memory``, and the standard runtime image
@@ -36,18 +48,24 @@ from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from typing import Any, Callable, Dict, Iterable, List, Optional, TypeVar
 from urllib.parse import quote
 
-from . import _http
+from . import _http, _peers
 from .exceptions import (
+    AGENT_NOT_FOUND,
+    AGENT_NOT_REACHABLE,
     AGENT_RUN_CONCURRENCY_LIMIT_EXCEEDED,
     DEPLOYMENT_ACCESS_DENIED,
     DEPLOYMENT_NOT_FOUND,
     DEPLOYMENT_WAIT_TIMEOUT_INVALID,
+    PEER_HAS_NO_URL,
     RUN_PAYLOAD_TOO_LARGE,
     AgentError,
     AgentTransportError,
     NotRunningOnAgent,
     PayloadTooLarge,
     PayloadUnavailable,
+    PeerHasNoUrl,
+    PeerLookupError,
+    PeerNotFound,
     ResultTooLarge,
     RunAccessDenied,
     RunNotFound,
@@ -56,7 +74,7 @@ from .exceptions import (
     TooManyRunsInFlight,
     WaitTimeoutInvalid,
 )
-from .models import MachineShape, Run, Spawn
+from .models import MachineShape, PeerResponse, Run, Spawn
 
 # ONE distribution, ONE version. `aetherfy_vectors.__version__` is what
 # setup.py reads to stamp the wheel, so re-exporting it here means the
@@ -73,6 +91,9 @@ __all__ = [
     "write_result",
     "result",
     "wait",
+    "agent_url",
+    "agent_urls",
+    "call_agent",
     # PUBLIC IN BOTH LANGUAGES OR NEITHER. The JavaScript helper exports these
     # three from its entry point, so a task ported between the two would find
     # the bound readable in one and not the other. A caller sizing its own
@@ -80,7 +101,10 @@ __all__ = [
     "WAIT_TIMEOUT_MIN_SECONDS",
     "WAIT_TIMEOUT_MAX_SECONDS",
     "WAIT_TIMEOUT_DEFAULT_SECONDS",
+    # The same rule for the peer lookup's memory window.
+    "PEER_CACHE_SECONDS",
     "MachineShape",
+    "PeerResponse",
     "Run",
     "Spawn",
     "AgentError",
@@ -88,6 +112,9 @@ __all__ = [
     "NotRunningOnAgent",
     "PayloadUnavailable",
     "PayloadTooLarge",
+    "PeerLookupError",
+    "PeerNotFound",
+    "PeerHasNoUrl",
     "ResultTooLarge",
     "RunReadError",
     "RunNotFound",
@@ -131,6 +158,11 @@ _WAIT_TRANSPORT_MARGIN_SECONDS = 15.0
 WAIT_TIMEOUT_MIN_SECONDS = 1
 WAIT_TIMEOUT_MAX_SECONDS = 60
 WAIT_TIMEOUT_DEFAULT_SECONDS = 30
+
+#: How long a looked-up peer address is served without asking again. The one
+#: definition lives beside the cache that applies it; this is the same number,
+#: readable where the calls are.
+PEER_CACHE_SECONDS = _peers.PEER_CACHE_SECONDS
 
 
 def _require(variable: str, purpose: str, remedy: Optional[str] = None) -> str:
@@ -572,6 +604,283 @@ def wait(run_id: str, timeout_seconds: int = WAIT_TIMEOUT_DEFAULT_SECONDS) -> Ru
         "{0}/wait?timeout_seconds={1}".format(_run_url(run_id), timeout_seconds),
         timeout=timeout_seconds + _WAIT_TRANSPORT_MARGIN_SECONDS,
         retry_connection_errors=False,
+    )
+
+
+def agent_url(name: str, *, fresh: bool = False) -> str:
+    """
+    Return the current public URL of a peer agent, found by name.
+
+    A peer is an agent of THIS agent's own workspace; ``name`` is the name it
+    has there. The URL is what the platform serves the peer at right now, so a
+    peer that was deleted and created again is found at its new address and
+    nothing here, or in this machine's environment, has to change.
+
+    THE ANSWER IS REMEMBERED FOR ``PEER_CACHE_SECONDS`` (30) PER NAME, in this
+    process only, with no request while it is fresh. ``fresh=True`` skips that
+    memory, asks the control plane and replaces the entry; use it when an
+    address you were handed has just stopped answering. :func:`call_agent` does
+    exactly that, once, by itself.
+
+    Only the NAME to URL pair is kept. A refusal is never kept, so a peer that
+    is created a moment after a :class:`PeerNotFound` is found on the next call.
+
+    :raises PeerNotFound: 404 ``AGENT_NOT_FOUND``, the workspace has no agent
+        of that name.
+    :raises PeerHasNoUrl: 409 ``PEER_HAS_NO_URL``, the agent exists but nothing
+        listens on it.
+    :raises PeerLookupError: any other refusal, among them 403
+        ``AUTH_AGENT_KEY_OUT_OF_SCOPE`` — read ``error_code``, not the prose.
+    :raises NotRunningOnAgent: ``AETHERFY_PEERS_URL`` or ``AETHERFY_API_KEY`` is
+        not set.
+    :raises ValueError: ``name`` is empty. No request is sent.
+    :raises AgentTransportError: the request never reached the control plane.
+    """
+    if not name:
+        raise ValueError("name must be a peer agent's name, not an empty string.")
+    if not fresh:
+        cached = _peers.cache.get_url(name)
+        if cached is not None:
+            return cached
+
+    body = _lookup("{0}/{1}".format(_peers_url(), quote(name, safe="")), name)
+    url = body.get("url")
+    if not isinstance(url, str) or not url:
+        raise PeerLookupError(
+            "The lookup of '{0}' answered 200 with no 'url', so there is no "
+            "address to return.".format(name),
+            status_code=200,
+            details=body,
+        )
+    _peers.cache.put_url(name, url)
+    return url
+
+
+def agent_urls(*, fresh: bool = False) -> Dict[str, str]:
+    """
+    Return every addressable peer of this agent's workspace as ``{name: url}``.
+
+    The workspace's other agents that have a public URL; this agent is not in
+    it, and neither is an agent nothing listens on. The same memory rule as
+    :func:`agent_url`: the whole answer is remembered for
+    ``PEER_CACHE_SECONDS`` (30) as one entry, and ``fresh=True`` skips it and
+    replaces it. The two memories are separate: this list is not read to
+    answer :func:`agent_url`, nor the other way round.
+
+    The dict is a copy: editing it does not edit what is remembered.
+
+    :raises PeerLookupError: a refusal, among them 403
+        ``AUTH_AGENT_KEY_OUT_OF_SCOPE`` — read ``error_code``, not the prose.
+    :raises NotRunningOnAgent: ``AETHERFY_PEERS_URL`` or ``AETHERFY_API_KEY`` is
+        not set.
+    :raises AgentTransportError: the request never reached the control plane.
+    """
+    if not fresh:
+        cached = _peers.cache.get_list()
+        if cached is not None:
+            return cached
+
+    body = _lookup(_peers_url(), None)
+    peers = body.get("peers")
+    if not isinstance(peers, list):
+        raise PeerLookupError(
+            "The peer list answered 200 with no 'peers' list, so there is "
+            "nothing to return.",
+            status_code=200,
+            details=body,
+        )
+    urls: Dict[str, str] = {}
+    for peer in peers:
+        peer_name = peer.get("name") if isinstance(peer, dict) else None
+        peer_url = peer.get("url") if isinstance(peer, dict) else None
+        if not (
+            isinstance(peer_name, str)
+            and peer_name
+            and isinstance(peer_url, str)
+            and peer_url
+        ):
+            raise PeerLookupError(
+                "The peer list answered 200 with an entry that has no name and "
+                "url: {0!r}.".format(peer),
+                status_code=200,
+                details=body,
+            )
+        urls[peer_name] = peer_url
+    _peers.cache.put_list(urls)
+    return dict(urls)
+
+
+def call_agent(
+    name: str,
+    path: str,
+    *,
+    method: str = "GET",
+    json: Optional[Any] = None,
+    headers: Optional[Dict[str, str]] = None,
+    timeout: float = _http.DEFAULT_TIMEOUT,
+) -> PeerResponse:
+    """
+    Call a peer agent over HTTP and return its answer.
+
+    Looks ``name`` up with :func:`agent_url` and sends ``method`` to the URL
+    plus ``path`` (which starts with ``/``). ``json``, when given, is the
+    request body encoded as JSON, with a ``Content-Type`` of
+    ``application/json`` unless ``headers`` names one. ``timeout`` is seconds
+    for the request.
+
+    THE PEER IS ANOTHER SERVICE, so it is never sent this machine's Aetherfy
+    key: only the lookup carries it. Whatever authentication the peer wants is
+    yours to put in ``headers``.
+
+    ONE RE-LOOKUP, AND ONLY FOR AN ADDRESS THAT IS GONE. The call is repeated
+    once, at a freshly looked-up URL (``agent_url(name, fresh=True)``), when
+    the first attempt PROVABLY NEVER REACHED A PEER (the name does not resolve,
+    or the connection was refused: nothing accepted it) or when the edge REFUSED
+    the address: a 404 whose JSON body is ``{"error": {"code": "AGENT_NOT_FOUND"}}``
+    or ``AGENT_NOT_REACHABLE``, which is what a retired address answers. That
+    is how a peer recreated inside the cache window is found without a
+    restart. A second failure of either kind raises; nothing is retried
+    again.
+
+    EVERY OTHER STATUS IS RETURNED, never retried and never raised, 5xx
+    included: the peer answered, and only you know what its answer means. A
+    redirect is such an answer: it is returned, not followed, so a ``POST`` is
+    never quietly replayed as a ``GET`` and your headers never go to a host
+    you did not name.
+    A RESET OR A TIMEOUT IS NOT RETRIED: either can happen after the peer has
+    acted, so the call raises :class:`AgentTransportError` and whether to repeat
+    it is yours to say. A request that is not safe to repeat (a ``POST`` that
+    charges a card) should carry its own idempotency key.
+
+    :raises PeerNotFound: 404 ``AGENT_NOT_FOUND``, the workspace has no agent
+        of that name.
+    :raises PeerHasNoUrl: 409 ``PEER_HAS_NO_URL``, the agent exists but nothing
+        listens on it.
+    :raises PeerLookupError: any other refusal of the lookup.
+    :raises AgentTransportError: the peer did not answer, and the request may
+        or may not have run (a reset or a timeout); or it could not be reached at
+        the freshly looked-up address either, or that address was refused too, or the
+        lookup never reached the control plane.
+    :raises NotRunningOnAgent: ``AETHERFY_PEERS_URL`` or ``AETHERFY_API_KEY`` is
+        not set.
+    :raises ValueError: ``name`` is empty, ``path`` does not start with ``/``
+        or ``timeout`` is not positive. No request is sent.
+    """
+    if not path.startswith("/"):
+        raise ValueError(
+            "path must start with '/', as in '/summarise', not {0!r}.".format(path)
+        )
+    if not timeout > 0:
+        raise ValueError(
+            "timeout must be a positive number of seconds, not {0!r}.".format(timeout)
+        )
+    request_headers = dict(headers) if headers else {}
+    body = None
+    if json is not None:
+        body = _http.encode_json(json)
+        if not any(key.lower() == "content-type" for key in request_headers):
+            request_headers["Content-Type"] = "application/json"
+
+    def attempt(base: str) -> _http.PeerAttempt:
+        return _http.request_peer(
+            method,
+            base.rstrip("/") + path,
+            ua=_user_agent(),
+            body=body,
+            headers=request_headers,
+            timeout=timeout,
+        )
+
+    first = attempt(agent_url(name)).response
+    if first is not None and _refused_code(first) is None:
+        return first
+
+    second = attempt(agent_url(name, fresh=True))
+    if second.response is None:
+        raise AgentTransportError(
+            "The peer '{0}' did not answer at its freshly looked-up address, "
+            "nor at the one it had before: {1}".format(name, second.failure)
+        )
+    refused = _refused_code(second.response)
+    if refused is not None:
+        raise AgentTransportError(
+            "The peer '{0}' was refused ({1}) at its freshly looked-up address, "
+            "as at the one it had before.".format(name, refused)
+        )
+    return second.response
+
+
+def _refused_code(response: PeerResponse) -> Optional[str]:
+    """The code of an address the edge refused, or None for any other answer."""
+    if response.status != 404:
+        return None
+    try:
+        body = response.json()
+    except ValueError:
+        return None
+    error = body.get("error") if isinstance(body, dict) else None
+    code = error.get("code") if isinstance(error, dict) else None
+    return code if code in (AGENT_NOT_FOUND, AGENT_NOT_REACHABLE) else None
+
+
+def _peers_url() -> str:
+    """
+    Resolve ``AETHERFY_PEERS_URL`` into the URL to GET, without a trailing slash.
+
+    A TEMPLATE, exactly as :func:`_spawn_url` explains for its variable: the
+    platform leaves ``{id}`` as a literal placeholder in
+    ``.../agents/{id}/peers``, and the id that belongs there is this machine's
+    own agent, because these are THIS agent's peers.
+    """
+    url = _require("AETHERFY_PEERS_URL", "the peer lookup endpoint")
+    if "{id}" in url:
+        agent_id = _require(
+            "AETHERFY_AGENT_ID", "this agent's id, whose peers these are"
+        )
+        url = url.replace("{id}", agent_id)
+    return url.rstrip("/")
+
+
+def _lookup(url: str, name: Optional[str]) -> Dict[str, Any]:
+    """
+    One GET against the peers route, shared by :func:`agent_url` and
+    :func:`agent_urls`: the two answer in the same envelope and refuse in the
+    same words, so there is one place that maps the refusal.
+
+    THE CODE DECIDES, NOT THE STATUS ALONE, as in :func:`spawn`. 404 and 409
+    are categories the control plane reuses; ``AGENT_NOT_FOUND`` and
+    ``PEER_HAS_NO_URL`` are what it promises not to rename.
+    """
+    api_key = _require("AETHERFY_API_KEY", "the key a peer lookup authenticates with")
+    status, body, retry_after = _http.request_json(
+        "GET", url, api_key=api_key, ua=_user_agent()
+    )
+
+    if status == 200:
+        if not isinstance(body, dict):
+            raise PeerLookupError(
+                "The peer lookup answered 200 with a body that is not an "
+                "object, so there is nothing to return.",
+                status_code=status,
+            )
+        return body
+
+    detail = _detail_of(body)
+    what = "Looking up '{0}'".format(name) if name else "Listing the peers"
+    message = detail.get("message") or "{0} failed with status {1}.".format(
+        what, status
+    )
+    code = detail.get("code")
+    if status == 404 and code == AGENT_NOT_FOUND:
+        raise PeerNotFound(message, details=detail)
+    if status == 409 and code == PEER_HAS_NO_URL:
+        raise PeerHasNoUrl(message, details=detail)
+    raise PeerLookupError(
+        message,
+        status_code=status,
+        error_code=code,
+        details=detail,
+        retry_after=retry_after,
     )
 
 

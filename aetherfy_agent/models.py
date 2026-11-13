@@ -1,10 +1,11 @@
 """
 Value types returned by the Aetherfy Agent helper.
 
-All three are plain frozen dataclasses: they describe what the platform already
+All of them are plain frozen dataclasses: they describe what the platform already
 told this process, so there is nothing to configure and nothing to mutate.
 """
 
+import json as _json
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
@@ -85,3 +86,29 @@ class Run:
     error_message: Optional[str] = None
     #: Everything the control plane sent, unmodified.
     raw: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class PeerResponse:
+    """
+    What a peer answered to :func:`~aetherfy_agent.call_agent`.
+
+    Small on purpose: the peer is another service and its answer is its own, so
+    this carries the three things every answer has and no more. ``status`` is
+    the HTTP status exactly as the peer sent it — an error status is a return,
+    not a raise, because only the caller knows what a 404 from that peer means.
+    ``headers`` has lower-case names. ``text`` is the body decoded as UTF-8,
+    with undecodable bytes replaced.
+    """
+
+    status: int
+    headers: Dict[str, str]
+    text: str
+
+    def json(self) -> Any:
+        """
+        The body parsed as JSON.
+
+        :raises ValueError: the body is not JSON (an empty body included).
+        """
+        return _json.loads(self.text)

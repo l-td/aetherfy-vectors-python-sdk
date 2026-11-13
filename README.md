@@ -724,6 +724,48 @@ With the agent's own `AETHERFY_API_KEY`, a read the control plane does not
 allow that key ([which ones it allows](https://docs.aetherfy.com/platform/api-keys#agent-scoped-keys-issued-by-aetherfy))
 is refused with `RunReadError` and `error_code` `AUTH_AGENT_KEY_OUT_OF_SCOPE`.
 
+### Finding another agent at call time
+
+A service that talks to another service in its workspace never holds that
+service's address. It asks for it by name, at the moment it needs it, so a peer
+that was deleted and created again is reached at its new address without a
+restart:
+
+```python
+from aetherfy_agent import agent_url, agent_urls, call_agent
+
+url = agent_url("analyst")              # "https://analyst-k3m7x2.aetherfy.dev"
+peers = agent_urls()                    # {"analyst": "https://...", ...}
+
+reply = call_agent("analyst", "/summarise", method="POST", json={"id": 7})
+print(reply.status, reply.json())
+```
+
+A peer is another agent of THIS agent's own workspace that has a public URL.
+The answer is remembered in the process for `PEER_CACHE_SECONDS` (30), per name,
+with no request while it is fresh; `fresh=True` skips the memory and refreshes
+it. `call_agent` looks the peer up again, once, when the address it used is
+gone: the name does not resolve, the connection is refused, or the edge answered that address with a
+`404` whose body is `{"error": {"code": "AGENT_NOT_FOUND"}}` or
+`AGENT_NOT_REACHABLE`. Any other status, a `5xx` included, is returned as it
+came and never retried; a reset or a timeout raises `AgentTransportError`
+and is not repeated either, since the peer may already have acted. The peer is another service, so your Aetherfy key goes
+to the lookup and never to the peer.
+
+```python
+from aetherfy_agent import agent_url
+from aetherfy_agent.exceptions import PeerHasNoUrl, PeerLookupError, PeerNotFound
+
+try:
+    agent_url("analyst")
+except PeerNotFound:
+    print("this workspace has no agent of that name")
+except PeerHasNoUrl:
+    print("it exists, but it is not a service: nothing listens on it")
+except PeerLookupError as exc:
+    print(exc.error_code)
+```
+
 Full contract, including the environment variables behind every call:
 [docs.aetherfy.com/agents/task-contract](https://docs.aetherfy.com/agents/task-contract).
 
