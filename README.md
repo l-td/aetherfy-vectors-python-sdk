@@ -748,7 +748,11 @@ it. `call_agent` looks the peer up again, once, when the address it used is
 gone: the name does not resolve, the connection is refused, or the edge answered that address with a
 `404` whose body is `{"error": {"code": "AGENT_NOT_FOUND"}}` or
 `AGENT_NOT_REACHABLE`. Any other status, a `5xx` included, is returned as it
-came and never retried; a reset or a timeout raises `AgentTransportError`
+came and never retried; when the control plane cannot answer a lookup (429, 5xx, no
+connection) the last address known for that peer is returned and the control plane is
+not asked again before its `Retry-After` (at least `PEER_RETRY_FLOOR_SECONDS`, at most
+`PEER_RETRY_CAP_SECONDS`), and only with no known address is `PeerLookupError` raised;
+a reset or a timeout raises `AgentTransportError`
 and is not repeated either, since the peer may already have acted. The peer is another service, so your Aetherfy key goes
 to the lookup and never to the peer.
 

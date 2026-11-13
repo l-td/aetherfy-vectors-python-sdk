@@ -34,6 +34,8 @@ import pytest
 import aetherfy_agent
 from aetherfy_agent import (
     PEER_CACHE_SECONDS,
+    PEER_RETRY_CAP_SECONDS,
+    PEER_RETRY_FLOOR_SECONDS,
     agent_url,
     agent_urls,
     call_agent,
@@ -93,6 +95,8 @@ class Lookup:
         # name -> (status, body); None as the name is the list route.
         self.replies = {}
         self.retry_after = None
+        # set to an exception and every lookup raises it, after being counted
+        self.fail_with = None
 
     def answer(self, name, url):
         self.replies[name] = (200, {"name": name, "url": url})
@@ -106,6 +110,8 @@ class Lookup:
         else:
             assert url.startswith(PEERS + "/"), url
             key = unquote(url[len(PEERS) + 1 :])
+        if self.fail_with is not None:
+            raise self.fail_with
         status, reply = self.replies[key]
         return status, reply, self.retry_after
 
@@ -1089,3 +1095,218 @@ def test_over_a_real_socket_a_redirect_is_returned_not_followed(lookup, method):
     # ONE request reached the peer: the redirect was not followed.
     assert Redirecting.seen == [(method, "/moved")]
     assert lookup.count == 1
+
+
+# ------------------------------------------- a control plane that cannot answer
+#
+# A looked-up address outlives its window as the LAST KNOWN ONE and is served when the control plane
+# cannot answer (429, 5xx, no connection), and the control plane is not asked again before its
+# Retry-After. Every test counts lookups (events) and moves the injected clock; none waits.
+
+WINDOW_PAST = PEER_CACHE_SECONDS + 1
+
+
+def _known_then_expired(lookup, clock):
+    assert agent_url("analyst") == OLD
+    clock.advance(WINDOW_PAST)
+
+
+@pytest.mark.parametrize(
+    "status, retry_after",
+    [(429, 7.0), (500, None), (503, 7.0), (502, None)],
+    ids=["429", "500", "503", "502"],
+)
+def test_an_unanswered_lookup_serves_the_last_known_address(lookup, clock, status, retry_after):
+    _known_then_expired(lookup, clock)
+    lookup.replies["analyst"] = (status, envelope("SERVICE_UNAVAILABLE"))
+    lookup.retry_after = retry_after
+
+    assert agent_url("analyst") == OLD
+    assert lookup.count == 2  # asked once, was refused, served the known address
+
+
+def test_an_unreachable_control_plane_serves_the_last_known_address_too(lookup, clock):
+    _known_then_expired(lookup, clock)
+    lookup.fail_with = AgentTransportError("no connection")
+
+    assert agent_url("analyst") == OLD
+
+
+def test_the_control_plane_is_not_asked_again_before_its_retry_after(lookup, clock):
+    _known_then_expired(lookup, clock)
+    lookup.replies["analyst"] = (429, envelope("RATE_LIMIT_EXCEEDED"))
+    lookup.retry_after = 10.0
+    agent_url("analyst")
+    asked = lookup.count
+
+    clock.advance(9.9)
+    assert agent_url("analyst") == OLD
+    assert lookup.count == asked  # waiting: no request
+
+    lookup.answer("analyst", NEW)
+    clock.advance(0.1)
+    assert agent_url("analyst") == NEW  # the wait is over: asked, and answered
+    assert lookup.count == asked + 1
+
+
+@pytest.mark.parametrize(
+    "retry_after, waits",
+    [
+        (None, PEER_RETRY_FLOOR_SECONDS),
+        (3600.0, PEER_RETRY_CAP_SECONDS),
+        (20.0, 20.0),
+    ],
+    ids=["none-waits-the-floor", "long-is-capped", "in-range-is-honoured"],
+)
+def test_the_wait_is_the_retry_after_between_the_floor_and_the_cap(
+    lookup, clock, retry_after, waits
+):
+    _known_then_expired(lookup, clock)
+    lookup.replies["analyst"] = (503, envelope("SERVICE_UNAVAILABLE"))
+    lookup.retry_after = retry_after
+    agent_url("analyst")
+    asked = lookup.count
+
+    clock.advance(waits - 0.01)
+    agent_url("analyst")
+    assert lookup.count == asked
+    clock.advance(0.02)
+    agent_url("analyst")
+    assert lookup.count == asked + 1
+
+
+def test_a_retry_after_of_zero_is_asked_again_at_once(lookup, clock):
+    _known_then_expired(lookup, clock)
+    lookup.replies["analyst"] = (503, envelope("SERVICE_UNAVAILABLE"))
+    lookup.retry_after = 0.0
+    agent_url("analyst")
+    asked = lookup.count
+
+    agent_url("analyst")
+
+    assert lookup.count == asked + 1
+
+
+@pytest.mark.parametrize(
+    "status, code",
+    [(403, "AUTH_AGENT_KEY_OUT_OF_SCOPE"), (404, "AGENT_NOT_FOUND"), (409, "PEER_HAS_NO_URL")],
+)
+def test_an_answer_is_never_served_around(lookup, clock, status, code):
+    """The control plane SAID no: the known address is not a better answer than that."""
+    _known_then_expired(lookup, clock)
+    lookup.replies["analyst"] = (status, envelope(code))
+
+    with pytest.raises(PeerLookupError) as excinfo:
+        agent_url("analyst")
+
+    assert excinfo.value.status_code == status
+
+
+def test_a_peer_the_control_plane_says_is_gone_is_not_served_after_it(lookup, clock):
+    _known_then_expired(lookup, clock)
+    lookup.replies["analyst"] = (404, envelope("AGENT_NOT_FOUND"))
+    with pytest.raises(PeerNotFound):
+        agent_url("analyst")
+
+    lookup.replies["analyst"] = (503, envelope("SERVICE_UNAVAILABLE"))
+    with pytest.raises(PeerLookupError) as excinfo:
+        agent_url("analyst")
+
+    assert excinfo.value.status_code == 503  # nothing known to fall back to
+
+
+def test_with_no_known_address_the_failure_is_raised_and_then_waited_out(lookup, clock):
+    lookup.replies["analyst"] = (503, envelope("SERVICE_UNAVAILABLE"))
+    lookup.retry_after = 7.0
+
+    with pytest.raises(PeerLookupError) as first:
+        agent_url("analyst")
+    assert first.value.status_code == 503 and first.value.retry_after == 7.0
+
+    clock.advance(2)
+    with pytest.raises(PeerLookupError) as second:
+        agent_url("analyst")
+
+    assert lookup.count == 1  # the second did not ask
+    assert second.value.status_code == 503
+    assert second.value.retry_after == pytest.approx(5.0)
+    assert "no earlier address is known" in str(second.value)
+
+
+def test_fresh_is_never_answered_from_memory(lookup, clock):
+    _known_then_expired(lookup, clock)
+    lookup.replies["analyst"] = (503, envelope("SERVICE_UNAVAILABLE"))
+
+    with pytest.raises(PeerLookupError):
+        agent_url("analyst", fresh=True)
+    with pytest.raises(PeerLookupError):  # and waiting is not an answer either
+        agent_url("analyst", fresh=True)
+
+    assert lookup.count == 2  # the first fresh asked; the second waited
+
+
+def test_one_peers_outage_does_not_wait_out_another(lookup, clock):
+    lookup.answer("indexer", "https://indexer-a1b2c3.aetherfy.dev")
+    _known_then_expired(lookup, clock)
+    lookup.replies["analyst"] = (503, envelope("SERVICE_UNAVAILABLE"))
+    agent_url("analyst")
+
+    assert agent_url("indexer") == "https://indexer-a1b2c3.aetherfy.dev"
+
+
+def test_the_list_falls_back_to_the_last_list_known(lookup, clock):
+    lookup.replies[None] = (200, {"peers": [{"name": "analyst", "url": OLD}]})
+    assert agent_urls() == {"analyst": OLD}
+    clock.advance(WINDOW_PAST)
+    lookup.replies[None] = (429, envelope("RATE_LIMIT_EXCEEDED"))
+    lookup.retry_after = 9.0
+
+    served = agent_urls()
+    served["analyst"] = "edited"  # a copy
+
+    assert agent_urls() == {"analyst": OLD}
+    assert lookup.count == 2  # the second read waited
+    with pytest.raises(PeerLookupError):
+        agent_urls(fresh=True)
+
+
+def test_the_list_with_nothing_known_raises(lookup, clock):
+    lookup.replies[None] = (503, envelope("SERVICE_UNAVAILABLE"))
+    with pytest.raises(PeerLookupError) as excinfo:
+        agent_urls()
+    assert excinfo.value.status_code == 503
+
+
+def test_call_agent_reaches_the_peer_at_the_known_address_through_an_outage(peers, lookup, clock):
+    peers.behaviour[OLD] = (200, {"ok": True})
+    agent_url("analyst")
+    clock.advance(WINDOW_PAST)
+    lookup.replies["analyst"] = (429, envelope("RATE_LIMIT_EXCEEDED"))
+    lookup.retry_after = 5.0
+
+    response = call_agent("analyst", "/x")
+
+    assert response.status == 200
+    assert peers.urls() == [OLD + "/x"]
+
+
+def test_call_agent_does_not_retry_the_address_that_just_stopped_answering(peers, lookup, clock):
+    """The re-lookup is for an address that is GONE: serving that same address as the stale one
+    would be a second try of what just failed."""
+    peers.behaviour[OLD] = UNREACHABLE
+    agent_url("analyst")
+    lookup.replies["analyst"] = (503, envelope("SERVICE_UNAVAILABLE"))
+
+    with pytest.raises(PeerLookupError) as excinfo:
+        call_agent("analyst", "/x")
+
+    assert excinfo.value.status_code == 503
+    assert peers.urls() == [OLD + "/x"]  # one request, to the address that was known
+
+
+def test_a_failed_list_does_not_hold_back_a_lookup_by_name(lookup, clock):
+    lookup.replies[None] = (503, envelope("SERVICE_UNAVAILABLE"))
+    with pytest.raises(PeerLookupError):
+        agent_urls()
+
+    assert agent_url("analyst") == OLD  # asked, and answered: the two waits are separate

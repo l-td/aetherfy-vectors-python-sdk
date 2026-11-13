@@ -20,8 +20,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not resolve, the connection is refused, or the edge's `404` `AGENT_NOT_FOUND` /
   `AGENT_NOT_REACHABLE`); every other status is returned as it came, and a reset
   or a timeout raises `AgentTransportError` without a repeat, because the peer
-  may have acted. The Aetherfy key is sent to the lookup and
-  never to the peer. A peer the workspace does not have is `PeerNotFound`
+  may have acted.
+  When the control plane cannot answer a lookup (429, 5xx, no connection), the
+  last address known for that peer is returned and the control plane is not asked
+  again before its `Retry-After`, kept between `PEER_RETRY_FLOOR_SECONDS` (5) and
+  `PEER_RETRY_CAP_SECONDS` (60); with no known address the failure is raised. A
+  404 or 409 answer drops the known address, and `fresh` is never answered from
+  memory.
+  The Aetherfy key is sent to the lookup and never to the peer. A peer the workspace does not have is `PeerNotFound`
   (`404 AGENT_NOT_FOUND`), one nothing listens on is `PeerHasNoUrl`
   (`409 PEER_HAS_NO_URL`), anything else is `PeerLookupError` carrying
   `error_code`. Reads `AETHERFY_PEERS_URL`, a template like

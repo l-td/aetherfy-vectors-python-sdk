@@ -103,6 +103,8 @@ __all__ = [
     "WAIT_TIMEOUT_DEFAULT_SECONDS",
     # The same rule for the peer lookup's memory window.
     "PEER_CACHE_SECONDS",
+    "PEER_RETRY_FLOOR_SECONDS",
+    "PEER_RETRY_CAP_SECONDS",
     "MachineShape",
     "PeerResponse",
     "Run",
@@ -163,6 +165,11 @@ WAIT_TIMEOUT_DEFAULT_SECONDS = 30
 #: definition lives beside the cache that applies it; this is the same number,
 #: readable where the calls are.
 PEER_CACHE_SECONDS = _peers.PEER_CACHE_SECONDS
+
+#: How soon after a failed lookup the control plane is asked again: its Retry-After, kept between these.
+#: While waiting, the last address known for the peer is served (see :func:`agent_url`).
+PEER_RETRY_FLOOR_SECONDS = _peers.PEER_RETRY_FLOOR_SECONDS
+PEER_RETRY_CAP_SECONDS = _peers.PEER_RETRY_CAP_SECONDS
 
 
 def _require(variable: str, purpose: str, remedy: Optional[str] = None) -> str:
@@ -625,6 +632,14 @@ def agent_url(name: str, *, fresh: bool = False) -> str:
     Only the NAME to URL pair is kept. A refusal is never kept, so a peer that
     is created a moment after a :class:`PeerNotFound` is found on the next call.
 
+    WHEN THE CONTROL PLANE CANNOT ANSWER (429, 5xx, or no connection), the
+    last address known for the peer is returned if there is one, and the
+    control plane is not asked again before its ``Retry-After`` (between
+    ``PEER_RETRY_FLOOR_SECONDS`` and ``PEER_RETRY_CAP_SECONDS``): stale beats
+    failing a call that would have worked. With no known address the failure
+    is raised. ``fresh=True`` is never answered from memory, and a 404 or 409
+    drops the known address.
+
     :raises PeerNotFound: 404 ``AGENT_NOT_FOUND``, the workspace has no agent
         of that name.
     :raises PeerHasNoUrl: 409 ``PEER_HAS_NO_URL``, the agent exists but nothing
@@ -643,7 +658,26 @@ def agent_url(name: str, *, fresh: bool = False) -> str:
         if cached is not None:
             return cached
 
-    body = _lookup("{0}/{1}".format(_peers_url(), quote(name, safe="")), name)
+    waiting = _peers.cache.blocked(name)
+    if waiting is not None:
+        stale = None if fresh else _peers.cache.last_known_url(name)
+        if stale is not None:
+            return stale
+        raise _still_waiting("Looking up '{0}'".format(name), *waiting)
+
+    try:
+        body = _lookup("{0}/{1}".format(_peers_url(), quote(name, safe="")), name)
+    except (PeerNotFound, PeerHasNoUrl):
+        _peers.cache.forget_url(name)
+        raise
+    except (PeerLookupError, AgentTransportError) as exc:
+        if not _control_plane_could_not_answer(exc):
+            raise
+        _block(name, exc)
+        stale = None if fresh else _peers.cache.last_known_url(name)
+        if stale is not None:
+            return stale
+        raise
     url = body.get("url")
     if not isinstance(url, str) or not url:
         raise PeerLookupError(
@@ -669,6 +703,10 @@ def agent_urls(*, fresh: bool = False) -> Dict[str, str]:
 
     The dict is a copy: editing it does not edit what is remembered.
 
+    The same fallback as :func:`agent_url`: when the control plane cannot
+    answer, the last list known is returned, and the control plane is not
+    asked again before its ``Retry-After``.
+
     :raises PeerLookupError: a refusal, among them 403
         ``AUTH_AGENT_KEY_OUT_OF_SCOPE`` — read ``error_code``, not the prose.
     :raises NotRunningOnAgent: ``AETHERFY_PEERS_URL`` or ``AETHERFY_API_KEY`` is
@@ -680,7 +718,23 @@ def agent_urls(*, fresh: bool = False) -> Dict[str, str]:
         if cached is not None:
             return cached
 
-    body = _lookup(_peers_url(), None)
+    waiting = _peers.cache.blocked(None)
+    if waiting is not None:
+        stale_list = None if fresh else _peers.cache.last_known_list()
+        if stale_list is not None:
+            return stale_list
+        raise _still_waiting("Listing the peers", *waiting)
+
+    try:
+        body = _lookup(_peers_url(), None)
+    except (PeerLookupError, AgentTransportError) as exc:
+        if not _control_plane_could_not_answer(exc):
+            raise
+        _block(None, exc)
+        stale_list = None if fresh else _peers.cache.last_known_list()
+        if stale_list is not None:
+            return stale_list
+        raise
     peers = body.get("peers")
     if not isinstance(peers, list):
         raise PeerLookupError(
@@ -839,6 +893,39 @@ def _peers_url() -> str:
         )
         url = url.replace("{id}", agent_id)
     return url.rstrip("/")
+
+
+def _control_plane_could_not_answer(exc: Exception) -> bool:
+    """A lookup that failed for the control plane's state, not for what was asked: no connection,
+    429 or 5xx. A 403, a 404 and a 409 are ANSWERS and are never served around."""
+    if isinstance(exc, AgentTransportError):
+        return True
+    status = getattr(exc, "status_code", None)
+    return isinstance(status, int) and (status == 429 or status >= 500)
+
+
+def _block(key: Optional[str], exc: Exception) -> None:
+    _peers.cache.block(
+        key,
+        _peers.retry_delay(getattr(exc, "retry_after", None)),
+        getattr(exc, "status_code", None),
+        getattr(exc, "error_code", None),
+    )
+
+
+def _still_waiting(
+    what: str, left: float, status: Optional[int], code: Optional[str]
+) -> PeerLookupError:
+    """The failure of the lookup being waited out, raised instead of asking again."""
+    return PeerLookupError(
+        "{0} failed a moment ago ({1}) and the control plane is not asked again for "
+        "{2:.0f} more second(s); no earlier address is known.".format(
+            what, status if status is not None else "no connection", left
+        ),
+        status_code=status,
+        error_code=code,
+        retry_after=left,
+    )
 
 
 def _lookup(url: str, name: Optional[str]) -> Dict[str, Any]:
