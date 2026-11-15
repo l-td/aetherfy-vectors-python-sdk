@@ -490,6 +490,29 @@ class TestHonouredQdrantParameters:
     @pytest.mark.parametrize(
         "method", ["create_collection", "delete_collection", "retrieve", "scroll", "count", "search"]
     )
+    def test_a_deadline_never_hands_a_request_more_than_its_timeout(self, wired, method):
+        """deadline - now is computed in floating point: on this monotonic reading a
+        7 s deadline with no time elapsed is 7.000000000029104, so the request
+        would be handed more than its timeout. The clock is this module's only
+        (aetherfy_vectors.client.time is replaced, the time module is not)."""
+        import time as real_time
+
+        class _Clock:
+            def monotonic(self):
+                return 262142.61777491038
+
+            def __getattr__(self, name):
+                return getattr(real_time, name)
+
+        client, mock_requests = wired
+        with patch("aetherfy_vectors.client.time", _Clock()):
+            _call(client, method, timeout=7)
+        timeouts = [c.kwargs["timeout"] for c in mock_requests.request.call_args_list]
+        assert len(timeouts) == 1 and timeouts[0] == 7, timeouts
+
+    @pytest.mark.parametrize(
+        "method", ["create_collection", "delete_collection", "retrieve", "scroll", "count", "search"]
+    )
     def test_no_timeout_keeps_the_client_policy(self, wired, method):
         client, mock_requests = wired
         _call(client, method)

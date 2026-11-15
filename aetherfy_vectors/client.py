@@ -550,7 +550,10 @@ class AetherfyVectorsClient:
             url = build_api_url(self.endpoint, endpoint)
             this_attempt = request_timeout
             if deadline is not None:
-                this_attempt = deadline - time.monotonic()
+                # What remains of the caller's deadline, and never more than it: on a
+                # large monotonic clock, deadline - now can round to a hair over
+                # `timeout` with no time elapsed at all.
+                this_attempt = min(timeout, deadline - time.monotonic())
                 if this_attempt <= 0:
                     raise RequestTimeoutError(
                         f"Request to {endpoint} exceeded its {timeout} s deadline"
