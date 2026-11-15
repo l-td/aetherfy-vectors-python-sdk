@@ -872,8 +872,8 @@ collection placement, pass `regions=` to `create_collection` (see below).
 
 ### Python Version Support
 
-- **Minimum**: Python 3.10
-- **Tested**: Python 3.10, 3.11, 3.12
+- **Minimum**: Python 3.11
+- **Tested**: Python 3.11, 3.12, 3.13, 3.14
 
 ## 📚 Complete API Reference
 

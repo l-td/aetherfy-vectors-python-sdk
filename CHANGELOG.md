@@ -33,11 +33,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `error_code`. Reads `AETHERFY_PEERS_URL`, a template like
   `AETHERFY_SPAWN_URL`.
 
-### Changed (breaking)
-
-- **Python 3.10 is the minimum.** Python 3.9 reached its end of life in October 2025;
-  `python_requires` is `>=3.10` and the test matrix is 3.10, 3.11 and 3.12.
-
 ## [1.3.0] - 2026-10-23
 
 This release contains changes marked BREAKING below. They ship in a minor

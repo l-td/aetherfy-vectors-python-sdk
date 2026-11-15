@@ -509,7 +509,7 @@ def test_perf_claim_patterns_actually_fire():
         "100% compatible with `qdrant-client` API",           # compatibility, not perf
         "up to **512 points** in one round trip",
         "1000 points/call, 10 MB/response",
-        "Python 3.10, 3.11, 3.12",
+        "Python 3.11, 3.12, 3.13, 3.14",
         "VectorConfig(size=128, distance=DistanceMetric.COSINE)",
     ]:
         assert not any(p.search(fine) for p, _ in PERF_CLAIM_PATTERNS), (
