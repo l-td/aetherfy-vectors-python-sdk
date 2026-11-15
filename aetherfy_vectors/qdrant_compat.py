@@ -35,7 +35,7 @@ a deliberate change that has to classify whatever the new version added.
 
 Why 1.15.1: it is the last qdrant-client release that has ``search``, the
 method the README's migration example calls (1.16 removed it in favour of
-``query_points``, which this SDK does not have), and it supports Python 3.9,
+``query_points``, which this SDK does not have), and it supports Python 3.10,
 the floor of this package, so every CI lane derives from the same version.
 """
 
