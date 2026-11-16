@@ -5,6 +5,68 @@ All notable changes to the Aetherfy Vectors Python SDK will be documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-11-16
+
+This release contains a change marked BREAKING below.
+
+### Changed
+
+- **A run over the account's in-flight limit waits in a line instead of being
+  refused.** `spawn` now answers such a run with `status` `"waiting"`, and the
+  run waits in the account's line (state `waiting`: no machine, nothing billed)
+  until a slot frees. `wait` keeps holding through the time in the line and
+  returns when the run ends. A run that goes straight to a machine is `"queued"`
+  as before. The README no longer says Aetherfy never queues a run.
+- **A run ends `completed`, `failed` or `cancelled`.** A run is `waiting` while
+  it waits in the line and `active` while it executes. `Run.state` is still the
+  platform's own string, so no enum was added, and the README samples branch on
+  all three endings instead of only `"completed"`.
+- `Spawn.job_id` is `None`, not the string `"None"`, for a run that waits in the
+  line: it has no job yet. Its type is `Optional[str]`.
+- `RunAccessDenied` carries the code that arrived in `error_code`:
+  `DEPLOYMENT_ACCESS_DENIED` as before, or `AUTH_AGENT_KEY_OUT_OF_SCOPE` from
+  `cancel`. A READ that the agent's key may not make is still a plain
+  `RunReadError` with that code, as before.
+
+### Changed (breaking)
+
+- **BREAKING: `TooManyRunsInFlight` is `RunLineFull`.** The in-flight limit no
+  longer refuses a run, so `429 AGENT_RUN_CONCURRENCY_LIMIT_EXCEEDED` is gone,
+  and so is the class, its code constant and every mention of it: there is no
+  alias, and `except TooManyRunsInFlight` becomes `except RunLineFull`.
+  `RunLineFull` is raised on `429 AGENT_RUN_LINE_FULL`, and only when the
+  account's line itself is full. It is a `SpawnError`, as before, and carries
+  `waiting_count`, `max_waiting_runs`, `in_flight_count`, `max_in_flight_runs`,
+  `limit` and `retry_after`. The control plane sends no `Retry-After` with it, so
+  `retry_after` is `None` unless a header is there, and nothing is retried for
+  you.
+
+### Added
+
+- **`cancel(run_id)` stops a run**, waiting or executing, and returns a
+  `Cancellation` (`run`, `outcome`, `message`, `cancelled_count`). `outcome` is
+  `"cancelled"` (cancelled now), `"stopping"` (executing, being stopped; it ends
+  `cancelled`) or `"already_finished"` (not an error). `cancelled_count` includes
+  the runs started below it. It posts to `/deployments/{run_id}/cancel` with the
+  agent's key. A release id is `NotARun` (`409 DEPLOYMENT_NOT_A_RUN`); no run is
+  `RunNotFound`; another account's run or a run outside what the agent's key may
+  cancel (the runs below its own run) is `RunAccessDenied`; anything else is
+  `RunCancelError` carrying `error_code`.
+- **`service_run(headers)` is the handle for a service's run handler.** Inside
+  `POST /aetherfy/run`, `service_run(request.headers)` reads `X-Aetherfy-Run` and
+  `X-Aetherfy-Run-Key` (case-insensitively, from a dict or Starlette's or
+  Flask's headers) and returns a `ServiceRun` with `run_id`, `spawn`, `result`,
+  `wait` and `cancel`: the same signatures, endpoints and errors as the
+  module-level functions, authenticating with the run's own key, so what the
+  handler starts belongs to the run. Headers without the id and key raise
+  `NotAServiceRun`. The handle is explicit because an implicit context would be
+  lost across threads and fall back to the release's key without an error. The
+  module-level functions are unchanged and keep reading `AETHERFY_API_KEY`.
+- `Spawn.position` (the place in the line, 1 being next; `None` unless the run
+  is waiting) and `Spawn.raw` (the whole response body).
+- New exports: `cancel`, `service_run`, `Cancellation`, `ServiceRun`,
+  `HeaderSource`, `RunLineFull`, `RunCancelError`, `NotARun`, `NotAServiceRun`.
+
 ## [1.4.0] - 2026-11-15
 
 ### Added
