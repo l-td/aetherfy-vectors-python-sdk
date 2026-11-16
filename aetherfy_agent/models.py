@@ -58,8 +58,10 @@ class Spawn:
     workspace: str
     estimated_start: Optional[str] = None
     position: Optional[int] = None
-    #: Everything the control plane sent, unmodified.
-    raw: Dict[str, Any] = field(default_factory=dict)
+    #: Everything the control plane sent, unmodified. Left out of the hash, so a
+    #: Spawn stays usable as a dict key or in a set, as it was before it had a
+    #: ``raw`` (a dict cannot be hashed).
+    raw: Dict[str, Any] = field(default_factory=dict, hash=False)
 
 
 @dataclass(frozen=True)

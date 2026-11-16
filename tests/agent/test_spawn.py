@@ -148,6 +148,15 @@ def test_a_position_that_is_not_an_integer_is_no_position(transport, position):
     assert spawn("nightly-rollup").position is None
 
 
+def test_a_spawn_is_still_hashable(transport):
+    """`raw` is a dict, which cannot be hashed; it is left out of the hash so a
+    Spawn stays usable as a dict key or in a set, as it was before it had one."""
+    run = spawn("nightly-rollup")
+
+    assert hash(run) == hash(spawn("nightly-rollup"))
+    assert {run: "x"}[run] == "x"
+
+
 def test_raw_is_the_whole_response_body(transport):
     """What the platform sends beyond the named fields is kept, as `Run.raw`
     keeps the whole deployment object."""
