@@ -7,7 +7,7 @@ https://docs.aetherfy.com/agents/task-contract, and the helper exists so that
 equivalent stops being copied into every task.
 
     from aetherfy_agent import payload, machine, fan_out, spawn
-    from aetherfy_agent import write_result, result, wait
+    from aetherfy_agent import write_result, result, wait, cancel
     from aetherfy_agent import agent_url, call_agent
 
     data = payload()                         # this run's input, {} when none
@@ -18,6 +18,7 @@ equivalent stops being copied into every task.
     run = spawn("nightly-rollup", {"date": "2026-09-07"})
     finished = wait(run.spawn_id)            # or result(...) for a plain read
     print(finished.result)
+    cancel(run.spawn_id)                     # stop it, waiting or running
 
     url = agent_url("analyst")               # a peer service's address, by name
     reply = call_agent("analyst", "/summarise", method="POST", json={"id": 7})
@@ -26,8 +27,20 @@ equivalent stops being copied into every task.
 TWO HALVES, and they are the same contract read from opposite ends. A task
 reads its payload and writes its result; whoever started it spawns and then
 reads that result back. ``payload``/``write_result`` are files on the machine
-and touch no network at all; ``spawn``/``result``/``wait`` are the control
-plane, and are the only calls here that do.
+and touch no network at all; ``spawn``/``result``/``wait``/``cancel`` are the
+control plane, and are the only calls here that do.
+
+A RUN HAS A LIFE BEFORE IT RUNS. When the account is at its in-flight limit, a
+new run waits in the account's line (state ``waiting``, no machine, nothing
+billed), and ``wait`` keeps waiting through that time. A run ends ``completed``,
+``failed`` or ``cancelled``; ``cancel`` is what ends one from outside, whether
+it is waiting or executing.
+
+INSIDE A SERVICE'S RUN HANDLER, USE THE HANDLE. The key these module-level
+calls read from ``AETHERFY_API_KEY`` is, in a service, the release's: right for
+the service's own traffic, wrong for a run. ``service_run(request.headers)``
+returns a handle whose ``spawn``, ``result``, ``wait`` and ``cancel`` use the
+run's own key, so what the handler starts belongs to the run.
 
 A THIRD THING, for a service that talks to another service: ``agent_url`` and
 ``agent_urls`` look a peer's public address up BY NAME at call time, and
@@ -45,21 +58,38 @@ nothing in your requirements. A custom container installs it itself.
 import json
 import os
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
-from typing import Any, Callable, Dict, Iterable, List, Optional, TypeVar
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Optional,
+    Protocol,
+    Tuple,
+    TypeGuard,
+    TypeVar,
+)
 from urllib.parse import quote
 
 from . import _http, _peers
 from .exceptions import (
     AGENT_NOT_FOUND,
     AGENT_NOT_REACHABLE,
-    AGENT_RUN_CONCURRENCY_LIMIT_EXCEEDED,
+    AGENT_RUN_LINE_FULL,
+    AUTH_AGENT_KEY_OUT_OF_SCOPE,
     DEPLOYMENT_ACCESS_DENIED,
+    DEPLOYMENT_NOT_A_RUN,
     DEPLOYMENT_NOT_FOUND,
     DEPLOYMENT_WAIT_TIMEOUT_INVALID,
     PEER_HAS_NO_URL,
+    RUN_ID_HEADER,
+    RUN_KEY_HEADER,
     RUN_PAYLOAD_TOO_LARGE,
     AgentError,
     AgentTransportError,
+    NotARun,
+    NotAServiceRun,
     NotRunningOnAgent,
     PayloadTooLarge,
     PayloadUnavailable,
@@ -68,13 +98,14 @@ from .exceptions import (
     PeerNotFound,
     ResultTooLarge,
     RunAccessDenied,
+    RunCancelError,
+    RunLineFull,
     RunNotFound,
     RunReadError,
     SpawnError,
-    TooManyRunsInFlight,
     WaitTimeoutInvalid,
 )
-from .models import MachineShape, PeerResponse, Run, Spawn
+from .models import Cancellation, MachineShape, PeerResponse, Run, Spawn
 
 # ONE distribution, ONE version. `aetherfy_vectors.__version__` is what
 # setup.py reads to stamp the wheel, so re-exporting it here means the
@@ -91,6 +122,8 @@ __all__ = [
     "write_result",
     "result",
     "wait",
+    "cancel",
+    "service_run",
     "agent_url",
     "agent_urls",
     "call_agent",
@@ -105,12 +138,17 @@ __all__ = [
     "PEER_CACHE_SECONDS",
     "PEER_RETRY_FLOOR_SECONDS",
     "PEER_RETRY_CAP_SECONDS",
+    "Cancellation",
+    "HeaderSource",
     "MachineShape",
     "PeerResponse",
     "Run",
+    "ServiceRun",
     "Spawn",
     "AgentError",
     "AgentTransportError",
+    "NotARun",
+    "NotAServiceRun",
     "NotRunningOnAgent",
     "PayloadUnavailable",
     "PayloadTooLarge",
@@ -121,8 +159,9 @@ __all__ = [
     "RunReadError",
     "RunNotFound",
     "RunAccessDenied",
+    "RunCancelError",
+    "RunLineFull",
     "SpawnError",
-    "TooManyRunsInFlight",
     "WaitTimeoutInvalid",
 ]
 
@@ -388,23 +427,36 @@ def spawn(child: str, payload: Optional[Dict[str, Any]] = None) -> Spawn:
     call to be allowed.
 
     ACCEPTANCE IS NOT EXECUTION. The returned :class:`~.models.Spawn` says the
-    run was recorded and its deploy queued. Aetherfy never queues a run behind
-    another: a spawn aimed at a task whose machines are all busy gets a machine
-    of its own and runs at once, and a task spawn over the account's
-    runs-in-flight limit is refused (:class:`TooManyRunsInFlight`) — the same
-    limit, and the same code, a manual or scheduled run meets. Wait for the run and read
-    its state.
+    run was recorded. A run over the account's in-flight limit is not refused:
+    it WAITS in the account's line (``status`` ``"waiting"``, ``position`` its
+    place there, 1 being next), with no machine and nothing billed, and starts
+    when a slot frees; otherwise ``status`` is ``"queued"`` and it goes straight
+    to a machine. :func:`wait` includes the time in the line. A spawn is refused
+    only when the line itself is full (:class:`RunLineFull`), and nothing is
+    retried for you then. Wait for the run and read its state.
 
     Keep the payload small: it is for parameters and references, not data. Pass
     anything large by reference to a collection.
 
+    This uses ``AETHERFY_API_KEY``: on a task machine that is the run's own key,
+    in a service the release's. Inside a service's run handler, spawn through
+    :func:`service_run` so the new run belongs to the run being handled.
+
     :raises PayloadTooLarge: 413, the payload crossed the inline cap.
-    :raises TooManyRunsInFlight: 429, the concurrent-run cap is full. The one
-        failure here worth retrying.
+    :raises RunLineFull: 429, the account's line of waiting runs is full.
     :raises SpawnError: any other refusal — read ``error_code``, not the prose.
     :raises AgentTransportError: the request never reached the control plane.
     """
-    api_key = _require("AETHERFY_API_KEY", "the key a spawn authenticates with")
+    return _spawn_as(
+        _require("AETHERFY_API_KEY", "the key a spawn authenticates with"),
+        child,
+        payload,
+    )
+
+
+def _spawn_as(api_key: str, child: str, payload: Optional[Dict[str, Any]]) -> Spawn:
+    """The one spawn, for whichever key it is made with: :func:`spawn` passes
+    the environment's, a :class:`ServiceRun` its run's."""
     url = _spawn_url()
 
     status, body, retry_after = _http.request_json(
@@ -422,14 +474,20 @@ def spawn(child: str, payload: Optional[Dict[str, Any]] = None) -> Spawn:
                 "object, so the run cannot be identified.".format(status),
                 status_code=status,
             )
+        # A run waiting in the line has no job yet, and a run that is not
+        # waiting has no place in it: null is an answer, not the string "None".
+        job_id = body.get("job_id")
+        position = body.get("position")
         return Spawn(
             spawn_id=str(body.get("spawn_id")),
-            job_id=str(body.get("job_id")),
+            job_id=None if job_id is None else str(job_id),
             child_agent_id=str(body.get("child_agent_id")),
             region=str(body.get("region")),
             status=str(body.get("status")),
             workspace=str(body.get("workspace")),
             estimated_start=body.get("estimated_start"),
+            position=position if _is_int(position) else None,
+            raw=body,
         )
 
     detail = _detail_of(body)
@@ -452,12 +510,14 @@ def spawn(child: str, payload: Optional[Dict[str, Any]] = None) -> Spawn:
             max_bytes=detail.get("max_bytes"),
             details=detail,
         )
-    if status == 429 and code == AGENT_RUN_CONCURRENCY_LIMIT_EXCEEDED:
-        raise TooManyRunsInFlight(
+    if status == 429 and code == AGENT_RUN_LINE_FULL:
+        raise RunLineFull(
             message,
+            waiting_count=detail.get("waiting_count"),
+            max_waiting_runs=detail.get("max_waiting_runs"),
             in_flight_count=detail.get("in_flight_count"),
-            limit=detail.get("limit"),
             max_in_flight_runs=detail.get("max_in_flight_runs"),
+            limit=detail.get("limit"),
             details=detail,
             retry_after=retry_after,
         )
@@ -545,10 +605,12 @@ def result(run_id: str) -> Run:
     """
     Read one run back, with whatever it returned.
 
-    Answers immediately with the run as it stands. A run that is still going
-    has ``state == "active"`` and no result yet; :func:`wait` is the same read
-    with the waiting done server-side, and is what to use when the answer is
-    the point.
+    Answers immediately with the run as it stands. A run that has not ended has
+    no result yet: its ``state`` is ``"waiting"`` while it waits in the
+    account's line and ``"active"`` while it is executing, and it ends
+    ``"completed"``, ``"failed"`` or ``"cancelled"``. :func:`wait` is the same
+    read with the waiting done server-side, and is what to use when the answer
+    is the point.
 
     ``run_id`` is a run's id — ``Spawn.spawn_id`` from a :func:`spawn`, or the
     id of this run itself in ``AETHERFY_SPAWN_ID``.
@@ -562,7 +624,11 @@ def result(run_id: str) -> Run:
     :raises RunReadError: any other refusal — read ``error_code``, not the prose.
     :raises AgentTransportError: the request never reached the control plane.
     """
-    return _read_run(_run_url(run_id))
+    return _result_as(_environment_key("the key a run is read with"), run_id)
+
+
+def _result_as(api_key: str, run_id: str) -> Run:
+    return _read_run(_run_url(run_id), api_key)
 
 
 def wait(run_id: str, timeout_seconds: int = WAIT_TIMEOUT_DEFAULT_SECONDS) -> Run:
@@ -573,12 +639,18 @@ def wait(run_id: str, timeout_seconds: int = WAIT_TIMEOUT_DEFAULT_SECONDS) -> Ru
     without it every caller writes the same loop with its own interval, and all
     of them pay for the privilege of not knowing yet.
 
+    THE TIME IN THE LINE IS PART OF WHAT IS WAITED FOR. A run over the account's
+    in-flight limit waits in the account's line (state ``waiting``), and this
+    keeps holding through it. It returns when the run has ended: ``completed``,
+    ``failed`` or ``cancelled``.
+
     A TIMEOUT IS NOT AN ERROR. If the run has not finished in ``timeout_seconds``
     this returns it exactly as it stands — read ``Run.state``, which is
-    ``active`` while a run is executing and ``completed`` or ``failed`` when it
-    is over, and call again. Waiting longer than the maximum is a second call,
-    not a bigger number: the request is held open, and anything longer is cut
-    by the network in front of Aetherfy.
+    ``waiting`` while the run waits in the line, ``active`` while it is
+    executing, and ``completed``, ``failed`` or ``cancelled`` when it is over,
+    and call again. Waiting longer than the maximum is a second call, not a
+    bigger number: the request is held open, and anything longer is cut by the
+    network in front of Aetherfy.
 
     ONE CONNECTION FAILURE IS NOT RETRIED HERE, unlike every other call in this
     module. A retry would silently hold a second full timeout and hand back a
@@ -599,6 +671,12 @@ def wait(run_id: str, timeout_seconds: int = WAIT_TIMEOUT_DEFAULT_SECONDS) -> Ru
     :raises RunReadError: any other refusal.
     :raises AgentTransportError: the request never reached the control plane.
     """
+    return _wait_as(
+        _environment_key("the key a run is read with"), run_id, timeout_seconds
+    )
+
+
+def _wait_as(api_key: str, run_id: str, timeout_seconds: int) -> Run:
     timeout_seconds = int(timeout_seconds)
     if not WAIT_TIMEOUT_MIN_SECONDS <= timeout_seconds <= WAIT_TIMEOUT_MAX_SECONDS:
         raise ValueError(
@@ -609,9 +687,224 @@ def wait(run_id: str, timeout_seconds: int = WAIT_TIMEOUT_DEFAULT_SECONDS) -> Ru
         )
     return _read_run(
         "{0}/wait?timeout_seconds={1}".format(_run_url(run_id), timeout_seconds),
+        api_key,
         timeout=timeout_seconds + _WAIT_TRANSPORT_MARGIN_SECONDS,
         retry_connection_errors=False,
     )
+
+
+def cancel(run_id: str) -> Cancellation:
+    """
+    Cancel a run, whether it is waiting in the account's line or executing.
+
+    ``run_id`` is a run's id — ``Spawn.spawn_id`` from a :func:`spawn`. The
+    answer is a :class:`~.models.Cancellation`: its ``outcome`` is
+    ``"cancelled"`` (the run is cancelled now), ``"stopping"`` (it was
+    executing and is being stopped; it ends ``cancelled``) or
+    ``"already_finished"`` (it had ended before this call). A run that had
+    already ended is NOT an error, so cancelling twice, or racing the run's own
+    end, needs no handling. ``cancelled_count`` counts every run this call
+    cancelled, the runs started below the cancelled one (its descendants)
+    included: a cancelled run's own spawns are cancelled with it.
+
+    A run cancelled from outside ends ``cancelled``, on every path: by a person,
+    by a run above it, or as part of a cascade. A cancelled run's key stops
+    working at once, so whatever it was still starting is refused.
+
+    WHICH RUNS A KEY MAY CANCEL. An account's key may cancel any run of the
+    account. An agent's own key (``AETHERFY_API_KEY`` on an agent machine) may
+    cancel only the runs below its own run, not the run itself and not its
+    siblings. Inside a service's run handler, cancel through :func:`service_run`.
+
+    This is for runs. A release (a deploy) is cancelled with the CLI's
+    ``afy cancel <agent>``.
+
+    :raises RunNotFound: 404, no run has that id.
+    :raises RunAccessDenied: 403, the run belongs to another account
+        (``error_code`` ``DEPLOYMENT_ACCESS_DENIED``), or an agent's key was
+        used on a run that is not below its own (``error_code``
+        ``AUTH_AGENT_KEY_OUT_OF_SCOPE``).
+    :raises NotARun: 409 ``DEPLOYMENT_NOT_A_RUN``, the id names a release.
+    :raises RunCancelError: any other refusal — read ``error_code``, not the
+        prose. Note that :class:`RunNotFound` and :class:`RunAccessDenied` are
+        not its subclasses; catch :class:`AgentError` to see all of them.
+    :raises ValueError: ``run_id`` is empty. No request is sent.
+    :raises AgentTransportError: the request never reached the control plane.
+    """
+    return _cancel_as(_environment_key("the key a cancel authenticates with"), run_id)
+
+
+def _cancel_as(api_key: str, run_id: str) -> Cancellation:
+    url = "{0}/cancel".format(_run_url(run_id))
+    status, body, retry_after = _http.request_json(
+        "POST", url, api_key=api_key, ua=_user_agent()
+    )
+
+    if status == 200:
+        run = body.get("run") if isinstance(body, dict) else None
+        outcome = body.get("outcome") if isinstance(body, dict) else None
+        if not (isinstance(body, dict) and isinstance(run, dict) and outcome):
+            raise RunCancelError(
+                "Cancelling the run answered 200 with a body that has no run "
+                "and outcome, so what the cancel did is not known.",
+                status_code=status,
+            )
+        message = body.get("message")
+        cancelled_count = body.get("cancelled_count")
+        return Cancellation(
+            run=_run_from(run),
+            outcome=str(outcome),
+            message=message if isinstance(message, str) else "",
+            cancelled_count=cancelled_count if _is_int(cancelled_count) else 0,
+        )
+
+    detail = _detail_of(body)
+    message = detail.get(
+        "message"
+    ) or "Cancelling the run failed with status {0}.".format(status)
+    code = detail.get("code")
+
+    # THE CODE DECIDES, NOT THE STATUS ALONE, as in spawn() and the reads. The
+    # 404 and the DEPLOYMENT_ACCESS_DENIED 403 are the read family's own, shared
+    # with it; the out-of-scope 403 is mapped here and not on a read, because a
+    # cancel has one problem to report with it (this key may not cancel that
+    # run) and a read has another.
+    refusal = _shared_run_refusal(status, code, message, detail)
+    if refusal is not None:
+        raise refusal
+    if status == 403 and code == AUTH_AGENT_KEY_OUT_OF_SCOPE:
+        raise RunAccessDenied(
+            message, details=detail, error_code=AUTH_AGENT_KEY_OUT_OF_SCOPE
+        )
+    if status == 409 and code == DEPLOYMENT_NOT_A_RUN:
+        raise NotARun(message, details=detail)
+    raise RunCancelError(
+        message,
+        status_code=status,
+        error_code=code,
+        details=detail,
+        retry_after=retry_after,
+    )
+
+
+class HeaderSource(Protocol):
+    """
+    The headers of a request, as a web framework hands them over: anything with
+    ``items()`` yielding ``(name, value)`` pairs. A plain ``dict``, Starlette's
+    and FastAPI's ``request.headers``, Flask's ``request.headers`` and the
+    standard library's ``http.server`` headers all are. Names are compared
+    without regard to case.
+    """
+
+    def items(self) -> Iterable[Tuple[str, str]]:
+        ...
+
+
+class ServiceRun:
+    """
+    The run a service is handling right now, as a handle to spawn, read, wait
+    on and cancel with THAT RUN'S OWN KEY. Built by :func:`service_run`.
+
+    ``spawn``, ``result``, ``wait`` and ``cancel`` are the module-level
+    functions of the same names, with the same signatures, the same endpoints,
+    the same errors and the same documentation; only the key differs. What the
+    handler starts through the handle belongs to the run: it is in the run's
+    tree, so cancelling the run cancels it, and the run's key may read and wait
+    on it. ``run_id`` is the id of the run being handled.
+
+    WHY A HANDLE YOU PASS, NOT A CONTEXT THE LIBRARY KEEPS. A service answers
+    many runs at once on one process, so which run a call belongs to has to come
+    from somewhere. An implicit context (``contextvars``) is lost the moment
+    work is handed to a thread pool or to ``run_in_executor``: the call then
+    falls back, without an error, to the release's key, and what it starts lands
+    outside the run's tree, where cancelling the run does not reach it. An
+    explicit handle is either in scope or a visible ``NameError``.
+
+    TWO KEYS IN ONE HANDLER. The module-level functions read
+    ``AETHERFY_API_KEY``, which in a service is the release's: right for the
+    service's own traffic, wrong for a run. Do not mix them on one run. A run
+    spawned through the handle belongs to the run's tree and not to the
+    release's, so a module-level :func:`wait` on it is refused (403
+    ``AUTH_AGENT_KEY_OUT_OF_SCOPE``, a :class:`RunReadError`): wait through the
+    handle.
+
+    THE KEY LASTS AS LONG AS THE RUN. It stops working when the run ends,
+    answered, cancelled or failed, so do not keep the handle past the handler.
+    """
+
+    __slots__ = ("run_id", "_api_key")
+
+    def __init__(self, run_id: str, api_key: str) -> None:
+        self.run_id = run_id
+        self._api_key = api_key
+
+    def __repr__(self) -> str:
+        # The key is a credential: it must not reach a log through a repr.
+        return "ServiceRun(run_id={0!r})".format(self.run_id)
+
+    def spawn(self, child: str, payload: Optional[Dict[str, Any]] = None) -> Spawn:
+        """:func:`spawn`, with this run's key: the new run belongs to this run."""
+        return _spawn_as(self._api_key, child, payload)
+
+    def result(self, run_id: str) -> Run:
+        """:func:`result`, with this run's key."""
+        return _result_as(self._api_key, run_id)
+
+    def wait(
+        self, run_id: str, timeout_seconds: int = WAIT_TIMEOUT_DEFAULT_SECONDS
+    ) -> Run:
+        """:func:`wait`, with this run's key."""
+        return _wait_as(self._api_key, run_id, timeout_seconds)
+
+    def cancel(self, run_id: str) -> Cancellation:
+        """:func:`cancel`, with this run's key: it may cancel the runs below
+        this run."""
+        return _cancel_as(self._api_key, run_id)
+
+
+def service_run(headers: HeaderSource) -> ServiceRun:
+    """
+    Return the handle for the run a service's ``POST /aetherfy/run`` is handling.
+
+    Call it with the request's headers, at the top of the handler::
+
+        @app.post("/aetherfy/run")
+        async def run(request):
+            run = service_run(request.headers)
+            child = run.spawn("worker", {"id": 7})
+            finished = run.wait(child.spawn_id)
+            return {"answer": finished.result}
+
+    The platform sets ``X-Aetherfy-Run`` (the run's id) and
+    ``X-Aetherfy-Run-Key`` (the run's own key) on that one call, and removes both
+    from every public request, so a handler can trust them. They are read
+    without regard to case, from any headers object with ``items()``: a dict,
+    Starlette's or Flask's ``request.headers``. The key is never logged by this
+    package and is not in the handle's ``repr``.
+
+    THE HANDLE IS EXPLICIT BECAUSE AN IMPLICIT ONE WOULD FAIL SILENTLY: see
+    :class:`ServiceRun`. The module-level functions are unchanged and keep
+    reading ``AETHERFY_API_KEY``, which on a task machine is the run's key and
+    in a service is the release's.
+
+    :raises NotAServiceRun: the headers carry no run id and run key. This is for
+        the handler of ``POST /aetherfy/run`` only; a public request has neither.
+    """
+    wanted = {RUN_ID_HEADER.lower(): "", RUN_KEY_HEADER.lower(): ""}
+    for name, value in headers.items():
+        if not (isinstance(name, str) and isinstance(value, str)):
+            continue
+        key = name.lower()
+        if key in wanted and not wanted[key]:
+            wanted[key] = value.strip()
+    missing = [
+        header
+        for header in (RUN_ID_HEADER, RUN_KEY_HEADER)
+        if not wanted[header.lower()]
+    ]
+    if missing:
+        raise NotAServiceRun(missing)
+    return ServiceRun(wanted[RUN_ID_HEADER.lower()], wanted[RUN_KEY_HEADER.lower()])
 
 
 def agent_url(name: str, *, fresh: bool = False) -> str:
@@ -1005,20 +1298,61 @@ def _run_url(run_id: str) -> str:
     return "{0}/deployments/{1}".format(api_url.rstrip("/"), quote(run_id, safe=""))
 
 
+def _environment_key(purpose: str) -> str:
+    """The key this process was started with: on a task machine the run's own,
+    in a service the release's. What the module-level functions send."""
+    return _require("AETHERFY_API_KEY", purpose)
+
+
+def _is_int(value: Any) -> TypeGuard[int]:
+    """A JSON integer. ``bool`` is an ``int`` in Python and is not one here."""
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _run_from(body: Dict[str, Any]) -> Run:
+    """The one place a response's deployment object becomes a :class:`Run`:
+    a read and a cancel both hand one back."""
+    return Run(
+        id=str(body.get("id")),
+        agent_id=str(body.get("agent_id")),
+        state=str(body.get("state")),
+        result=body.get("result"),
+        result_error=body.get("result_error"),
+        has_result=bool(body.get("has_result")),
+        is_ephemeral=bool(body.get("is_ephemeral")),
+        error_message=body.get("error_message"),
+        raw=body,
+    )
+
+
+def _shared_run_refusal(
+    status: int, code: Any, message: str, detail: Dict[str, Any]
+) -> Optional[RunReadError]:
+    """The two refusals every call on a run answers in the same words, as the
+    types they have: no run has that id, and the run is another account's. None
+    for anything else."""
+    if status == 404 and code == DEPLOYMENT_NOT_FOUND:
+        return RunNotFound(message, details=detail)
+    if status == 403 and code == DEPLOYMENT_ACCESS_DENIED:
+        return RunAccessDenied(message, details=detail)
+    return None
+
+
 def _read_run(
     url: str,
+    api_key: str,
     *,
     timeout: float = _http.DEFAULT_TIMEOUT,
     retry_connection_errors: bool = True,
 ) -> Run:
-    """One GET, one Run — shared by :func:`result` and :func:`wait`.
+    """One GET, one Run — shared by :func:`result` and :func:`wait`, for
+    whichever key they are given.
 
     ONE implementation because the two routes return the SAME object and refuse
     in the SAME words; the control plane loads both through one function for
     exactly that reason. Two readers here is how one of them ends up mapping a
     403 the other maps as a 404.
     """
-    api_key = _require("AETHERFY_API_KEY", "the key a run is read with")
     status, body, retry_after = _http.request_json(
         "GET",
         url,
@@ -1035,17 +1369,7 @@ def _read_run(
                 "object, so there is no run to return.",
                 status_code=status,
             )
-        return Run(
-            id=str(body.get("id")),
-            agent_id=str(body.get("agent_id")),
-            state=str(body.get("state")),
-            result=body.get("result"),
-            result_error=body.get("result_error"),
-            has_result=bool(body.get("has_result")),
-            is_ephemeral=bool(body.get("is_ephemeral")),
-            error_message=body.get("error_message"),
-            raw=body,
-        )
+        return _run_from(body)
 
     detail = _detail_of(body)
     message = detail.get("message") or "Reading the run failed with status {0}.".format(
@@ -1058,10 +1382,9 @@ def _read_run(
     # across every route; DEPLOYMENT_NOT_FOUND and DEPLOYMENT_ACCESS_DENIED are
     # what it publishes and promises not to rename. An unrecognised pairing
     # falls through to RunReadError, which reports exactly what arrived.
-    if status == 404 and code == DEPLOYMENT_NOT_FOUND:
-        raise RunNotFound(message, details=detail)
-    if status == 403 and code == DEPLOYMENT_ACCESS_DENIED:
-        raise RunAccessDenied(message, details=detail)
+    refusal = _shared_run_refusal(status, code, message, detail)
+    if refusal is not None:
+        raise refusal
     if status == 422 and code == DEPLOYMENT_WAIT_TIMEOUT_INVALID:
         raise WaitTimeoutInvalid(message, details=detail)
     raise RunReadError(

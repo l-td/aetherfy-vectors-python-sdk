@@ -204,6 +204,34 @@ def test_a_wait_that_times_out_returns_the_run_it_has(transport):
     assert run.result is None
 
 
+@pytest.mark.parametrize(
+    "state", ["waiting", "active", "completed", "failed", "cancelled"]
+)
+@pytest.mark.parametrize("call", [result, wait])
+def test_a_run_in_any_state_is_returned_as_it_stands(transport, call, state):
+    # The platform owns the vocabulary: the helper adds no enum and rejects no
+    # state, so `waiting` (in the account's line) and `cancelled` (stopped from
+    # outside) arrive like the rest.
+    transport.reply = (
+        200,
+        dict(FINISHED, state=state, result=None, has_result=False),
+    )
+
+    assert call(RUN_ID).state == state
+
+
+def test_the_place_in_the_line_is_in_raw_while_a_run_waits(transport):
+    transport.reply = (
+        200,
+        dict(FINISHED, state="waiting", result=None, has_result=False, position=4),
+    )
+
+    run = result(RUN_ID)
+
+    assert run.state == "waiting"
+    assert run.raw["position"] == 4
+
+
 def test_a_body_that_is_not_an_object_is_not_a_run(transport):
     transport.reply = (200, "OK")
     with pytest.raises(RunReadError):

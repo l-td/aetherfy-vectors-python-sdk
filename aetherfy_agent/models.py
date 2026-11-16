@@ -29,21 +29,37 @@ class MachineShape:
 @dataclass(frozen=True)
 class Spawn:
     """
-    An accepted spawn: the control plane recorded the run and queued its deploy.
+    An accepted spawn: the control plane recorded the run.
 
-    Acceptance is not execution. ``status`` is the run's INITIAL status.
-    Aetherfy never queues a run behind another: a spawned run that finds every
-    machine of the child busy gets a machine of its own and runs at once.
+    Acceptance is not execution. ``status`` is the run's INITIAL status, and
+    there are two:
+
+    - ``"queued"``: the run goes straight to a machine.
+    - ``"waiting"``: the account is at its in-flight limit, so the run waits in
+      the account's line, with no machine and nothing billed, until a slot
+      frees. ``position`` is its place there, ``1`` being next. A run that is
+      waiting has no ``job_id`` yet.
+
+    ``wait`` includes the time in the line, so a caller that waits on a run
+    needs no other handling for ``waiting``. A spawn is refused with
+    :class:`~aetherfy_agent.exceptions.RunLineFull` only when the line itself
+    is full.
+
+    ``position`` is ``None`` unless the run is waiting. ``raw`` is the whole
+    response body, unmodified, like :attr:`Run.raw`.
     """
 
     spawn_id: str
-    job_id: str
+    job_id: Optional[str]
     child_agent_id: str
     region: str
     status: str
     # The spawned agent's own workspace, by name. Every agent lives in one.
     workspace: str
     estimated_start: Optional[str] = None
+    position: Optional[int] = None
+    #: Everything the control plane sent, unmodified.
+    raw: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -62,12 +78,15 @@ class Run:
     run-shaped; it is kept verbatim in ``raw`` rather than re-declared field by
     field in a place that would rot the first time the platform adds one.
 
-    ``state`` IS THE ONE TO READ AFTER A WAIT. A wait that times out returns
-    the run exactly as it stands, which is not an error — ``active`` on a run
-    means it is executing right now, and the terminal states are ``completed``
-    and ``failed``. There is deliberately no ``is_finished`` here: the set of
-    in-flight states belongs to the platform, and a second copy of it in this
-    package would be a copy that could disagree.
+    ``state`` IS THE ONE TO READ AFTER A WAIT. A run is ``waiting`` while it
+    waits in the account's line (no machine, nothing billed, and
+    ``raw["position"]`` is its place there, 1 being next), ``active`` while it
+    is executing, and it ends ``completed``, ``failed`` or ``cancelled``. A wait
+    that times out returns the run exactly as it stands, which is not an error:
+    ``waiting`` and ``active`` both mean call again. There is deliberately no
+    ``is_finished`` here, and no enum of the states: the set belongs to the
+    platform, and a second copy of it in this package would be a copy that could
+    disagree.
 
     ``result`` is ``None`` both for a run that returned nothing and for one
     whose result was refused — ``result_error`` is what tells those apart, and
@@ -86,6 +105,32 @@ class Run:
     error_message: Optional[str] = None
     #: Everything the control plane sent, unmodified.
     raw: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class Cancellation:
+    """
+    What cancelling a run answered.
+
+    ``outcome`` says what the call did, and is one of:
+
+    - ``"cancelled"``: the run is cancelled now (it was waiting, or had not
+      started).
+    - ``"stopping"``: the run was executing and is being stopped; it ends
+      ``cancelled``.
+    - ``"already_finished"``: the run had ended before the call. Not an error:
+      nothing was cancelled.
+
+    ``run`` is the run as the call left it. ``cancelled_count`` is how many runs
+    this call cancelled, the runs started below it (its descendants) included.
+    ``message`` is prose for a person and may be reworded at any time; branch on
+    ``outcome``.
+    """
+
+    run: Run
+    outcome: str
+    message: str
+    cancelled_count: int
 
 
 @dataclass(frozen=True)

@@ -15,6 +15,12 @@ pytest-cov>=4.0.0,<5.0.0
 # release with `search` (the method the README's migration example calls) and
 # supports Python 3.11, this package's floor. Upgrading means classifying what the new version added.
 qdrant-client==1.15.1
+# The header classes of the two web frameworks a service's run handler runs
+# under (Flask's request.headers is werkzeug's). tests/agent/test_service_run.py
+# hands service_run() the REAL ones, because a stand-in would prove nothing about
+# them. Test-only: setup.py reads requirements.txt for install_requires, not this.
+starlette==1.10.0
+werkzeug==3.1.9
 
 # Linting, formatting and type checking
 black>=22.0.0,<24.0.0

@@ -628,29 +628,37 @@ went is visible after the fact:
 aetherfy: fanning out 32 wide on 4 vCPU / 8192 MB (120 tasks)
 ```
 
-Spawning has three outcomes worth telling apart. The payload cap and the
-concurrent-run cap get their own types; everything else carries the platform's
-stable error code, which is the thing to branch on:
+A run over your account's in-flight limit is not refused: it waits in the
+account's line, with no machine and nothing billed, and starts when a slot
+frees. The spawn comes back with `status` `"waiting"` and `position`, its place
+in the line (1 is next); a run that goes straight to a machine has `status`
+`"queued"` and no `position`. `wait` includes the time in the line.
+
+Spawning has three outcomes worth telling apart. The payload cap and a full line
+get their own types; everything else carries the platform's stable error code,
+which is the thing to branch on:
 
 ```python
 from aetherfy_agent import spawn
 from aetherfy_agent.exceptions import (
     PayloadTooLarge,
+    RunLineFull,
     SpawnError,
-    TooManyRunsInFlight,
 )
 
 try:
-    spawn("nightly-rollup", {"date": "2026-09-07"})
+    run = spawn("nightly-rollup", {"date": "2026-09-07"})
+    print(run.status, run.position)  # "waiting" and 3, or "queued" and None
 except PayloadTooLarge as exc:
     # The payload is for parameters and references, not data. Write the data to
     # a collection and pass its id.
     print(exc.payload_bytes, "exceeds", exc.max_bytes)
-except TooManyRunsInFlight as exc:
-    # The one refusal here worth retrying: runs are finishing all the time.
-    # The cap is the ACCOUNT's and is set by your plan; `limit` names which
-    # plan limit was hit, and `max_in_flight_runs` is None on an uncapped plan.
-    print("waiting on", exc.in_flight_count, "of", exc.max_in_flight_runs)
+except RunLineFull as exc:
+    # The account's line of waiting runs is full: there is nowhere left to
+    # wait. The limits are the ACCOUNT's and are set by your plan; `limit` names
+    # which one was hit. Nothing is retried for you: spawn again when runs have
+    # left the line.
+    print(exc.waiting_count, "of", exc.max_waiting_runs, "are waiting")
 except SpawnError as exc:
     print(exc.error_code)
 ```
@@ -673,19 +681,30 @@ write_result({"rows": 128, "date": "2026-09-08"})
 ```python
 from aetherfy_agent import spawn, wait, result
 
-# In the parent. wait() holds one request open instead of polling; a run that
-# has not finished in time comes back exactly as it stands, which is not an
-# error — read `state` and call again.
+# In the parent. wait() holds one request open instead of polling, and the time
+# the run spends waiting in the account's line is part of what it waits for. A
+# run that has not finished in time comes back exactly as it stands, which is
+# not an error — read `state` and call again.
 run = spawn("nightly-rollup", {"date": "2026-09-08"})
 finished = wait(run.spawn_id, timeout_seconds=45)
 
 if finished.state == "completed":
     print(finished.result)
+elif finished.state in ("failed", "cancelled"):
+    print("the run ended", finished.state)
+else:
+    # "waiting" (in the account's line) or "active" (executing): not over yet.
+    print("still", finished.state)
 
 # result() is the same read without the waiting.
 now = result(run.spawn_id)
 print(now.state, now.has_result, now.result_error)
 ```
+
+A run's `state` is `waiting` while it waits in the account's line, `active`
+while it executes, and ends `completed`, `failed` or `cancelled`. While it is
+`waiting`, `run.raw["position"]` is its place in the line. The states belong to
+the platform, so the helper does not enumerate them.
 
 The result shares the payload's inline cap — one number bounding both
 directions — and it is for answers and references, not data. Anything larger
@@ -723,6 +742,88 @@ except RunReadError as exc:
 With the agent's own `AETHERFY_API_KEY`, a read the control plane does not
 allow that key ([which ones it allows](https://docs.aetherfy.com/platform/api-keys#agent-scoped-keys-issued-by-aetherfy))
 is refused with `RunReadError` and `error_code` `AUTH_AGENT_KEY_OUT_OF_SCOPE`.
+An agent's key reads and waits on the runs in its own run tree, the runs that
+share its root run.
+
+### Cancelling a run
+
+`cancel` stops a run, whether it is waiting in the account's line or executing,
+and answers with what it did:
+
+```python
+from aetherfy_agent import cancel
+from aetherfy_agent.exceptions import (
+    NotARun,
+    RunAccessDenied,
+    RunCancelError,
+    RunNotFound,
+)
+
+try:
+    cancellation = cancel(run.spawn_id)
+except RunNotFound:
+    print("no run has that id")
+except RunAccessDenied as exc:
+    # Another account's run, or a run this agent's key may not cancel.
+    print(exc.error_code)
+except NotARun:
+    print("that id is a release, not a run")
+except RunCancelError as exc:
+    print(exc.error_code)
+else:
+    # "cancelled": it is cancelled now. "stopping": it was executing and is being
+    # stopped, and it ends `cancelled`. "already_finished": it had ended before
+    # the call, which is an answer and not an error.
+    print(cancellation.outcome, cancellation.cancelled_count)
+```
+
+`cancelled_count` counts every run the call cancelled: the runs started below
+the cancelled one are cancelled with it. A cancelled run's key stops working at
+once, so nothing it was still starting gets through. An account's key may cancel
+any run of the account; an agent's own key may cancel only the runs below its own
+run. A release is cancelled with `afy cancel <agent>`, not with this call.
+`RunNotFound` and `RunAccessDenied` are the read family's types and are not
+`RunCancelError`s: catch `AgentError` to see every failure.
+
+### Inside a service's run handler
+
+A service handles a run in `POST /aetherfy/run`. The platform gives that run a
+key of its own and sends it, with the run's id, in the headers
+`X-Aetherfy-Run-Key` and `X-Aetherfy-Run`, on that one call. `service_run` reads
+them into a handle whose `spawn`, `result`, `wait` and `cancel` are the
+functions above, with the same signatures and errors, authenticating as the run:
+
+```python
+import asyncio
+
+from aetherfy_agent import service_run
+
+
+@app.post("/aetherfy/run")
+async def run_handler(request):
+    run = service_run(request.headers)  # a dict, Starlette's or Flask's headers
+    body = await request.json()
+    child = await asyncio.to_thread(run.spawn, "worker", body["payload"])
+    finished = await asyncio.to_thread(run.wait, child.spawn_id)
+    return {"answer": finished.result}
+```
+
+What the handler starts through the handle belongs to the run: cancelling the
+run cancels it. Headers without the run's id and key raise `NotAServiceRun`;
+`service_run` is for the handler of `POST /aetherfy/run` only, and a public
+request carries neither header.
+
+The handle is explicit on purpose. A service answers many runs at once, and an
+implicit context would be lost the moment work crosses into another thread (a
+thread pool, `run_in_executor`): the call would fall back, without an error, to
+the release's key, and what it started would land outside the run, where
+cancelling the run does not reach. The module-level `spawn`, `result`, `wait` and
+`cancel` are unchanged and read `AETHERFY_API_KEY`, which on a task machine is
+the run's key and in a service is the release's: right for the service's own
+traffic, wrong inside a run. Do not mix the two on one run. A run spawned through
+the handle is in the run's tree, not the release's, so a module-level `wait` on
+it is refused with `AUTH_AGENT_KEY_OUT_OF_SCOPE`: wait through the handle. The run's
+key stops working when the run ends, so do not keep the handle past the handler.
 
 ### Finding another agent at call time
 

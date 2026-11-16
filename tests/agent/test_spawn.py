@@ -1,6 +1,7 @@
 """
-`spawn()`: the request the control plane's route actually accepts, and the
-two refusals a caller has to tell apart.
+`spawn()`: the request the control plane's route actually accepts, what an
+accepted run looks like (queued, or waiting in the account's line), and the two
+refusals a caller has to tell apart.
 
 Pinned against aetherfy-control-plane `api/routes/agents.py`:
 `SpawnRequest` (child_agent_id + payload), the route
@@ -15,8 +16,8 @@ from aetherfy_agent import spawn
 from aetherfy_agent.exceptions import (
     NotRunningOnAgent,
     PayloadTooLarge,
+    RunLineFull,
     SpawnError,
-    TooManyRunsInFlight,
 )
 
 ACCEPTED = {
@@ -119,6 +120,41 @@ def test_the_accepted_response_becomes_a_spawn(transport):
     assert result.status == "queued"
     assert result.workspace == "research"
     assert result.estimated_start == "~1s"
+    # A run that goes straight to a machine has no place in the line.
+    assert result.position is None
+
+
+def test_a_run_waiting_in_the_line_has_no_job_and_a_place(transport):
+    """The account is at its limit: the run is accepted and waits. It has no job
+    yet, so `job_id` is None (not the string "None"), and `position` is its
+    place in the line, 1 being next."""
+    transport.reply = (
+        202,
+        dict(ACCEPTED, job_id=None, status="waiting", position=3),
+    )
+
+    result = spawn("nightly-rollup")
+
+    assert result.status == "waiting"
+    assert result.job_id is None
+    assert result.position == 3
+    assert result.spawn_id == ACCEPTED["spawn_id"]
+
+
+@pytest.mark.parametrize("position", ["3", 2.5, True, [1], {"n": 1}])
+def test_a_position_that_is_not_an_integer_is_no_position(transport, position):
+    transport.reply = (202, dict(ACCEPTED, status="waiting", position=position))
+
+    assert spawn("nightly-rollup").position is None
+
+
+def test_raw_is_the_whole_response_body(transport):
+    """What the platform sends beyond the named fields is kept, as `Run.raw`
+    keeps the whole deployment object."""
+    body = dict(ACCEPTED, status="waiting", position=1, job_id=None, extra="x")
+    transport.reply = (202, body)
+
+    assert spawn("nightly-rollup").raw == body
 
 
 def test_the_workspace_is_a_required_name():
@@ -155,74 +191,82 @@ def test_413_is_payload_too_large(transport):
     assert error.status_code == 413
 
 
-def test_429_is_too_many_runs_in_flight(transport):
-    # The envelope shared/job_runs.py builds at the 429 raise: `limit` names
-    # WHICH plan limit was hit and `max_in_flight_runs` is its value. The cap
-    # is the ACCOUNT's, set by the plan — not a per-agent spawn ceiling.
+def test_429_is_run_line_full(transport):
+    # The envelope of the 429 a spawn gets when the account's line already holds
+    # the most waiting runs its plan allows: `limit` names WHICH plan limit was
+    # hit, and the counts say where the account stands. The limits are the
+    # ACCOUNT's, set by the plan, not a per-agent spawn ceiling.
     transport.reply = (
         429,
         {
             "detail": {
-                "code": "AGENT_RUN_CONCURRENCY_LIMIT_EXCEEDED",
+                "code": "AGENT_RUN_LINE_FULL",
                 "message": (
-                    "Too many runs in flight on this account (25/25); wait for "
-                    "some to finish. The limit is set by your plan."
+                    "The line of waiting runs is full (50/50); wait for some to "
+                    "start. The limit is set by your plan."
                 ),
-                "limit": "max_in_flight_runs",
+                "limit": "max_waiting_runs",
+                "waiting_count": 50,
+                "max_waiting_runs": 50,
                 "in_flight_count": 25,
                 "max_in_flight_runs": 25,
             }
         },
     )
 
-    with pytest.raises(TooManyRunsInFlight) as excinfo:
+    with pytest.raises(RunLineFull) as excinfo:
         spawn("nightly-rollup")
     error = excinfo.value
+    assert error.waiting_count == 50
+    assert error.max_waiting_runs == 50
     assert error.in_flight_count == 25
-    assert error.limit == "max_in_flight_runs"
     assert error.max_in_flight_runs == 25
-    assert error.error_code == "AGENT_RUN_CONCURRENCY_LIMIT_EXCEEDED"
+    assert error.limit == "max_waiting_runs"
+    assert error.error_code == "AGENT_RUN_LINE_FULL"
+    assert error.status_code == 429
+    assert isinstance(error, SpawnError)
 
 
-def test_429_survives_an_uncapped_plan(transport):
-    """`max_in_flight_runs` is None when the plan declares no cap. A caller
-    building a message from it must not be handed a crash instead."""
+def test_429_survives_an_uncapped_number(transport):
+    """A count the envelope leaves null stays None. A caller building a message
+    from it must not be handed a crash instead."""
     transport.reply = (
         429,
         {
             "detail": {
-                "code": "AGENT_RUN_CONCURRENCY_LIMIT_EXCEEDED",
-                "message": "Too many runs in flight on this account.",
-                "limit": "max_in_flight_runs",
-                "in_flight_count": 400,
-                "max_in_flight_runs": None,
-            }
-        },
-    )
-
-    with pytest.raises(TooManyRunsInFlight) as excinfo:
-        spawn("nightly-rollup")
-    assert excinfo.value.max_in_flight_runs is None
-    assert excinfo.value.in_flight_count == 400
-
-
-def test_429_reads_the_limit_name_rather_than_assuming_it(transport):
-    """`limit` is read off the envelope, not hardcoded. A second named limit
-    reaching this status must arrive intact, not be reported as the first."""
-    transport.reply = (
-        429,
-        {
-            "detail": {
-                "code": "AGENT_RUN_CONCURRENCY_LIMIT_EXCEEDED",
-                "message": "Some other cap.",
-                "limit": "max_agents",
+                "code": "AGENT_RUN_LINE_FULL",
+                "message": "The line is full.",
+                "limit": "max_waiting_runs",
+                "waiting_count": 400,
+                "max_waiting_runs": 400,
                 "in_flight_count": 3,
                 "max_in_flight_runs": None,
             }
         },
     )
 
-    with pytest.raises(TooManyRunsInFlight) as excinfo:
+    with pytest.raises(RunLineFull) as excinfo:
+        spawn("nightly-rollup")
+    assert excinfo.value.max_in_flight_runs is None
+    assert excinfo.value.in_flight_count == 3
+
+
+def test_429_reads_the_limit_name_rather_than_assuming_it(transport):
+    """`limit` is read off the envelope, not hardcoded. A second named limit
+    reaching this code must arrive intact, not be reported as the first."""
+    transport.reply = (
+        429,
+        {
+            "detail": {
+                "code": "AGENT_RUN_LINE_FULL",
+                "message": "Some other cap.",
+                "limit": "max_agents",
+                "waiting_count": 3,
+            }
+        },
+    )
+
+    with pytest.raises(RunLineFull) as excinfo:
         spawn("nightly-rollup")
     assert excinfo.value.limit == "max_agents"
 
@@ -266,7 +310,7 @@ def test_a_429_carrying_another_code_is_a_plain_spawn_error(transport):
         spawn("nightly-rollup")
     error = excinfo.value
     assert type(error) is SpawnError
-    assert not isinstance(error, TooManyRunsInFlight)
+    assert not isinstance(error, RunLineFull)
     assert error.error_code == "RATE_LIMIT_EXCEEDED"
     assert error.status_code == 429
 
@@ -288,29 +332,26 @@ def test_a_codeless_body_on_either_status_is_a_plain_spawn_error(transport, stat
 def test_429_with_no_extras_still_maps(transport):
     transport.reply = (
         429,
-        {
-            "detail": {
-                "code": "AGENT_RUN_CONCURRENCY_LIMIT_EXCEEDED",
-                "message": "busy",
-            }
-        },
+        {"detail": {"code": "AGENT_RUN_LINE_FULL", "message": "busy"}},
     )
 
-    with pytest.raises(TooManyRunsInFlight) as excinfo:
+    with pytest.raises(RunLineFull) as excinfo:
         spawn("nightly-rollup")
     error = excinfo.value
     assert error.limit is None
-    assert error.max_in_flight_runs is None
+    assert error.waiting_count is None
+    assert error.max_waiting_runs is None
     assert error.in_flight_count is None
+    assert error.max_in_flight_runs is None
 
 
 def test_the_two_refusals_are_distinguishable(transport):
     """They must not collapse into one another: PayloadTooLarge is permanent
-    for this payload, TooManyRunsInFlight is the one worth retrying."""
-    assert not issubclass(PayloadTooLarge, TooManyRunsInFlight)
-    assert not issubclass(TooManyRunsInFlight, PayloadTooLarge)
+    for this payload, RunLineFull is the one worth trying again later."""
+    assert not issubclass(PayloadTooLarge, RunLineFull)
+    assert not issubclass(RunLineFull, PayloadTooLarge)
     assert issubclass(PayloadTooLarge, SpawnError)
-    assert issubclass(TooManyRunsInFlight, SpawnError)
+    assert issubclass(RunLineFull, SpawnError)
 
 
 @pytest.mark.parametrize(
@@ -388,23 +429,16 @@ def test_a_missing_api_key_names_the_variable(transport, monkeypatch):
 # -- Retry-After --------------------------------------------------------------
 
 
-def test_a_429_carries_the_time_the_control_plane_asked_for(transport):
-    transport.retry_after = 12.0
+def test_a_full_line_is_refused_once_and_nothing_is_retried_for_you(transport):
+    """The control plane sends no Retry-After with this refusal, so there is no
+    time to carry, and the helper never repeats a spawn itself."""
     transport.reply = (
         429,
-        {
-            "detail": {
-                "code": "AGENT_RUN_CONCURRENCY_LIMIT_EXCEEDED",
-                "message": "full",
-                "in_flight_count": 5,
-                "limit": "max_in_flight_runs",
-                "max_in_flight_runs": 5,
-            }
-        },
+        {"detail": {"code": "AGENT_RUN_LINE_FULL", "message": "full"}},
     )
-    with pytest.raises(TooManyRunsInFlight) as excinfo:
+    with pytest.raises(RunLineFull) as excinfo:
         spawn("worker", {})
-    assert excinfo.value.retry_after == 12.0
+    assert excinfo.value.retry_after is None
     assert len(transport.calls) == 1, "the helper never retries a spawn itself"
 
 
