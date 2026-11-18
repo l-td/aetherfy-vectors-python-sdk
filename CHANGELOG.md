@@ -5,6 +5,18 @@ All notable changes to the Aetherfy Vectors Python SDK will be documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **A spawn whose answer was lost no longer starts a second run.** Every `spawn()` now carries an id of its own
+  (`request_id`), and the control plane answers a repeat of the same id with the run it already made, so the helper
+  repeats a spawn whose answer did not arrive (a timeout or a dropped connection after the request was sent) without
+  starting the child twice. Until the control plane that stores the id is deployed, the id is ignored.
+- **The helper repeats a request only when that cannot do the work twice.** A request that never left (the name did
+  not resolve, the connection was refused) is retried once, as before. One that may have arrived is retried once only
+  for a call whose repeat gives the same result: a read, a cancel (a second cancel of the same run changes nothing), and
+  a spawn that carries its id. `call_agent` already raised "may or may not have run" on such a failure and still does.
+
 ## [1.5.0] - 2026-11-16
 
 This release contains a change marked BREAKING below.

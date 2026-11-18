@@ -129,7 +129,7 @@ def test_wait_does_not_retry_a_dropped_connection(transport):
     # as late as the number the caller passed. Every other call in this module
     # retries once; this one buys the bound instead.
     wait(RUN_ID, timeout_seconds=30)
-    assert transport.calls[0]["kwargs"]["retry_connection_errors"] is False
+    assert transport.calls[0]["kwargs"]["repeatable"] is False
 
 
 def test_result_keeps_the_one_retry_and_the_ordinary_timeout(transport):
@@ -137,7 +137,7 @@ def test_result_keeps_the_one_retry_and_the_ordinary_timeout(transport):
     kwargs = transport.calls[0]["kwargs"]
     # Read explicitly, not with a default: a `.get(key, want)` here would pass
     # just as happily on a call that never sent the argument at all.
-    assert kwargs["retry_connection_errors"] is True
+    assert kwargs["repeatable"] is True
     assert kwargs["timeout"] == DEFAULT_TIMEOUT
 
 

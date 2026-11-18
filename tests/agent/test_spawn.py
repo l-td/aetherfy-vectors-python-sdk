@@ -9,6 +9,8 @@ Pinned against aetherfy-control-plane `api/routes/agents.py`:
 and the `{"detail": {...}}` error envelope built by `shared/api_errors.py`.
 """
 
+import uuid
+
 import pytest
 
 import aetherfy_agent
@@ -83,12 +85,25 @@ def test_the_request_matches_the_route(transport):
         "https://agents.aetherfy.com/api/v1/agents/parent-agent-id/spawn"
     )
     assert "{id}" not in call["url"]
+    request_id = call["body"].pop("request_id")
     assert call["body"] == {
         "child_agent_id": "nightly-rollup",
         "payload": {"date": "2026-09-07"},
     }
+    assert str(uuid.UUID(request_id)) == request_id
     assert call["api_key"] == "afy_test_key"
     assert call["ua"].startswith("aetherfy-agent-python/")
+    # REPEATABLE because it carries its own id: a lost answer is sent again.
+    assert call["kwargs"]["repeatable"] is True
+
+
+def test_every_spawn_carries_an_id_of_its_own(transport):
+    # One id per CALL, never per process: two spawns of the same child with the
+    # same payload are two runs, and must not be taken for a resend.
+    spawn("nightly-rollup", {"date": "2026-09-07"})
+    spawn("nightly-rollup", {"date": "2026-09-07"})
+    ids = [c["body"]["request_id"] for c in transport.calls]
+    assert len(set(ids)) == 2
 
 
 def test_no_payload_sends_an_empty_object(transport):

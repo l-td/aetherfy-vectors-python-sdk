@@ -4,14 +4,16 @@ The transport, exercised directly.
 Every other test in this directory replaces `_http.request_json`, which proves
 what the helper SENDS but nothing about what the transport DOES. These tests
 cover the other half: that an HTTP status is returned rather than raised, that
-a connection failure is retried exactly once, and that a status is never
-retried at all.
+a request that never left is retried exactly once, that one that may have been
+delivered is retried only when the call is repeatable, and that a status is
+never retried at all.
 
 `urlopen` is the only thing stubbed. Nothing here opens a socket.
 """
 
 import io
 import json
+import socket
 import urllib.error
 
 import pytest
@@ -36,7 +38,7 @@ class FakeResponse(io.BytesIO):
         return False
 
 
-def call(monkeypatch, urlopen):
+def call(monkeypatch, urlopen, repeatable=True):
     monkeypatch.setattr(_http.urllib.request, "urlopen", urlopen)
     return _http.request_json(
         "POST",
@@ -44,7 +46,23 @@ def call(monkeypatch, urlopen):
         api_key="afy_test_key",
         ua="aetherfy-agent-python/test",
         body={"child_agent_id": "worker", "payload": {}},
+        repeatable=repeatable,
     )
+
+
+#: A request that NEVER LEFT: the name did not resolve, the connection was refused.
+NEVER_DELIVERED = [
+    urllib.error.URLError(socket.gaierror(-2, "Name or service not known")),
+    urllib.error.URLError(ConnectionRefusedError(111, "Connection refused")),
+    ConnectionRefusedError(111, "Connection refused"),
+]
+#: A request that may have been DELIVERED: a timeout or a reset after it was sent.
+MAYBE_DELIVERED = [
+    urllib.error.URLError(socket.timeout("timed out")),
+    socket.timeout("timed out"),
+    ConnectionResetError(104, "Connection reset by peer"),
+    urllib.error.URLError("connection reset"),
+]
 
 
 def test_the_headers_and_body_go_out_as_json(monkeypatch):
@@ -100,33 +118,95 @@ def test_an_error_status_is_not_retried(monkeypatch):
     assert len(attempts) == 1
 
 
-def test_a_connection_failure_is_retried_once_then_raises(monkeypatch):
+@pytest.mark.parametrize("failure", NEVER_DELIVERED, ids=repr)
+@pytest.mark.parametrize("repeatable", [True, False])
+def test_a_request_that_never_left_is_retried_once_whatever_the_call(monkeypatch, failure, repeatable):
     attempts = []
 
     def urlopen(request, timeout=None):
         attempts.append(1)
-        raise urllib.error.URLError("connection reset")
+        raise failure
 
     with pytest.raises(AgentTransportError) as excinfo:
-        call(monkeypatch, urlopen)
+        call(monkeypatch, urlopen, repeatable=repeatable)
 
     assert len(attempts) == 2, "one retry, not zero and not a loop"
-    assert "connection reset" in str(excinfo.value)
+    assert "did not reach the Aetherfy control plane after 2 attempt(s)" in str(excinfo.value)
 
 
-def test_a_retried_connection_failure_can_succeed(monkeypatch):
+@pytest.mark.parametrize("failure", MAYBE_DELIVERED, ids=repr)
+def test_a_request_that_may_have_been_delivered_is_retried_once_when_the_call_is_repeatable(monkeypatch, failure):
+    attempts = []
+
+    def urlopen(request, timeout=None):
+        attempts.append(1)
+        raise failure
+
+    with pytest.raises(AgentTransportError):
+        call(monkeypatch, urlopen, repeatable=True)
+
+    assert len(attempts) == 2, "one retry, not zero and not a loop"
+
+
+@pytest.mark.parametrize("failure", MAYBE_DELIVERED, ids=repr)
+def test_a_request_that_may_have_been_delivered_is_never_repeated_when_the_call_is_not_repeatable(monkeypatch, failure):
+    attempts = []
+
+    def urlopen(request, timeout=None):
+        attempts.append(1)
+        raise failure
+
+    with pytest.raises(AgentTransportError) as excinfo:
+        call(monkeypatch, urlopen, repeatable=False)
+
+    assert len(attempts) == 1, "a repeat could do the work a second time"
+    assert "may have been applied" in str(excinfo.value)
+
+
+def test_a_retried_request_can_succeed(monkeypatch):
     attempts = []
 
     def urlopen(request, timeout=None):
         attempts.append(1)
         if len(attempts) == 1:
-            raise urllib.error.URLError("dns blip")
+            raise urllib.error.URLError(socket.gaierror(-3, "Temporary failure in name resolution"))
         return FakeResponse(202, {"status": "queued"})
 
-    status, body, _ = call(monkeypatch, urlopen)
+    status, body, _ = call(monkeypatch, urlopen, repeatable=False)
 
     assert len(attempts) == 2
     assert (status, body) == (202, {"status": "queued"})
+
+
+def test_the_retry_sends_the_same_request_its_body_and_its_id_included(monkeypatch):
+    # The idempotency of a spawn rests on this: the retry carries the SAME
+    # request_id as the first attempt, so the control plane recognises it.
+    sent = []
+
+    def urlopen(request, timeout=None):
+        sent.append(request.data)
+        if len(sent) == 1:
+            raise socket.timeout("timed out")
+        return FakeResponse(202, {"status": "queued"})
+
+    monkeypatch.setattr(_http.urllib.request, "urlopen", urlopen)
+    _http.request_json(
+        "POST",
+        "https://agents.aetherfy.com/api/v1/agents/a/spawn",
+        api_key="afy_test_key",
+        ua="aetherfy-agent-python/test",
+        body={"child_agent_id": "worker", "payload": {}, "request_id": "r-1"},
+        repeatable=True,
+    )
+    assert len(sent) == 2 and sent[0] == sent[1]
+
+
+def test_repeatable_has_no_default():
+    # Every caller decides it in the open; a default would let a new call
+    # inherit a retry it never thought about.
+    import inspect
+
+    assert inspect.signature(_http.request_json).parameters["repeatable"].default is inspect.Parameter.empty
 
 
 def test_a_body_that_fails_mid_read_is_not_retried(monkeypatch):

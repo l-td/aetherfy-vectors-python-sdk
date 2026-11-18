@@ -62,15 +62,30 @@ def _retry_after_of(response: Any) -> Optional[float]:
     return parse_retry_after(headers.get("Retry-After") if headers else None)
 
 
+def never_delivered(exc: BaseException) -> bool:
+    """Did this transport failure happen BEFORE the request could reach anyone?
+
+    Only two failures prove it: the name did not resolve, and the connection
+    was refused. Anything else (a timeout, a reset, a broken pipe) can come
+    after the far side received the request and acted on it. ONE answer for
+    every request this module sends: :func:`request_json` to the control plane
+    and :func:`request_peer` to a peer read it, and so does the vectors client's
+    own retry policy (``aetherfy_vectors/retry_policy.py``, "refused before
+    anything happened").
+    """
+    reason = exc.reason if isinstance(exc, urllib.error.URLError) else exc
+    return isinstance(reason, (socket.gaierror, ConnectionRefusedError))
+
+
 def request_json(
     method: str,
     url: str,
     *,
     api_key: str,
     ua: str,
+    repeatable: bool,
     body: Optional[Dict[str, Any]] = None,
     timeout: float = DEFAULT_TIMEOUT,
-    retry_connection_errors: bool = True,
 ) -> Tuple[int, Any, Optional[float]]:
     """
     Send one JSON request and return ``(status_code, parsed_body, retry_after)``.
@@ -83,13 +98,22 @@ def request_json(
     onto its own types and needs the body to do it. Only a request that never
     got an answer raises, as :class:`AgentTransportError`.
 
-    ONE retry, and only for a connection-level failure — a DNS blip or a reset
-    socket on the way out, where nothing was recorded and repeating is safe. An
-    HTTP status is never retried here: a 4xx repeated is a 4xx, and retrying a
-    spawn that the control plane may already have recorded would create a
-    second run. The caller decides whether a 429 is worth waiting on, and
-    ``retry_after`` is what it decides with: a retry before that time is
-    refused again.
+    AT MOST ONE RETRY, and only where a repeat cannot do the work twice:
+
+    - a request that NEVER LEFT (:func:`never_delivered`: the name did not
+      resolve, the connection was refused) is retried, whatever the call;
+    - a request that may have been DELIVERED (a timeout or a reset after it was
+      sent) is retried only when the caller says the call is ``repeatable``:
+      its repeat gives the same result (a read, a cancel, a spawn or a message
+      that carries its own id, which the control plane stores once). A call
+      that is not repeatable raises at once, saying the request may have been
+      applied, because a blind repeat could do the work a second time.
+
+    ``repeatable`` has NO default: every caller decides it, in the open.
+
+    An HTTP status is never retried here: a 4xx repeated is a 4xx. The caller
+    decides whether a 429 is worth waiting on, and ``retry_after`` is what it
+    decides with: a retry before that time is refused again.
     """
     data = None
     headers = {
@@ -103,24 +127,27 @@ def request_json(
 
     request = urllib.request.Request(url, data=data, headers=headers, method=method)
 
-    attempts = 2 if retry_connection_errors else 1
-    last_error = None
-    for attempt in range(attempts):
+    last_error: Optional[BaseException] = None
+    attempts = 0
+    while attempts < 2:
+        attempts += 1
         # ONLY the call itself is inside the retry. READING THE BODY IS
         # DELIBERATELY OUTSIDE IT: a body that fails mid-stream arrives AFTER
-        # the server answered, and on a spawn the control plane has already
-        # recorded the run — retrying there would create a second one.
-        # `_read_json` swallows that failure into a None body and the status
-        # stands.
+        # the server answered, and the work is done. `_read_json` swallows that
+        # failure into a None body and the status stands.
         try:
             response = urllib.request.urlopen(request, timeout=timeout)
         except urllib.error.HTTPError as exc:  # a status, not a transport failure
             return exc.code, _read_json(exc), _retry_after_of(exc)
         except (urllib.error.URLError, OSError) as exc:
             last_error = exc
-            if attempt + 1 >= attempts:
-                break
-            continue
+            if never_delivered(exc) or repeatable:
+                continue
+            raise AgentTransportError(
+                "{0} {1} got no answer and may have been applied: {2}".format(
+                    method, url, exc
+                )
+            )
         with response:
             return (
                 response.getcode(),
@@ -221,8 +248,7 @@ def request_peer(
     except urllib.error.HTTPError as exc:  # a status, not a transport failure
         return _peer_response(exc.code, exc.headers, exc, method, url)
     except (urllib.error.URLError, OSError) as exc:
-        reason = exc.reason if isinstance(exc, urllib.error.URLError) else exc
-        if isinstance(reason, (socket.gaierror, ConnectionRefusedError)):
+        if never_delivered(exc):
             return PeerAttempt(failure="{0} {1}: {2}".format(method, url, exc))
         raise AgentTransportError(
             "{0} {1} got no answer and may or may not have run: {2}".format(

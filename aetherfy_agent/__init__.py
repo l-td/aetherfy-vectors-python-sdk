@@ -57,6 +57,7 @@ nothing in your requirements. A custom container installs it itself.
 
 import json
 import os
+import uuid
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from typing import (
     Any,
@@ -300,7 +301,9 @@ def payload() -> Dict[str, Any]:
     url = "{0}/deployments/{1}/payload".format(
         api_url.rstrip("/"), quote(spawn_id, safe="")
     )
-    status, body, _ = _http.request_json("GET", url, api_key=api_key, ua=_user_agent())
+    status, body, _ = _http.request_json(
+        "GET", url, api_key=api_key, ua=_user_agent(), repeatable=True
+    )
     if status != 200:
         raise PayloadUnavailable(
             "The payload fallback ({0}) answered {1}: {2}".format(
@@ -459,12 +462,21 @@ def _spawn_as(api_key: str, child: str, payload: Optional[Dict[str, Any]]) -> Sp
     the environment's, a :class:`ServiceRun` its run's."""
     url = _spawn_url()
 
+    # THE SPAWN'S OWN ID, made once per call. The control plane stores it with
+    # the run it makes and answers a repeat of the same id with that run, so a
+    # spawn whose answer was lost on the way (a timeout after the request left)
+    # is sent again safely and never makes a second run.
     status, body, retry_after = _http.request_json(
         "POST",
         url,
         api_key=api_key,
         ua=_user_agent(),
-        body={"child_agent_id": child, "payload": payload or {}},
+        body={
+            "child_agent_id": child,
+            "payload": payload or {},
+            "request_id": str(uuid.uuid4()),
+        },
+        repeatable=True,
     )
 
     if status in (200, 201, 202):
@@ -689,7 +701,7 @@ def _wait_as(api_key: str, run_id: str, timeout_seconds: int) -> Run:
         "{0}/wait?timeout_seconds={1}".format(_run_url(run_id), timeout_seconds),
         api_key,
         timeout=timeout_seconds + _WAIT_TRANSPORT_MARGIN_SECONDS,
-        retry_connection_errors=False,
+        repeatable=False,
     )
 
 
@@ -736,8 +748,11 @@ def cancel(run_id: str) -> Cancellation:
 
 def _cancel_as(api_key: str, run_id: str) -> Cancellation:
     url = "{0}/cancel".format(_run_url(run_id))
+    # REPEATABLE: a second cancel of the same run changes nothing (it answers
+    # `stopping` with a count of 0, or `already_finished`), so a cancel whose
+    # answer was lost is sent again rather than reported as maybe applied.
     status, body, retry_after = _http.request_json(
-        "POST", url, api_key=api_key, ua=_user_agent()
+        "POST", url, api_key=api_key, ua=_user_agent(), repeatable=True
     )
 
     if status == 200:
@@ -1233,7 +1248,7 @@ def _lookup(url: str, name: Optional[str]) -> Dict[str, Any]:
     """
     api_key = _require("AETHERFY_API_KEY", "the key a peer lookup authenticates with")
     status, body, retry_after = _http.request_json(
-        "GET", url, api_key=api_key, ua=_user_agent()
+        "GET", url, api_key=api_key, ua=_user_agent(), repeatable=True
     )
 
     if status == 200:
@@ -1343,7 +1358,7 @@ def _read_run(
     api_key: str,
     *,
     timeout: float = _http.DEFAULT_TIMEOUT,
-    retry_connection_errors: bool = True,
+    repeatable: bool = True,
 ) -> Run:
     """One GET, one Run — shared by :func:`result` and :func:`wait`, for
     whichever key they are given.
@@ -1359,7 +1374,7 @@ def _read_run(
         api_key=api_key,
         ua=_user_agent(),
         timeout=timeout,
-        retry_connection_errors=retry_connection_errors,
+        repeatable=repeatable,
     )
 
     if status == 200:
