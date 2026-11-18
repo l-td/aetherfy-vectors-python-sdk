@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Ships after 1.5.0, with messaging between running agents.
 
+### Added
+- **Messages between running runs.** `send(run_id, body)` puts a message in another run's mailbox, and `receive()`
+  hands over this run's next message, or the end of a run it started (`Ended`, once per child, unless `wait` or
+  `result` already saw it). `receive(timeout_seconds=...)` bounds the wait, and `0` only checks;
+  `receive(from_run=...)` waits for one run's messages. A task run that waits past a short grace is suspended and is
+  not billed until a message wakes it. A message is acknowledged when the run asks for the next one, so a run that
+  starts again on a new machine (`restarted()`) is handed again what it had not finished with, and `messages()` reads
+  the mailbox's whole history. `parent()` is the run that started this one. The service-run handle gains `send`,
+  `receive`, `messages` and `parent`.
+- New types `Message`, `Ended` and `Sent`, and the refusals `MessageError`, `MessageTooLarge`, `MessageRateLimited`
+  (`retry_after`), `MailboxFull`, `MessageStorageFull`, `RecipientEnded` and `SenderEnded`.
+
 ### Fixed
 - **A spawn whose answer was lost no longer starts a second run.** Every `spawn()` now carries an id of its own
   (`request_id`), and the control plane answers a repeat of the same id with the run it already made, so the helper
@@ -18,6 +30,11 @@ Ships after 1.5.0, with messaging between running agents.
   not resolve, the connection was refused) is retried once, as before. One that may have arrived is retried once only
   for a call whose repeat gives the same result: a read, a cancel (a second cancel of the same run changes nothing), and
   a spawn that carries its id. `call_agent` already raised "may or may not have run" on such a failure and still does.
+- **A request the control plane answers `503 RESOURCE_BUSY` or `503 SERVICE_UNAVAILABLE` is repeated once.** After
+  its `Retry-After`, and only for a call whose repeat gives the same result: either can come partway through a
+  request. A `Retry-After` longer than the request's own timeout is left to the caller, with the 503. A peer lookup
+  with a last known address serves it at once instead; with none known, it repeats a `RESOURCE_BUSY` once before
+  failing.
 
 ## [1.5.0] - 2026-11-16
 

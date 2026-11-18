@@ -285,3 +285,73 @@ def test_a_status_with_retry_after_is_still_never_retried(monkeypatch):
 
     call(monkeypatch, urlopen)
     assert len(attempts) == 1
+
+
+# --- REFUSED BEFORE ANYTHING RAN ------------------------------------------------------------------------------------
+# 503 RESOURCE_BUSY and 503 SERVICE_UNAVAILABLE, with a Retry-After, can each come partway through a request (today
+# RESOURCE_BUSY also answers a lock or statement timeout), so each is repeated once after its Retry-After only for a
+# repeatable call. The wait is recorded, never taken (`_http._sleep`).
+
+
+def refusal(code, retry_after="5"):
+    headers = {"Retry-After": retry_after} if retry_after is not None else {}
+    body = json.dumps({"detail": {"code": code, "message": "busy"}}).encode("utf-8")
+
+    def raise_it(request):
+        raise urllib.error.HTTPError(request.full_url, 503, "Service Unavailable", headers, io.BytesIO(body))
+
+    return raise_it
+
+
+def answers(*replies):
+    """urlopen answering each attempt with the next reply: a refusal to raise, or a FakeResponse."""
+    attempts = []
+
+    def urlopen(request, timeout=None):
+        assert len(attempts) < len(replies), "attempt {0}: a request the test did not expect".format(len(attempts) + 1)
+        reply = replies[len(attempts)]
+        attempts.append(1)
+        if callable(reply):
+            reply(request)
+        return reply
+
+    return urlopen, attempts
+
+
+@pytest.fixture
+def waits(monkeypatch):
+    waited = []
+    monkeypatch.setattr(_http, "_sleep", waited.append)
+    return waited
+
+
+@pytest.mark.parametrize("code", ["RESOURCE_BUSY", "SERVICE_UNAVAILABLE"])
+def test_a_503_is_retried_once_after_its_retry_after_for_a_repeatable_call(monkeypatch, waits, code):
+    urlopen, attempts = answers(refusal(code), FakeResponse(200, {"state": "active"}))
+    status, body, _ = call(monkeypatch, urlopen, repeatable=True)
+    assert (status, body, len(attempts), waits) == (200, {"state": "active"}, 2, [5.0])
+
+
+@pytest.mark.parametrize("code", ["RESOURCE_BUSY", "SERVICE_UNAVAILABLE"])
+def test_a_503_is_returned_to_a_call_that_is_not_repeatable(monkeypatch, waits, code):
+    # It can come partway through the request: a blind repeat could do the work a second time.
+    urlopen, attempts = answers(refusal(code))
+    status, body, _ = call(monkeypatch, urlopen, repeatable=False)
+    assert (status, body["detail"]["code"], len(attempts), waits) == (503, code, 1, [])
+
+
+def test_a_second_refusal_is_returned_as_it_came(monkeypatch, waits):
+    urlopen, attempts = answers(refusal("RESOURCE_BUSY"), refusal("RESOURCE_BUSY"))
+    status, body, retry_after = call(monkeypatch, urlopen)
+    assert (status, body["detail"]["code"], retry_after, len(attempts), waits) == (503, "RESOURCE_BUSY", 5.0, 2, [5.0])
+
+
+@pytest.mark.parametrize("code, retry_after", [
+    ("RESOURCE_BUSY", None),                  # no Retry-After: not the control plane's first-unit refusal
+    ("PLACEMENT_UNAVAILABLE", "5"),           # another 503 is an answer, not a refusal before anything ran
+    ("RESOURCE_BUSY", "600"),                 # longer than the request's own timeout: the caller's to wait
+])
+def test_any_other_503_is_returned_with_no_wait(monkeypatch, waits, code, retry_after):
+    urlopen, attempts = answers(refusal(code, retry_after))
+    status, body, _ = call(monkeypatch, urlopen)
+    assert (status, body["detail"]["code"], len(attempts), waits) == (503, code, 1, [])

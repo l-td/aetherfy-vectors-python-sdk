@@ -17,10 +17,11 @@ customer's problem.
 
 import json
 import socket
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from typing import Any, Dict, Mapping, Optional, Tuple
+from typing import Any, Dict, Mapping, Optional, Tuple, cast
 
 from aetherfy_vectors.utils import parse_retry_after
 
@@ -62,6 +63,54 @@ def _retry_after_of(response: Any) -> Optional[float]:
     return parse_retry_after(headers.get("Retry-After") if headers else None)
 
 
+#: The control plane's 503s worth one more try after their Retry-After, each only for a call whose repeat gives the
+#: same result (`repeatable`): either can come PARTWAY through a request. SERVICE_UNAVAILABLE: the archive storage an
+#: upload or a rebuild needs. RESOURCE_BUSY: a request's first unit found no database slot (control plane REVIEW_FAQ
+#: §97, nothing ran), but today the same code also answers a lock or statement timeout partway through a request.
+RESOURCE_BUSY = "RESOURCE_BUSY"
+SERVICE_UNAVAILABLE = "SERVICE_UNAVAILABLE"
+#: The longest Retry-After the helper waits out itself: the request's own timeout. A longer one is returned to the
+#: caller with the 503, as any other status is.
+MAX_RETRY_AFTER_WAITED = DEFAULT_TIMEOUT
+
+#: How a Retry-After is waited out. A name of its own so a test records the wait instead of taking it.
+_sleep = time.sleep
+
+
+#: Which of the control plane's 503s request_json waits out and repeats for a repeatable call: BY THE RULE (the
+#: default: RESOURCE_BUSY and SERVICE_UNAVAILABLE), RESOURCE_BUSY alone, or NONE (returned as they came). The peer
+#: lookup chooses: with a last known address it has an answer to serve at once instead.
+REFUSALS_BY_THE_RULE = "by-the-rule"
+REFUSALS_RESOURCE_BUSY_ONLY = "resource-busy-only"
+REFUSALS_NONE = "none"
+
+
+def _worth_one_more_try(
+    status: int,
+    body: Any,
+    retry_after: Optional[float],
+    *,
+    repeatable: bool,
+    refusals: str,
+) -> bool:
+    """A 503 the helper repeats after its Retry-After: RESOURCE_BUSY and SERVICE_UNAVAILABLE (as `refusals`
+    allows), for a repeatable call, and only with a Retry-After it may wait out."""
+    detail = body.get("detail") if isinstance(body, dict) else None
+    code = detail.get("code") if isinstance(detail, dict) else None
+    codes = (
+        {RESOURCE_BUSY}
+        if refusals == REFUSALS_RESOURCE_BUSY_ONLY
+        else {RESOURCE_BUSY, SERVICE_UNAVAILABLE}
+    )
+    retryable = refusals != REFUSALS_NONE and repeatable and code in codes
+    return (
+        status == 503
+        and retryable
+        and retry_after is not None
+        and 0 <= retry_after <= MAX_RETRY_AFTER_WAITED
+    )
+
+
 def never_delivered(exc: BaseException) -> bool:
     """Did this transport failure happen BEFORE the request could reach anyone?
 
@@ -85,7 +134,8 @@ def request_json(
     ua: str,
     repeatable: bool,
     body: Optional[Dict[str, Any]] = None,
-    timeout: float = DEFAULT_TIMEOUT,
+    timeout: Optional[float] = DEFAULT_TIMEOUT,
+    refusals: str = REFUSALS_BY_THE_RULE,
 ) -> Tuple[int, Any, Optional[float]]:
     """
     Send one JSON request and return ``(status_code, parsed_body, retry_after)``.
@@ -102,6 +152,10 @@ def request_json(
 
     - a request that NEVER LEFT (:func:`never_delivered`: the name did not
       resolve, the connection was refused) is retried, whatever the call;
+    - a 503 ``RESOURCE_BUSY`` or ``SERVICE_UNAVAILABLE`` with a
+      ``Retry-After`` is retried after that ``Retry-After`` only when the call
+      is ``repeatable``: either can come partway through a request. It waits at
+      most :data:`MAX_RETRY_AFTER_WAITED`; a longer one is returned as it came;
     - a request that may have been DELIVERED (a timeout or a reset after it was
       sent) is retried only when the caller says the call is ``repeatable``:
       its repeat gives the same result (a read, a cancel, a spawn or a message
@@ -111,7 +165,7 @@ def request_json(
 
     ``repeatable`` has NO default: every caller decides it, in the open.
 
-    An HTTP status is never retried here: a 4xx repeated is a 4xx. The caller
+    No other HTTP status is retried here: a 4xx repeated is a 4xx. The caller
     decides whether a 429 is worth waiting on, and ``retry_after`` is what it
     decides with: a retry before that time is refused again.
     """
@@ -138,7 +192,14 @@ def request_json(
         try:
             response = urllib.request.urlopen(request, timeout=timeout)
         except urllib.error.HTTPError as exc:  # a status, not a transport failure
-            return exc.code, _read_json(exc), _retry_after_of(exc)
+            status, body, retry_after = exc.code, _read_json(exc), _retry_after_of(exc)
+            if attempts < 2 and _worth_one_more_try(
+                status, body, retry_after, repeatable=repeatable, refusals=refusals
+            ):
+                # The rule refused a missing Retry-After: here it is a number.
+                _sleep(cast(float, retry_after))
+                continue
+            return status, body, retry_after
         except (urllib.error.URLError, OSError) as exc:
             last_error = exc
             if never_delivered(exc) or repeatable:

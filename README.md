@@ -785,13 +785,92 @@ run. A release is cancelled with `afy cancel <agent>`, not with this call.
 `RunNotFound` and `RunAccessDenied` are the read family's types and are not
 `RunCancelError`s: catch `AgentError` to see every failure.
 
+### Messages between running runs
+
+A result is one answer at the end. While both runs are still going, they can
+talk: every run has a mailbox, `send` puts a message in another run's mailbox,
+and `receive` hands over this run's next one. A child reports progress or asks a
+question; the parent answers or changes the plan.
+
+```python
+from aetherfy_agent import Ended, parent, receive, send, spawn
+
+# In the parent: start a child, then read what it says until it ends.
+child = spawn("researcher", {"topic": "battery recycling"})
+while True:
+    got = receive()                          # the next message, or a child's end
+    if isinstance(got, Ended):
+        print("the child ended", got.state)  # read its answer with result()
+        break
+    if got.body.get("question"):
+        send(got.sender_run_id, {"answer": "Europe only"})
+    else:
+        print("progress", got.body)
+```
+
+```python
+# In the child: tell the run that started it, and wait for its answer.
+send(parent(), {"question": "which region?"})
+reply = receive(from_run=parent())           # waits for that run's message only
+```
+
+`receive()` waits as long as it takes. `receive(timeout_seconds=30)` returns
+`None` when nothing came in that time, and `timeout_seconds=0` only checks. A
+task run that waits past a short grace is suspended and is not billed until a
+message wakes it; a service run waits awake, inside its request. A parent also
+receives the end of each run it started (an `Ended`, once per child), unless it
+already saw that end through `wait` or `result`.
+
+A message is acknowledged when its run asks for the next one, never by the
+answer that handed it over. If a run's machine is lost while it waits, the run
+starts again on a new one: `restarted()` is then `True`, the messages it had not
+acknowledged are handed over again, and `messages()` reads the run's whole
+history, in order, to rebuild its state from. `parent()` is the run that started
+this one, or `None`.
+
+A message body is any JSON value, up to the same size as a payload. A refused
+send raises a type of its own, all of them `MessageError`s:
+
+```python
+from aetherfy_agent import (
+    MailboxFull,
+    MessageError,
+    MessageRateLimited,
+    MessageTooLarge,
+    RecipientEnded,
+    send,
+)
+
+try:
+    send(run_id, {"progress": 0.5})
+except MessageTooLarge as error:
+    print(error.message_bytes, "exceeds", error.max_bytes)
+except MessageRateLimited as error:
+    print("send again in", error.retry_after, "s")
+except MailboxFull as error:
+    # The recipient has not read what it was sent; it clears as it reads.
+    print(error.unread, "unread of", error.max_unread)
+except RecipientEnded as error:
+    print("that run has ended:", error.recipient_state)
+except MessageError as error:
+    print(error.error_code)
+```
+
+A run sends up to 60 messages a minute, and a mailbox holds up to 100 unread
+ones. Messages count toward the account's log storage. A mailbox takes messages
+until its run ends; then it is read-only, and its history is kept as long as the
+run's logs. An agent's own key sends to the runs in its own run tree and
+receives only from its own mailbox; an account's key may send to any run of the
+account.
+
 ### Inside a service's run handler
 
 A service handles a run in `POST /aetherfy/run`. The platform gives that run a
 key of its own and sends it, with the run's id, in the headers
 `X-Aetherfy-Run-Key` and `X-Aetherfy-Run`, on that one call. `service_run` reads
-them into a handle whose `spawn`, `result`, `wait` and `cancel` are the
-functions above, with the same signatures and errors, authenticating as the run:
+them into a handle whose `spawn`, `result`, `wait`, `cancel`, `send`, `receive`,
+`messages` and `parent` are the functions above, with the same signatures and
+errors, authenticating as the run:
 
 ```python
 import asyncio
