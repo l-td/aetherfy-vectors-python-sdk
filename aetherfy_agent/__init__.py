@@ -1321,6 +1321,7 @@ def _run_from(body: Dict[str, Any]) -> Run:
         has_result=bool(body.get("has_result")),
         is_ephemeral=bool(body.get("is_ephemeral")),
         error_message=body.get("error_message"),
+        failure_code=body.get("failure_code"),
         raw=body,
     )
 

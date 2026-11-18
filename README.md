@@ -690,8 +690,11 @@ finished = wait(run.spawn_id, timeout_seconds=45)
 
 if finished.state == "completed":
     print(finished.result)
-elif finished.state in ("failed", "cancelled"):
-    print("the run ended", finished.state)
+elif finished.state == "failed":
+    # failure_code is the value to switch on; error_message says it in words.
+    print("the run failed:", finished.failure_code, finished.error_message)
+elif finished.state == "cancelled":
+    print("the run was cancelled:", finished.error_message)
 else:
     # "waiting" (in the account's line) or "active" (executing): not over yet.
     print("still", finished.state)

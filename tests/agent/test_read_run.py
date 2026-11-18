@@ -38,6 +38,7 @@ FINISHED = {
     "result_error": None,
     "has_result": True,
     "error_message": None,
+    "failure_code": None,
     "regions": ["iad"],
     "pending_regions": [],
     "created_at": "2026-09-08T09:04:11Z",
@@ -155,6 +156,7 @@ def test_a_finished_run_carries_its_answer(transport):
     assert run.has_result is True
     assert run.is_ephemeral is True
     assert run.error_message is None
+    assert run.failure_code is None
 
 
 def test_raw_keeps_the_whole_object_including_what_is_not_named(transport):
@@ -177,6 +179,30 @@ def test_a_refused_result_is_not_a_result(transport):
     assert run.result is None
     assert run.result_error == "too_large"
     assert run.has_result is False
+
+
+@pytest.mark.parametrize("call", [result, wait])
+def test_a_failed_run_is_returned_with_its_failure_code_beside_its_sentence(transport, call):
+    # The code is the value to switch on, the sentence the prose; a failed run is
+    # an answer, so it is returned, never raised.
+    transport.reply = (
+        200,
+        dict(FINISHED, state="failed", result=None, has_result=False,
+             error_message="run exited with code 3", failure_code="RUN_EXITED_NONZERO"),
+    )
+    run = call(RUN_ID)
+
+    assert (run.state, run.failure_code, run.error_message) == (
+        "failed", "RUN_EXITED_NONZERO", "run exited with code 3")
+
+
+def test_control_a_run_without_the_field_has_no_failure_code(transport):
+    # A run that failed before the platform recorded codes is sent without one.
+    body = dict(FINISHED, state="failed", error_message="it failed")
+    del body["failure_code"]
+    transport.reply = (200, body)
+
+    assert result(RUN_ID).failure_code is None
 
 
 def test_a_run_that_returned_nothing_is_not_a_run_that_failed(transport):

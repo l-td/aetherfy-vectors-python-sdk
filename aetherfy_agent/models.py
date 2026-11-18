@@ -95,6 +95,12 @@ class Run:
     ``has_result`` is the platform's own answer to "did this run answer at
     all". A refused result is not a result, so ``has_result`` is ``False``
     whenever ``result_error`` is set.
+
+    ``failure_code`` IS WHY A FAILED RUN FAILED, as the platform's code, beside
+    ``error_message``, its sentence: the value to switch on (the code is the
+    contract, the sentence is prose). ``None`` for a run that did not fail, and
+    for one that failed before the platform recorded codes. A ``cancelled`` run
+    carries none: why it was stopped is ``raw["cancellation_reason"]``.
     """
 
     id: str
@@ -105,6 +111,7 @@ class Run:
     has_result: bool = False
     is_ephemeral: bool = False
     error_message: Optional[str] = None
+    failure_code: Optional[str] = None
     #: Everything the control plane sent, unmodified.
     raw: Dict[str, Any] = field(default_factory=dict)
 
