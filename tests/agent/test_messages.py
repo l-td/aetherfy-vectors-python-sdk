@@ -309,3 +309,18 @@ def test_a_service_run_handle_sends_and_receives_with_the_runs_key_and_id(transp
     handle.receive()
     assert [c["api_key"] for c in transport.calls] == ["afy_test_service_run_key"] * 2
     assert transport.calls[1]["url"] == "{0}/deployments/{1}/messages/receive".format(API, CHILD)
+
+
+def test_a_wait_names_the_machine_its_supervisor_set(transport, monkeypatch):
+    # A service release's wait is held by the machine that runs the handler: the control plane is told which.
+    monkeypatch.setenv("AETHERFY_INSTANCE_ID", "8f1c2d3e-0000-4000-8000-00000000abcd")
+    queued(transport, (200, {"waiting": False}))
+    receive(timeout_seconds=0)
+    assert transport.calls[0]["body"].get("instance_id") == "8f1c2d3e-0000-4000-8000-00000000abcd"
+
+
+def test_without_it_no_machine_is_named(transport, monkeypatch):
+    monkeypatch.delenv("AETHERFY_INSTANCE_ID", raising=False)
+    queued(transport, (200, {"waiting": False}))
+    receive(timeout_seconds=0)
+    assert "instance_id" not in transport.calls[0]["body"]

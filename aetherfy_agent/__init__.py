@@ -171,6 +171,7 @@ __all__ = [
     "restarted",
     "parent",
     "SUPERVISOR_WAIT_URL_VARIABLE",
+    "INSTANCE_ID_VARIABLE",
     # PUBLIC IN BOTH LANGUAGES OR NEITHER. The JavaScript helper exports these
     # three from its entry point, so a task ported between the two would find
     # the bound readable in one and not the other. A caller sizing its own
@@ -878,6 +879,11 @@ def _cancel_as(api_key: str, run_id: str) -> Cancellation:
 #: run's process (a task) or on the service's server (a service run's handler).
 SUPERVISOR_WAIT_URL_VARIABLE = "AETHERFY_SUPERVISOR_WAIT_URL"
 
+#: The machine this process runs on, as the platform names it to the control plane: set by a supervisor that holds
+#: waits (run-request-v4). A wait records the machine whose supervisor holds its call; a service release's wait names
+#: it with this, since a release has no one machine of its own.
+INSTANCE_ID_VARIABLE = "AETHERFY_INSTANCE_ID"
+
 #: How many times the local wait is asked again after its connection dropped,
 #: before the helper gives up. The supervisor remembers a wake that came while
 #: the call was being made again, so asking again loses nothing.
@@ -1028,6 +1034,9 @@ def _receive_as(
                 request["from_run"] = from_run
             if timeout_seconds is not None:
                 request["timeout_seconds"] = timeout_seconds
+            instance_id = os.environ.get(INSTANCE_ID_VARIABLE)
+            if instance_id:
+                request["instance_id"] = instance_id
             # Kept until this call sees the wait through: if the request fails
             # after it may have arrived, the next call names the same wait.
             _pending_waits[run_id] = wait_id
