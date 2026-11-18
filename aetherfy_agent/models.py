@@ -7,6 +7,7 @@ told this process, so there is nothing to configure and nothing to mutate.
 
 import json as _json
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Dict, Optional
 
 
@@ -65,6 +66,25 @@ class Spawn:
 
 
 @dataclass(frozen=True)
+class RunRetry:
+    """
+    The platform retrying a run's attempt that met a temporary unavailability.
+
+    ``code`` is the platform's code for what the attempt met, the value to
+    switch on (``PLATFORM_TEMPORARILY_UNAVAILABLE``). ``attempt`` is the number
+    of the attempt that will be made NEXT (2 to ``max_attempts``),
+    ``max_attempts`` is how many attempts the platform makes in all, and
+    ``next_attempt_at`` is when the next one is made: a timezone-aware
+    ``datetime`` in UTC.
+    """
+
+    code: str
+    attempt: int
+    max_attempts: int
+    next_attempt_at: datetime
+
+
+@dataclass(frozen=True)
 class Run:
     """
     One run, read back from the control plane.
@@ -95,6 +115,19 @@ class Run:
     ``has_result`` is the platform's own answer to "did this run answer at
     all". A refused result is not a result, so ``has_result`` is ``False``
     whenever ``result_error`` is set.
+
+    ``failure_code`` IS WHY A FAILED RUN FAILED, as the platform's code, beside
+    ``error_message``, its sentence: the value to switch on (the code is the
+    contract, the sentence is prose). ``None`` for a run that did not fail, and
+    for one that failed before the platform recorded codes. A ``cancelled`` run
+    carries none: why it was stopped is ``raw["cancellation_reason"]``.
+
+    ``retry`` IS THE PLATFORM RETRYING THIS RUN, while it does: a
+    :class:`RunRetry` for an attempt that met a temporary unavailability, with
+    the code, the number of the next attempt out of ``max_attempts``, and when
+    it is made. ``None`` whenever nothing is being retried, and for a run sent
+    without the field. It describes the retry in progress, not how the run
+    ended: ``state`` and ``failure_code`` do that.
     """
 
     id: str
@@ -105,6 +138,8 @@ class Run:
     has_result: bool = False
     is_ephemeral: bool = False
     error_message: Optional[str] = None
+    failure_code: Optional[str] = None
+    retry: Optional[RunRetry] = None
     #: Everything the control plane sent, unmodified.
     raw: Dict[str, Any] = field(default_factory=dict)
 

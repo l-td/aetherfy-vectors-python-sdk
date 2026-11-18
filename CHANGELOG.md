@@ -23,6 +23,24 @@ This release contains a change marked BREAKING below.
   all three endings instead of only `"completed"`.
 - `Spawn.job_id` is `None`, not the string `"None"`, for a run that waits in the
   line: it has no job yet. Its type is `Optional[str]`.
+
+### Added
+
+- **`Run.failure_code`: why a failed run failed, as the platform's code.** It is
+  beside `error_message` (the sentence) on every run `wait`, `result`,
+  `cancel` and `service_run` return, and is the value to switch on: for
+  example `RUN_EXITED_NONZERO`, `RUN_OUT_OF_MEMORY`, `RUN_TIME_LIMIT_EXCEEDED`,
+  or `PLATFORM_FAILURE` when the failure was the platform's, not the code's.
+  `None` for a run that did not fail. `wait` and `result` still return a failed
+  run rather than raise.
+- **`Run.retry`: the platform retrying a run, and when.** While the platform
+  retries a run's attempt that met a temporary unavailability, every run `wait`,
+  `result`, `cancel` and `service_run` return carries a `RunRetry` (new, and
+  exported from `aetherfy_agent`): `code` (`PLATFORM_TEMPORARILY_UNAVAILABLE`),
+  `attempt` (the number of the attempt that will be made next), `max_attempts`,
+  and `next_attempt_at`, a timezone-aware UTC `datetime`. `None` when nothing is
+  being retried. A `retry` that does not have that shape reads as `None`, and
+  `Run.raw` keeps what was sent.
 - `RunAccessDenied` carries the code that arrived in `error_code`:
   `DEPLOYMENT_ACCESS_DENIED` as before, or `AUTH_AGENT_KEY_OUT_OF_SCOPE` from
   `cancel`. A READ that the agent's key may not make is still a plain

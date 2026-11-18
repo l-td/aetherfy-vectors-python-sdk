@@ -690,11 +690,22 @@ finished = wait(run.spawn_id, timeout_seconds=45)
 
 if finished.state == "completed":
     print(finished.result)
-elif finished.state in ("failed", "cancelled"):
-    print("the run ended", finished.state)
+elif finished.state == "failed":
+    # failure_code is the value to switch on; error_message says it in words.
+    print("the run failed:", finished.failure_code, finished.error_message)
+elif finished.state == "cancelled":
+    print("the run was cancelled:", finished.error_message)
 else:
     # "waiting" (in the account's line) or "active" (executing): not over yet.
     print("still", finished.state)
+
+# While the platform retries an attempt that met a temporary unavailability,
+# `retry` says which attempt comes next and when; it is None otherwise.
+if finished.retry:
+    print(
+        "attempt", finished.retry.attempt, "of", finished.retry.max_attempts,
+        "at", finished.retry.next_attempt_at,
+    )
 
 # result() is the same read without the waiting.
 now = result(run.spawn_id)
@@ -705,6 +716,12 @@ A run's `state` is `waiting` while it waits in the account's line, `active`
 while it executes, and ends `completed`, `failed` or `cancelled`. While it is
 `waiting`, `run.raw["position"]` is its place in the line. The states belong to
 the platform, so the helper does not enumerate them.
+
+While the platform retries an attempt that met a temporary unavailability,
+`run.retry` is a `RunRetry`: its `code`, the number of the next `attempt` out of
+`max_attempts`, and `next_attempt_at`, when that attempt is made (a
+timezone-aware UTC `datetime`). It is `None` when nothing is being retried, and
+it says nothing about how the run ended: `state` and `failure_code` do.
 
 The result shares the payload's inline cap — one number bounding both
 directions — and it is for answers and references, not data. Anything larger

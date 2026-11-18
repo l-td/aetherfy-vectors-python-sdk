@@ -175,6 +175,32 @@ def test_the_run_keeps_the_whole_object(transport):
     assert run.is_ephemeral is True
 
 
+def test_the_run_a_cancel_answers_with_is_read_like_any_other_run(transport):
+    # One reader for every run the SDK returns: a cancel's carries the retry it
+    # was sent with, and none when it was sent without.
+    retrying = {
+        "code": "PLATFORM_TEMPORARILY_UNAVAILABLE",
+        "attempt": 3,
+        "max_attempts": 4,
+        "next_attempt_at": "2026-11-18T03:12:45Z",
+    }
+    body = answer("cancelled")
+    body["run"]["retry"] = retrying
+    transport.reply = (200, body)
+
+    retry = cancel(RUN_ID).run.retry
+
+    assert (retry.code, retry.attempt, retry.max_attempts) == (
+        "PLATFORM_TEMPORARILY_UNAVAILABLE",
+        3,
+        4,
+    )
+    assert retry.next_attempt_at.isoformat() == "2026-11-18T03:12:45+00:00"
+
+    transport.reply = (200, answer("cancelled"))
+    assert cancel(RUN_ID).run.retry is None
+
+
 def test_a_200_that_is_not_a_cancellation_is_not_taken_for_one(transport):
     for body in ("OK", {}, {"outcome": "cancelled"}, {"run": CANCELLED_RUN}):
         transport.reply = (200, body)

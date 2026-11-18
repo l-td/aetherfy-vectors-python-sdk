@@ -58,6 +58,7 @@ nothing in your requirements. A custom container installs it itself.
 import json
 import os
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from datetime import datetime, timezone
 from typing import (
     Any,
     Callable,
@@ -105,7 +106,14 @@ from .exceptions import (
     SpawnError,
     WaitTimeoutInvalid,
 )
-from .models import Cancellation, MachineShape, PeerResponse, Run, Spawn
+from .models import (
+    Cancellation,
+    MachineShape,
+    PeerResponse,
+    Run,
+    RunRetry,
+    Spawn,
+)
 
 # ONE distribution, ONE version. `aetherfy_vectors.__version__` is what
 # setup.py reads to stamp the wheel, so re-exporting it here means the
@@ -143,6 +151,7 @@ __all__ = [
     "MachineShape",
     "PeerResponse",
     "Run",
+    "RunRetry",
     "ServiceRun",
     "Spawn",
     "AgentError",
@@ -1321,8 +1330,59 @@ def _run_from(body: Dict[str, Any]) -> Run:
         has_result=bool(body.get("has_result")),
         is_ephemeral=bool(body.get("is_ephemeral")),
         error_message=body.get("error_message"),
+        failure_code=body.get("failure_code"),
+        retry=_retry_from(body.get("retry")),
         raw=body,
     )
+
+
+def _retry_from(value: Any) -> Optional[RunRetry]:
+    """A run's ``retry`` object as a :class:`RunRetry`, or ``None``.
+
+    ``None`` is the answer for a ``null``, for a missing key, and for an object
+    that does not have the shape: ``retry`` is information about a run that is
+    still going, so a field of the wrong type reads as absent, as ``position``
+    and ``cancelled_count`` do, rather than failing the read of the run. It is
+    all or nothing, never a retry with some of its fields. ``Run.raw`` keeps
+    what the platform sent either way.
+    """
+    if not isinstance(value, dict):
+        return None
+    code = value.get("code")
+    attempt = value.get("attempt")
+    max_attempts = value.get("max_attempts")
+    next_attempt_at = _utc_from(value.get("next_attempt_at"))
+    if (
+        isinstance(code, str)
+        and _is_int(attempt)
+        and _is_int(max_attempts)
+        and next_attempt_at is not None
+    ):
+        return RunRetry(
+            code=code,
+            attempt=attempt,
+            max_attempts=max_attempts,
+            next_attempt_at=next_attempt_at,
+        )
+    return None
+
+
+def _utc_from(value: Any) -> Optional[datetime]:
+    """An ISO 8601 timestamp that names its offset (``Z`` or ``+hh:mm``) as a
+    timezone-aware UTC ``datetime``; ``None`` for anything else.
+
+    A timestamp without an offset is refused, not assumed: it would read as
+    local time, and the platform's are UTC.
+    """
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+        if parsed.utcoffset() is None:
+            return None
+        return parsed.astimezone(timezone.utc)
+    except (ValueError, OverflowError):
+        return None
 
 
 def _shared_run_refusal(
