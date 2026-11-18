@@ -10,6 +10,8 @@ The wait bound (1..60, default 30) is `WAIT_TIMEOUT_MIN_SECONDS` /
 `WAIT_TIMEOUT_MAX_SECONDS` / `WAIT_TIMEOUT_DEFAULT_SECONDS` there.
 """
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 import aetherfy_agent
@@ -22,6 +24,7 @@ from aetherfy_agent.exceptions import (
     RunReadError,
     WaitTimeoutInvalid,
 )
+from aetherfy_agent.models import RunRetry
 
 RUN_ID = "44444444-4444-4444-4444-444444444444"
 
@@ -39,6 +42,7 @@ FINISHED = {
     "has_result": True,
     "error_message": None,
     "failure_code": None,
+    "retry": None,
     "regions": ["iad"],
     "pending_regions": [],
     "created_at": "2026-09-08T09:04:11Z",
@@ -157,6 +161,7 @@ def test_a_finished_run_carries_its_answer(transport):
     assert run.is_ephemeral is True
     assert run.error_message is None
     assert run.failure_code is None
+    assert run.retry is None
 
 
 def test_raw_keeps_the_whole_object_including_what_is_not_named(transport):
@@ -203,6 +208,125 @@ def test_control_a_run_without_the_field_has_no_failure_code(transport):
     transport.reply = (200, body)
 
     assert result(RUN_ID).failure_code is None
+
+
+# What the control plane sends while it retries an attempt that met a temporary
+# unavailability. The run's `state` is not this field's business: a retry is read
+# off the run whatever it is.
+RETRYING = {
+    "code": "PLATFORM_TEMPORARILY_UNAVAILABLE",
+    "attempt": 2,
+    "max_attempts": 4,
+    "next_attempt_at": "2026-11-18T03:12:45Z",
+}
+NEXT_ATTEMPT = datetime(2026, 11, 18, 3, 12, 45, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize("call", [result, wait])
+def test_a_run_being_retried_carries_its_retry_from_both_reads(transport, call):
+    transport.reply = (200, dict(FINISHED, retry=RETRYING))
+
+    run = call(RUN_ID)
+
+    assert run.retry == RunRetry(
+        code="PLATFORM_TEMPORARILY_UNAVAILABLE",
+        attempt=2,
+        max_attempts=4,
+        next_attempt_at=NEXT_ATTEMPT,
+    )
+    assert run.raw["retry"] == RETRYING
+
+
+@pytest.mark.parametrize(
+    "sent,instant",
+    [
+        ("2026-11-18T03:12:45Z", NEXT_ATTEMPT),
+        ("2026-11-18T03:12:45.250000Z", NEXT_ATTEMPT.replace(microsecond=250000)),
+        ("2026-11-18T03:12Z", NEXT_ATTEMPT.replace(second=0)),
+        ("2026-11-18T03:12:45+00:00", NEXT_ATTEMPT),
+        # The same instant, said in another offset, is read in UTC.
+        ("2026-11-18T05:12:45+02:00", NEXT_ATTEMPT),
+        ("2026-11-17T22:12:45-05:00", NEXT_ATTEMPT),
+    ],
+)
+def test_next_attempt_at_is_an_aware_utc_datetime(transport, sent, instant):
+    transport.reply = (200, dict(FINISHED, retry=dict(RETRYING, next_attempt_at=sent)))
+
+    when = result(RUN_ID).retry.next_attempt_at
+
+    assert when == instant
+    # `==` compares instants, so an unconverted +02:00 would pass it: the offset
+    # is what says the value is in UTC.
+    assert when.utcoffset() == timedelta(0)
+    assert when.tzinfo is timezone.utc
+
+
+def test_a_run_not_being_retried_has_no_retry(transport):
+    transport.reply = (200, dict(FINISHED, retry=None))
+
+    assert result(RUN_ID).retry is None
+
+
+def test_control_a_run_without_the_field_has_no_retry(transport):
+    # A run from before the platform sent it, or one that is not a run being read
+    # back with it, has no key at all: that reads as null too.
+    body = dict(FINISHED)
+    del body["retry"]
+    transport.reply = (200, body)
+
+    assert result(RUN_ID).retry is None
+
+
+@pytest.mark.parametrize(
+    "sent",
+    [
+        pytest.param("soon", id="a string"),
+        pytest.param([2, 4], id="a list"),
+        pytest.param({}, id="an empty object"),
+        *[
+            pytest.param(
+                {key: value for key, value in RETRYING.items() if key != missing},
+                id="without " + missing,
+            )
+            for missing in RETRYING
+        ],
+        pytest.param(dict(RETRYING, code=7), id="code is not a string"),
+        pytest.param(dict(RETRYING, attempt="2"), id="attempt is a string"),
+        pytest.param(dict(RETRYING, attempt=True), id="attempt is a boolean"),
+        pytest.param(dict(RETRYING, attempt=2.5), id="attempt is a fraction"),
+        pytest.param(dict(RETRYING, max_attempts=None), id="max_attempts is null"),
+        pytest.param(dict(RETRYING, next_attempt_at=1794971565), id="a number of seconds"),
+        pytest.param(dict(RETRYING, next_attempt_at="tomorrow"), id="not a timestamp"),
+        pytest.param(dict(RETRYING, next_attempt_at=""), id="an empty timestamp"),
+        pytest.param(
+            dict(RETRYING, next_attempt_at="2026-11-18T03:12:45"),
+            id="a timestamp with no offset",
+        ),
+        pytest.param(
+            dict(RETRYING, next_attempt_at="2026-11-18"), id="a date with no time"
+        ),
+        pytest.param(
+            dict(RETRYING, next_attempt_at="2026-13-01T00:00:00Z"),
+            id="a month that does not exist",
+        ),
+        pytest.param(
+            dict(RETRYING, next_attempt_at="0001-01-01T00:00:00+05:00"),
+            id="a timestamp that has no UTC form",
+        ),
+    ],
+)
+def test_a_retry_that_is_not_shaped_so_reads_as_none_and_the_run_is_still_returned(
+    transport, sent
+):
+    # An optional field of the wrong type reads as absent, as `position` does on
+    # a spawn: the run itself is still an answer, and raw keeps what was sent.
+    transport.reply = (200, dict(FINISHED, retry=sent))
+
+    run = result(RUN_ID)
+
+    assert run.retry is None
+    assert run.state == "completed"
+    assert run.raw["retry"] == sent
 
 
 def test_a_run_that_returned_nothing_is_not_a_run_that_failed(transport):
