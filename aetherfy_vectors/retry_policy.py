@@ -5,11 +5,17 @@ Three kinds of failure:
 1. REFUSED BEFORE ANYTHING HAPPENED. Retried for EVERY operation.
    - 503 ``WORKSPACE_LOOKUP_UNAVAILABLE``, ``COLLECTION_LOOKUP_UNAVAILABLE``,
      ``PLACEMENT_UNAVAILABLE``: the server refused at its edge; nothing ran.
+   - 503 ``RESOURCE_BUSY``: the vector API's own database had no connection for
+     a request that had changed nothing yet (vectordb
+     backend/utils/databaseUnavailable.js: a handler marks the request before
+     it changes anything). The same wait AFTER something ran is a 503
+     ``REQUEST_TIMED_OUT``, which is kind 2 below.
    - A connection failure before the request was sent: DNS, connection
      refused, connect timeout.
    - 429 with a Retry-After: refused, nothing ran (as before this rule).
 2. AMBIGUOUS: a read timeout, a connection reset after sending, any other
-   5xx. The request may have run. Retried only for an operation whose repeat
+   5xx (a 503 ``REQUEST_TIMED_OUT``, the wait partway through a request,
+   included). The request may have run. Retried only for an operation whose repeat
    gives the same result (REPEATABLE below). A ONCE operation raises after one
    attempt: its repeat after a hidden success reports a false error (a delete
    finds nothing, a create finds the collection).
@@ -96,12 +102,16 @@ REPEATABLE_DESPITE_ITS_NAME: Dict[str, str] = {
     "create_field_index": "re-creating an existing index with the same schema returns at once",
 }
 
-# 503s the server answers at its edge, before running anything.
+# 503s the server answers before running anything: three at its edge, and
+# RESOURCE_BUSY, the vector API's refusal when its database had no connection
+# for a request that had changed nothing yet. (The wait after something ran is
+# REQUEST_TIMED_OUT: not in this set, so it is ambiguous.)
 REFUSED_BEFORE_ANYTHING_CODES = frozenset(
     {
         "WORKSPACE_LOOKUP_UNAVAILABLE",
         "COLLECTION_LOOKUP_UNAVAILABLE",
         "PLACEMENT_UNAVAILABLE",
+        "RESOURCE_BUSY",
     }
 )
 

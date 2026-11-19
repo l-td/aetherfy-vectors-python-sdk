@@ -11,6 +11,12 @@ This release contains a change marked BREAKING below.
 
 ### Changed
 
+- **A `503` with `RESOURCE_BUSY` is retried for every operation, a create or a
+  delete included.** The vector API answers it only when its database had no
+  connection for a request that had changed nothing yet, so nothing ran. The
+  same wait after something ran is a `503` with `REQUEST_TIMED_OUT`, which is
+  retried only for an operation whose repeat gives the same result, like any
+  other `5xx`. Both wait for the `Retry-After` the answer carries.
 - **A run over the account's in-flight limit waits in a line instead of being
   refused.** `spawn` now answers such a run with `status` `"waiting"`, and the
   run waits in the account's line (state `waiting`: no machine, nothing billed)

@@ -26,6 +26,8 @@ from aetherfy_vectors.retry_policy import OPERATIONS, ONCE, REPEATABLE
 
 LOOKUP = {"error": {"code": "WORKSPACE_LOOKUP_UNAVAILABLE", "message": "x"}}
 OTHER_503 = {"error": {"code": "SOMETHING_ELSE", "message": "x"}}
+BUSY = {"error": {"code": "RESOURCE_BUSY", "message": "x"}}
+TIMED_OUT = {"error": {"code": "REQUEST_TIMED_OUT", "message": "x"}}
 
 
 def _response(status, payload):
@@ -129,9 +131,55 @@ def test_a_delete_retries_a_connect_timeout(client):
     assert sent.call_count == 2
 
 
+@pytest.mark.parametrize(
+    "op", ["get_collection", "delete_collection", "create_collection", "count"]
+)
+def test_a_resource_busy_is_retried_for_every_operation(client, op):
+    # The vector API answers RESOURCE_BUSY only for a request that had changed
+    # nothing yet, so a create or a delete is sent again after it too.
+    call, body = CALLS[op]
+    sent = queue(client, _response(503, BUSY), _ok(body))
+
+    call(client)
+    assert sent.call_count == 2
+
+
+def test_the_refused_set_is_the_edge_codes_and_resource_busy_and_not_request_timed_out():
+    from aetherfy_vectors.retry_policy import REFUSED_BEFORE_ANYTHING_CODES
+
+    assert REFUSED_BEFORE_ANYTHING_CODES == {
+        "WORKSPACE_LOOKUP_UNAVAILABLE",
+        "COLLECTION_LOOKUP_UNAVAILABLE",
+        "PLACEMENT_UNAVAILABLE",
+        "RESOURCE_BUSY",
+    }
+    assert "REQUEST_TIMED_OUT" not in REFUSED_BEFORE_ANYTHING_CODES
+
+
 # ===========================================================================
 # 2. Ambiguous: only operations whose repeat gives the same result
 # ===========================================================================
+
+
+@pytest.mark.parametrize("op", ["delete_collection", "create_collection"])
+def test_a_once_operation_does_not_retry_a_request_timed_out(client, op):
+    # The wait partway through a request: some of it may have been applied.
+    call, _ = CALLS[op]
+    sent = queue(client, _response(503, TIMED_OUT), _ok())
+
+    with pytest.raises(ServiceUnavailableError) as raised:
+        call(client)
+    assert sent.call_count == 1
+    assert raised.value.error_code == "REQUEST_TIMED_OUT"
+
+
+@pytest.mark.parametrize("op", ["get_collection", "count", "scroll", "retrieve"])
+def test_a_read_retries_a_request_timed_out(client, op):
+    call, body = CALLS[op]
+    sent = queue(client, _response(503, TIMED_OUT), _ok(body))
+
+    call(client)
+    assert sent.call_count == 2
 
 
 @pytest.mark.parametrize("op", ["delete_collection", "create_collection"])
