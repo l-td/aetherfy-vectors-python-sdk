@@ -1416,8 +1416,9 @@ def test_with_no_known_address_resource_busy_is_waited_out_once_and_asked_again(
     assert (len(wire.calls), waits) == (2, [5.0])
 
 
-def test_with_no_known_address_any_other_503_fails_as_it_came(wire, waits):
-    wire.replies["analyst"] = [(503, envelope("SERVICE_UNAVAILABLE"), "5")]
+@pytest.mark.parametrize("code", ["REQUEST_TIMED_OUT", "SERVICE_UNAVAILABLE"])
+def test_with_no_known_address_any_other_503_fails_as_it_came(wire, waits, code):
+    wire.replies["analyst"] = [(503, envelope(code), "5")]
     with pytest.raises(PeerLookupError):
         agent_url("analyst")
     assert (len(wire.calls), waits) == (1, [])

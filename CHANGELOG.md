@@ -32,10 +32,11 @@ Ships after 1.5.0, with messaging between running agents.
   not resolve, the connection was refused) is retried once, as before. One that may have arrived is retried once only
   for a call whose repeat gives the same result: a read, a cancel (a second cancel of the same run changes nothing), and
   a spawn that carries its id. `call_agent` already raised "may or may not have run" on such a failure and still does.
-- **A request the control plane answers `503 RESOURCE_BUSY` or `503 SERVICE_UNAVAILABLE` is repeated once.** After
-  its `Retry-After`, and only for a call whose repeat gives the same result: either can come partway through a
-  request. A `Retry-After` longer than the request's own timeout is left to the caller, with the 503. A peer lookup
-  with a last known address serves it at once instead; with none known, it repeats a `RESOURCE_BUSY` once before
+- **A request the control plane answers `503` with a `Retry-After` is repeated once, after it, when that cannot do
+  the work twice.** `RESOURCE_BUSY` means nothing ran, so any request is repeated. `REQUEST_TIMED_OUT` and
+  `SERVICE_UNAVAILABLE` can come partway through a request, so only a call whose repeat gives the same result is.
+  A `Retry-After` longer than the request's own timeout is left to the caller, with the 503. A peer lookup with a
+  last known address serves it at once instead; with none known, it repeats a `RESOURCE_BUSY` once before
   failing.
 
 ## [1.5.0] - 2026-11-16

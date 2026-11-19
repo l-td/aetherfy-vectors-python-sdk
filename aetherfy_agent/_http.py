@@ -63,12 +63,16 @@ def _retry_after_of(response: Any) -> Optional[float]:
     return parse_retry_after(headers.get("Retry-After") if headers else None)
 
 
-#: The control plane's 503s worth one more try after their Retry-After, each only for a call whose repeat gives the
-#: same result (`repeatable`): either can come PARTWAY through a request. SERVICE_UNAVAILABLE: the archive storage an
-#: upload or a rebuild needs. RESOURCE_BUSY: a request's first unit found no database slot (control plane REVIEW_FAQ
-#: §97, nothing ran), but today the same code also answers a lock or statement timeout partway through a request.
+#: The control plane's 503s worth one more try after their Retry-After. RESOURCE_BUSY: the request was refused before
+#: anything ran (its first unit found no database slot), so ANY request may be sent again, a create or a delete
+#: included. REQUEST_TIMED_OUT and SERVICE_UNAVAILABLE can come PARTWAY through a request (a later unit timed out, or
+#: the archive storage an upload or a rebuild needs was unreachable), so only a call whose repeat gives the same
+#: result (`repeatable`) is sent again.
 RESOURCE_BUSY = "RESOURCE_BUSY"
+REQUEST_TIMED_OUT = "REQUEST_TIMED_OUT"
 SERVICE_UNAVAILABLE = "SERVICE_UNAVAILABLE"
+#: The 503s that may have partly run: repeated only for a repeatable call.
+_PARTWAY = frozenset({REQUEST_TIMED_OUT, SERVICE_UNAVAILABLE})
 #: The longest Retry-After the helper waits out itself: the request's own timeout. A longer one is returned to the
 #: caller with the 503, as any other status is.
 MAX_RETRY_AFTER_WAITED = DEFAULT_TIMEOUT
@@ -77,9 +81,9 @@ MAX_RETRY_AFTER_WAITED = DEFAULT_TIMEOUT
 _sleep = time.sleep
 
 
-#: Which of the control plane's 503s request_json waits out and repeats for a repeatable call: BY THE RULE (the
-#: default: RESOURCE_BUSY and SERVICE_UNAVAILABLE), RESOURCE_BUSY alone, or NONE (returned as they came). The peer
-#: lookup chooses: with a last known address it has an answer to serve at once instead.
+#: Which of the control plane's 503s request_json waits out and repeats: BY THE RULE (the default: RESOURCE_BUSY for
+#: any call, REQUEST_TIMED_OUT and SERVICE_UNAVAILABLE for a repeatable one), RESOURCE_BUSY alone, or NONE (returned
+#: as they came). The peer lookup chooses: with a last known address it has an answer to serve at once instead.
 REFUSALS_BY_THE_RULE = "by-the-rule"
 REFUSALS_RESOURCE_BUSY_ONLY = "resource-busy-only"
 REFUSALS_NONE = "none"
@@ -93,16 +97,17 @@ def _worth_one_more_try(
     repeatable: bool,
     refusals: str,
 ) -> bool:
-    """A 503 the helper repeats after its Retry-After: RESOURCE_BUSY and SERVICE_UNAVAILABLE (as `refusals`
-    allows), for a repeatable call, and only with a Retry-After it may wait out."""
+    """A 503 the helper repeats after its Retry-After, only with a Retry-After it may wait out: RESOURCE_BUSY for
+    any call (nothing ran), REQUEST_TIMED_OUT and SERVICE_UNAVAILABLE for a repeatable one (they may have partly
+    run), as `refusals` allows."""
     detail = body.get("detail") if isinstance(body, dict) else None
     code = detail.get("code") if isinstance(detail, dict) else None
-    codes = (
-        {RESOURCE_BUSY}
-        if refusals == REFUSALS_RESOURCE_BUSY_ONLY
-        else {RESOURCE_BUSY, SERVICE_UNAVAILABLE}
-    )
-    retryable = refusals != REFUSALS_NONE and repeatable and code in codes
+    if refusals == REFUSALS_NONE:
+        retryable = False
+    elif code == RESOURCE_BUSY:
+        retryable = True
+    else:
+        retryable = refusals == REFUSALS_BY_THE_RULE and repeatable and code in _PARTWAY
     return (
         status == 503
         and retryable
@@ -152,10 +157,12 @@ def request_json(
 
     - a request that NEVER LEFT (:func:`never_delivered`: the name did not
       resolve, the connection was refused) is retried, whatever the call;
-    - a 503 ``RESOURCE_BUSY`` or ``SERVICE_UNAVAILABLE`` with a
-      ``Retry-After`` is retried after that ``Retry-After`` only when the call
-      is ``repeatable``: either can come partway through a request. It waits at
-      most :data:`MAX_RETRY_AFTER_WAITED`; a longer one is returned as it came;
+    - a 503 with a ``Retry-After`` is retried after that ``Retry-After``:
+      ``RESOURCE_BUSY`` whatever the call (it was refused before anything
+      ran), ``REQUEST_TIMED_OUT`` and ``SERVICE_UNAVAILABLE`` only when the
+      call is ``repeatable`` (either can come partway through a request). It
+      waits at most :data:`MAX_RETRY_AFTER_WAITED`; a longer one is returned
+      as it came;
     - a request that may have been DELIVERED (a timeout or a reset after it was
       sent) is retried only when the caller says the call is ``repeatable``:
       its repeat gives the same result (a read, a cancel, a spawn or a message

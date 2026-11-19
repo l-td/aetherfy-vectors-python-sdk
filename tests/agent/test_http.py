@@ -287,9 +287,9 @@ def test_a_status_with_retry_after_is_still_never_retried(monkeypatch):
     assert len(attempts) == 1
 
 
-# --- REFUSED BEFORE ANYTHING RAN ------------------------------------------------------------------------------------
-# 503 RESOURCE_BUSY and 503 SERVICE_UNAVAILABLE, with a Retry-After, can each come partway through a request (today
-# RESOURCE_BUSY also answers a lock or statement timeout), so each is repeated once after its Retry-After only for a
+# --- THE CONTROL PLANE'S 503s ---------------------------------------------------------------------------------------
+# With a Retry-After, each is repeated once after it: 503 RESOURCE_BUSY (refused before anything ran) whatever the
+# call; 503 REQUEST_TIMED_OUT and 503 SERVICE_UNAVAILABLE (either can come partway through a request) only for a
 # repeatable call. The wait is recorded, never taken (`_http._sleep`).
 
 
@@ -325,15 +325,22 @@ def waits(monkeypatch):
     return waited
 
 
-@pytest.mark.parametrize("code", ["RESOURCE_BUSY", "SERVICE_UNAVAILABLE"])
+@pytest.mark.parametrize("code", ["RESOURCE_BUSY", "REQUEST_TIMED_OUT", "SERVICE_UNAVAILABLE"])
 def test_a_503_is_retried_once_after_its_retry_after_for_a_repeatable_call(monkeypatch, waits, code):
     urlopen, attempts = answers(refusal(code), FakeResponse(200, {"state": "active"}))
     status, body, _ = call(monkeypatch, urlopen, repeatable=True)
     assert (status, body, len(attempts), waits) == (200, {"state": "active"}, 2, [5.0])
 
 
-@pytest.mark.parametrize("code", ["RESOURCE_BUSY", "SERVICE_UNAVAILABLE"])
-def test_a_503_is_returned_to_a_call_that_is_not_repeatable(monkeypatch, waits, code):
+def test_resource_busy_is_retried_for_a_call_that_is_not_repeatable(monkeypatch, waits):
+    # Refused before anything ran: the repeat cannot do the work twice, so even a create is sent again.
+    urlopen, attempts = answers(refusal("RESOURCE_BUSY"), FakeResponse(201, {"id": "r1"}))
+    status, body, _ = call(monkeypatch, urlopen, repeatable=False)
+    assert (status, body, len(attempts), waits) == (201, {"id": "r1"}, 2, [5.0])
+
+
+@pytest.mark.parametrize("code", ["REQUEST_TIMED_OUT", "SERVICE_UNAVAILABLE"])
+def test_a_503_that_may_have_partly_run_is_returned_to_a_call_that_is_not_repeatable(monkeypatch, waits, code):
     # It can come partway through the request: a blind repeat could do the work a second time.
     urlopen, attempts = answers(refusal(code))
     status, body, _ = call(monkeypatch, urlopen, repeatable=False)
