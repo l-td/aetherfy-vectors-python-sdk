@@ -917,7 +917,8 @@ def send(run_id: str, body: Any, *, id: Optional[str] = None) -> Sent:
     a run it started, or any run of the same run tree.
 
     ``body`` is any JSON value, up to the inline cap a run's payload has. ``id``
-    is the message's own id; the helper makes one when none is given. Sending
+    is the message's own id, a UUID (anything else is refused, 422
+    VALIDATION_ERROR); the helper makes one when none is given. Sending
     the same id again is the same message: it is stored once, so a send whose
     answer was lost can simply be repeated.
 
