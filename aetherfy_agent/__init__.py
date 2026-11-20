@@ -678,8 +678,8 @@ def result(run_id: str) -> Run:
     read with the waiting done server-side, and is what to use when the answer
     is the point.
 
-    ``run_id`` is a run's id — ``Spawn.spawn_id`` from a :func:`spawn`, or the
-    id of this run itself in ``AETHERFY_SPAWN_ID``.
+    ``run_id`` is a run's id — ``Spawn.spawn_id`` from a :func:`spawn`, or, on a
+    task machine, the id of this run itself in ``AETHERFY_DEPLOYMENT_ID``.
 
     :raises RunNotFound: 404, no run has that id.
     :raises RunAccessDenied: 403 ``DEPLOYMENT_ACCESS_DENIED``, the run belongs to
@@ -908,7 +908,12 @@ def _receive_lock(run_id: str) -> threading.Lock:
 
 
 def _own_run_id(purpose: str) -> str:
-    return _require("AETHERFY_SPAWN_ID", purpose)
+    """The deployment whose mailbox this process reads: AETHERFY_DEPLOYMENT_ID, and
+    nothing else. On a task machine the supervisor sets it to the run being
+    executed, on every run; on a service machine the platform sets it to the
+    release the machine serves, whose mailbox the service's own code reads.
+    (AETHERFY_SPAWN_ID names a run only, and a service machine has none.)"""
+    return _require("AETHERFY_DEPLOYMENT_ID", purpose)
 
 
 def send(run_id: str, body: Any, *, id: Optional[str] = None) -> Sent:

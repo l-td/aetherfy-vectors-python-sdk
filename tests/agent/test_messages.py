@@ -45,7 +45,10 @@ LOCAL = "http://127.0.0.1:9400"
 def env(monkeypatch):
     monkeypatch.setenv("AETHERFY_API_URL", API)
     monkeypatch.setenv("AETHERFY_API_KEY", "afy_test_run_key")
-    monkeypatch.setenv("AETHERFY_SPAWN_ID", OWN)
+    # The mailbox is found through AETHERFY_DEPLOYMENT_ID alone: the run on a task machine, the release on a
+    # service's. AETHERFY_SPAWN_ID names a run only, so it is absent here, as on a service's machine.
+    monkeypatch.setenv("AETHERFY_DEPLOYMENT_ID", OWN)
+    monkeypatch.delenv("AETHERFY_SPAWN_ID", raising=False)
     monkeypatch.setenv("AETHERFY_SUPERVISOR_WAIT_URL", LOCAL)
     aetherfy_agent._pending_acks.clear()
     aetherfy_agent._pending_waits.clear()
@@ -215,6 +218,30 @@ def test_without_the_supervisors_wait_a_wait_is_refused_before_any_request(trans
     queued(transport)
     with pytest.raises(NotRunningOnAgent):
         receive(timeout_seconds=timeout)
+    assert transport.calls == []
+
+
+RELEASE = "44444444-4444-4444-8444-444444444444"
+
+
+def test_a_service_reads_its_releases_mailbox_with_no_spawn_id(transport, monkeypatch):
+    # A service's machine: AETHERFY_DEPLOYMENT_ID is the release it serves, and there is no AETHERFY_SPAWN_ID.
+    monkeypatch.setenv("AETHERFY_DEPLOYMENT_ID", RELEASE)
+    queued(transport, (200, {"message": stored(1, sender_run_id=CHILD, body={"question": "?"})}))
+    got = receive(timeout_seconds=0, from_run=CHILD)
+    assert (got.body, got.sender_run_id) == ({"question": "?"}, CHILD)
+    assert transport.calls[0]["url"] == "{0}/deployments/{1}/messages/receive".format(API, RELEASE)
+
+
+@pytest.mark.parametrize("call", [lambda: receive(timeout_seconds=0), lambda: list(messages())])
+def test_the_mailbox_is_never_read_from_aetherfy_spawn_id(transport, monkeypatch, call):
+    # One source: with AETHERFY_DEPLOYMENT_ID missing, a spawn id does not stand in for it.
+    monkeypatch.delenv("AETHERFY_DEPLOYMENT_ID")
+    monkeypatch.setenv("AETHERFY_SPAWN_ID", OWN)
+    queued(transport)
+    with pytest.raises(NotRunningOnAgent) as raised:
+        call()
+    assert raised.value.variable == "AETHERFY_DEPLOYMENT_ID"
     assert transport.calls == []
 
 
