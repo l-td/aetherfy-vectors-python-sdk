@@ -57,6 +57,7 @@ delete_field_index         ONCE        a repeat finds no index
 from typing import Dict
 
 from .exceptions import (
+    AetherfyVectorsException,
     NetworkError,
     RateLimitExceededError,
     RequestTimeoutError,
@@ -128,10 +129,16 @@ def refused_before_anything(error: Exception) -> bool:
 
 
 def ambiguous(error: Exception) -> bool:
-    """Kind 2: the request may have run (read timeout, reset, other 5xx)."""
-    return isinstance(
-        error, (ServiceUnavailableError, NetworkError, RequestTimeoutError)
-    ) and not refused_before_anything(error)
+    """Kind 2: the request may have run (read timeout, reset, a 500 or any
+    other 5xx). A 500 is an error on the server's side after it began: part
+    of the request may have been applied."""
+    if refused_before_anything(error):
+        return False
+    if isinstance(error, (ServiceUnavailableError, NetworkError, RequestTimeoutError)):
+        return True
+    return (
+        isinstance(error, AetherfyVectorsException) and (error.status_code or 0) >= 500
+    )
 
 
 def should_retry_class(retry_class: str, error: Exception) -> bool:

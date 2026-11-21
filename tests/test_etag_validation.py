@@ -3,7 +3,7 @@ Tests for ETag-based schema validation and caching
 """
 
 import pytest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 from aetherfy_vectors import AetherfyVectorsClient
 from aetherfy_vectors.exceptions import AetherfyVectorsException, ValidationError
 
@@ -242,17 +242,20 @@ class TestETagValidation:
         }
         mock_500_response.content = b'{"error":{"message":"Internal server error"}}'
 
+        # An upsert is a repeatable write (keyed by point id), so a 500, which may
+        # have run part of it, is repeated: the first attempt and 3 retries.
         mock_requests.request.side_effect = [
             Mock(status_code=200, json=lambda: mock_collection_response, content=True),
             schema_404_error,
-            mock_500_response,
+            *[mock_500_response] * 4,
         ]
 
         # Upsert should fail with server error
         points = [{"id": 1, "vector": [0.1] * 768, "payload": {}}]
 
-        with pytest.raises(AetherfyVectorsException) as exc_info:
+        with patch("time.sleep"), pytest.raises(AetherfyVectorsException) as exc_info:
             client.upsert("test-collection", points)
 
         # Should mention server error
         assert "server error" in str(exc_info.value).lower()
+        assert mock_requests.request.call_count == 2 + 4

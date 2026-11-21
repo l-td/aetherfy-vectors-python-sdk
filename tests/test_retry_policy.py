@@ -16,6 +16,7 @@ from urllib3.exceptions import NewConnectionError
 
 from aetherfy_vectors import AetherfyVectorsClient
 from aetherfy_vectors.exceptions import (
+    AetherfyVectorsException,
     NetworkError,
     RequestTimeoutError,
     ServiceUnavailableError,
@@ -216,6 +217,57 @@ def test_a_read_retries_a_read_timeout_and_another_503(client, op):
     sent = queue(client, _response(503, OTHER_503), _ok(body))
     call(client)
     assert sent.call_count == 2
+
+
+INTERNAL = {"error": {"code": "INTERNAL_ERROR", "message": "x"}}
+TEAPOT = {"error": {"code": "TEAPOT", "message": "x"}}
+
+
+@pytest.mark.parametrize("status", [500, 501, 507])
+@pytest.mark.parametrize("op", ["get_collection", "count", "scroll", "retrieve"])
+def test_a_read_retries_a_500_and_any_other_unmapped_5xx(client, op, status):
+    """A 500 may have run part of the request: it is repeated only for an
+    operation whose repeat gives the same result (retry_policy.py, kind 2),
+    as the JS SDK does."""
+    call, body = CALLS[op]
+    sent = queue(client, _response(status, INTERNAL), _ok(body))
+    call(client)
+    assert sent.call_count == 2
+
+
+def test_a_repeatable_write_retries_a_500(client):
+    sent = queue(
+        client, _response(500, INTERNAL), _ok({"result": {"status": "completed"}})
+    )
+    client.set_payload("docs", {"a": 1}, [1])
+    assert sent.call_count == 2
+
+
+@pytest.mark.parametrize("op", ["delete_collection", "create_collection"])
+def test_a_once_operation_raises_a_500_after_one_attempt(client, op):
+    call, _ = CALLS[op]
+    sent = queue(client, _response(500, INTERNAL), _ok())
+    with pytest.raises(AetherfyVectorsException) as raised:
+        call(client)
+    assert raised.value.status_code == 500
+    assert sent.call_count == 1
+
+
+def test_a_500_is_retried_three_times_then_raised(client):
+    call, _ = CALLS["count"]
+    sent = queue(client, *[_response(500, INTERNAL)] * 10)
+    with pytest.raises(AetherfyVectorsException) as raised:
+        call(client)
+    assert raised.value.status_code == 500
+    assert sent.call_count == 4  # the first attempt and 3 retries
+
+
+def test_a_non_5xx_through_the_base_exception_is_never_retried(client):
+    call, _ = CALLS["count"]
+    sent = queue(client, _response(418, TEAPOT), _ok())
+    with pytest.raises(AetherfyVectorsException):
+        call(client)
+    assert sent.call_count == 1
 
 
 def test_an_ambiguous_failure_is_retried_three_times_then_raised(client):
