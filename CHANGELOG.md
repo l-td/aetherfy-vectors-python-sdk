@@ -17,6 +17,11 @@ This release contains a change marked BREAKING below.
   same wait after something ran is a `503` with `REQUEST_TIMED_OUT`, which is
   retried only for an operation whose repeat gives the same result, like any
   other `5xx`. Both wait for the `Retry-After` the answer carries.
+- **A `500` is retried like the other `5xx`.** It was raised after one attempt for every
+  operation, against this rule and the JS SDK. The error is on the server's side after it
+  began, so part of the request may have run: it is repeated, up to 3 times, only for an
+  operation whose repeat gives the same result (reads, upserts, payload writes), and a
+  create or a delete is raised after one attempt.
 - **A run over the account's in-flight limit waits in a line instead of being
   refused.** `spawn` now answers such a run with `status` `"waiting"`, and the
   run waits in the account's line (state `waiting`: no machine, nothing billed)
