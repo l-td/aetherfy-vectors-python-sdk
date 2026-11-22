@@ -8,6 +8,7 @@ equivalent stops being copied into every task.
 
     from aetherfy_agent import payload, machine, fan_out, spawn
     from aetherfy_agent import write_result, result, wait, cancel
+    from aetherfy_agent import send, receive, messages, parent, restarted
     from aetherfy_agent import agent_url, call_agent
 
     data = payload()                         # this run's input, {} when none
@@ -20,6 +21,9 @@ equivalent stops being copied into every task.
     print(finished.result)
     cancel(run.spawn_id)                     # stop it, waiting or running
 
+    send(run.spawn_id, {"focus": "eu"})      # a message to a run while it runs
+    message = receive()                      # this run's next message, or a child's end
+
     url = agent_url("analyst")               # a peer service's address, by name
     reply = call_agent("analyst", "/summarise", method="POST", json={"id": 7})
     print(reply.status, reply.json())
@@ -27,8 +31,16 @@ equivalent stops being copied into every task.
 TWO HALVES, and they are the same contract read from opposite ends. A task
 reads its payload and writes its result; whoever started it spawns and then
 reads that result back. ``payload``/``write_result`` are files on the machine
-and touch no network at all; ``spawn``/``result``/``wait``/``cancel`` are the
-control plane, and are the only calls here that do.
+and touch no network at all; ``spawn``/``result``/``wait``/``cancel`` and the
+messages are the control plane, and are the only calls here that do.
+
+WHILE BOTH RUN, THEY CAN TALK. Every run has a mailbox on the control plane.
+``send`` puts a message in another run's mailbox; ``receive`` hands over this
+run's next one, or the end of a run it started. A task run that waits in
+``receive`` past a short grace is suspended, and is not billed until a message
+wakes it. A message stays unread until the receiving run asks for the next one,
+so a run that starts again on a new machine (``restarted()``) reads again what
+it had not finished with, and ``messages()`` is its whole history.
 
 A RUN HAS A LIFE BEFORE IT RUNS. When the account is at its in-flight limit, a
 new run waits in the account's line (state ``waiting``, no machine, nothing
@@ -57,6 +69,8 @@ nothing in your requirements. A custom container installs it itself.
 
 import json
 import os
+import threading
+import uuid
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import (
@@ -64,12 +78,14 @@ from typing import (
     Callable,
     Dict,
     Iterable,
+    Iterator,
     List,
     Optional,
     Protocol,
     Tuple,
     TypeGuard,
     TypeVar,
+    Union,
 )
 from urllib.parse import quote
 
@@ -84,11 +100,22 @@ from .exceptions import (
     DEPLOYMENT_NOT_FOUND,
     DEPLOYMENT_WAIT_TIMEOUT_INVALID,
     PEER_HAS_NO_URL,
+    RUN_MAILBOX_FULL,
+    RUN_MESSAGE_RATE_LIMITED,
+    RUN_MESSAGE_RECIPIENT_ENDED,
+    RUN_MESSAGE_SENDER_ENDED,
+    RUN_MESSAGE_STORAGE_FULL,
+    RUN_MESSAGE_TOO_LARGE,
     RUN_ID_HEADER,
     RUN_KEY_HEADER,
     RUN_PAYLOAD_TOO_LARGE,
     AgentError,
     AgentTransportError,
+    MailboxFull,
+    MessageError,
+    MessageRateLimited,
+    MessageStorageFull,
+    MessageTooLarge,
     NotARun,
     NotAServiceRun,
     NotRunningOnAgent,
@@ -97,21 +124,26 @@ from .exceptions import (
     PeerHasNoUrl,
     PeerLookupError,
     PeerNotFound,
+    RecipientEnded,
     ResultTooLarge,
     RunAccessDenied,
     RunCancelError,
     RunLineFull,
     RunNotFound,
     RunReadError,
+    SenderEnded,
     SpawnError,
     WaitTimeoutInvalid,
 )
 from .models import (
     Cancellation,
+    Ended,
     MachineShape,
+    Message,
     PeerResponse,
     Run,
     RunRetry,
+    Sent,
     Spawn,
 )
 
@@ -135,6 +167,13 @@ __all__ = [
     "agent_url",
     "agent_urls",
     "call_agent",
+    "send",
+    "receive",
+    "messages",
+    "restarted",
+    "parent",
+    "SUPERVISOR_WAIT_URL_VARIABLE",
+    "INSTANCE_ID_VARIABLE",
     # PUBLIC IN BOTH LANGUAGES OR NEITHER. The JavaScript helper exports these
     # three from its entry point, so a task ported between the two would find
     # the bound readable in one and not the other. A caller sizing its own
@@ -147,15 +186,23 @@ __all__ = [
     "PEER_RETRY_FLOOR_SECONDS",
     "PEER_RETRY_CAP_SECONDS",
     "Cancellation",
+    "Ended",
     "HeaderSource",
     "MachineShape",
+    "Message",
     "PeerResponse",
     "Run",
     "RunRetry",
+    "Sent",
     "ServiceRun",
     "Spawn",
     "AgentError",
     "AgentTransportError",
+    "MailboxFull",
+    "MessageError",
+    "MessageRateLimited",
+    "MessageStorageFull",
+    "MessageTooLarge",
     "NotARun",
     "NotAServiceRun",
     "NotRunningOnAgent",
@@ -164,12 +211,14 @@ __all__ = [
     "PeerLookupError",
     "PeerNotFound",
     "PeerHasNoUrl",
+    "RecipientEnded",
     "ResultTooLarge",
     "RunReadError",
     "RunNotFound",
     "RunAccessDenied",
     "RunCancelError",
     "RunLineFull",
+    "SenderEnded",
     "SpawnError",
     "WaitTimeoutInvalid",
 ]
@@ -309,7 +358,9 @@ def payload() -> Dict[str, Any]:
     url = "{0}/deployments/{1}/payload".format(
         api_url.rstrip("/"), quote(spawn_id, safe="")
     )
-    status, body, _ = _http.request_json("GET", url, api_key=api_key, ua=_user_agent())
+    status, body, _ = _http.request_json(
+        "GET", url, api_key=api_key, ua=_user_agent(), repeatable=True
+    )
     if status != 200:
         raise PayloadUnavailable(
             "The payload fallback ({0}) answered {1}: {2}".format(
@@ -468,12 +519,21 @@ def _spawn_as(api_key: str, child: str, payload: Optional[Dict[str, Any]]) -> Sp
     the environment's, a :class:`ServiceRun` its run's."""
     url = _spawn_url()
 
+    # THE SPAWN'S OWN ID, made once per call. The control plane stores it with
+    # the run it makes and answers a repeat of the same id with that run, so a
+    # spawn whose answer was lost on the way (a timeout after the request left)
+    # is sent again safely and never makes a second run.
     status, body, retry_after = _http.request_json(
         "POST",
         url,
         api_key=api_key,
         ua=_user_agent(),
-        body={"child_agent_id": child, "payload": payload or {}},
+        body={
+            "child_agent_id": child,
+            "payload": payload or {},
+            "request_id": str(uuid.uuid4()),
+        },
+        repeatable=True,
     )
 
     if status in (200, 201, 202):
@@ -621,8 +681,8 @@ def result(run_id: str) -> Run:
     read with the waiting done server-side, and is what to use when the answer
     is the point.
 
-    ``run_id`` is a run's id — ``Spawn.spawn_id`` from a :func:`spawn`, or the
-    id of this run itself in ``AETHERFY_SPAWN_ID``.
+    ``run_id`` is a run's id — ``Spawn.spawn_id`` from a :func:`spawn`, or, on a
+    task machine, the id of this run itself in ``AETHERFY_DEPLOYMENT_ID``.
 
     :raises RunNotFound: 404, no run has that id.
     :raises RunAccessDenied: 403 ``DEPLOYMENT_ACCESS_DENIED``, the run belongs to
@@ -698,7 +758,7 @@ def _wait_as(api_key: str, run_id: str, timeout_seconds: int) -> Run:
         "{0}/wait?timeout_seconds={1}".format(_run_url(run_id), timeout_seconds),
         api_key,
         timeout=timeout_seconds + _WAIT_TRANSPORT_MARGIN_SECONDS,
-        retry_connection_errors=False,
+        repeatable=False,
     )
 
 
@@ -745,8 +805,11 @@ def cancel(run_id: str) -> Cancellation:
 
 def _cancel_as(api_key: str, run_id: str) -> Cancellation:
     url = "{0}/cancel".format(_run_url(run_id))
+    # REPEATABLE: a second cancel of the same run changes nothing (it answers
+    # `stopping` with a count of 0, or `already_finished`), so a cancel whose
+    # answer was lost is sent again rather than reported as maybe applied.
     status, body, retry_after = _http.request_json(
-        "POST", url, api_key=api_key, ua=_user_agent()
+        "POST", url, api_key=api_key, ua=_user_agent(), repeatable=True
     )
 
     if status == 200:
@@ -788,6 +851,380 @@ def _cancel_as(api_key: str, run_id: str) -> Cancellation:
     if status == 409 and code == DEPLOYMENT_NOT_A_RUN:
         raise NotARun(message, details=detail)
     raise RunCancelError(
+        message,
+        status_code=status,
+        error_code=code,
+        details=detail,
+        retry_after=retry_after,
+    )
+
+
+# --- MESSAGES BETWEEN RUNNING AGENTS -------------------------------------------
+#
+# A run has a mailbox on the control plane. Any run of its run tree can send it a
+# message (send), a person on the account can too, and the run reads its own
+# mailbox in order (receive), the oldest unread message first.
+#
+# WAITING HOLDS NOTHING OPEN TO THE CONTROL PLANE. A receive() with nothing to
+# read makes ONE short request that records the wait, then blocks on a LOCAL call
+# to this machine's supervisor (AETHERFY_SUPERVISOR_WAIT_URL, loopback only). A
+# message, a child's end or the receive's own deadline makes the control plane
+# tell the supervisor, which releases the call; the helper then asks once more and
+# gets what is there. While it waits, a task's machine is put to sleep after a
+# short grace and nothing is billed for running time; the message wakes it.
+#
+# AT LEAST ONCE. A message stays unread until the NEXT call acknowledges it, so
+# one whose answer was lost on the way is handed over again rather than lost. A
+# run that restarts (restarted() is True) reads what it had already been handed
+# with messages().
+
+#: Where the supervisor holds a waiting receive(): set by the platform on the
+#: run's process (a task) or on the service's server (a service run's handler).
+SUPERVISOR_WAIT_URL_VARIABLE = "AETHERFY_SUPERVISOR_WAIT_URL"
+
+#: The machine this process runs on, as the platform names it to the control plane: set by a supervisor that holds
+#: waits (run-request-v4). A wait records the machine whose supervisor holds its call; a service release's wait names
+#: it with this, since a release has no one machine of its own.
+INSTANCE_ID_VARIABLE = "AETHERFY_INSTANCE_ID"
+
+#: How many times the local wait is asked again after its connection dropped,
+#: before the helper gives up. The supervisor remembers a wake that came while
+#: the call was being made again, so asking again loses nothing.
+_LOCAL_WAIT_ATTEMPTS = 3
+
+# What each run's process has handed to its code and not yet acknowledged, and
+# the lock that makes one receive() at a time per run: a run's mailbox has one
+# reader, and two waits at once would strand one of them.
+_pending_acks: Dict[str, List[str]] = {}
+# The wait a receive() may have recorded and did not see through: its request,
+# or its local call, failed after the request may have arrived. The next call
+# names it again, so the control plane answers with that same wait instead of
+# refusing a second one while the first is outstanding.
+_pending_waits: Dict[str, str] = {}
+_receive_locks: Dict[str, threading.Lock] = {}
+_receive_locks_guard = threading.Lock()
+
+
+def _receive_lock(run_id: str) -> threading.Lock:
+    with _receive_locks_guard:
+        return _receive_locks.setdefault(run_id, threading.Lock())
+
+
+def _own_run_id(purpose: str) -> str:
+    """The deployment whose mailbox this process reads: AETHERFY_DEPLOYMENT_ID, and
+    nothing else. On a task machine the supervisor sets it to the run being
+    executed, on every run; on a service machine the platform sets it to the
+    release the machine serves, whose mailbox the service's own code reads.
+    (AETHERFY_SPAWN_ID names a run only, and a service machine has none.)"""
+    return _require("AETHERFY_DEPLOYMENT_ID", purpose)
+
+
+def send(run_id: str, body: Any, *, id: Optional[str] = None) -> Sent:
+    """
+    Send one message to a run: the run that started this one (:func:`parent`),
+    a run it started, or any run of the same run tree.
+
+    ``body`` is any JSON value, up to the inline cap a run's payload has. ``id``
+    is the message's own id, a UUID (anything else is refused, 422
+    VALIDATION_ERROR); the helper makes one when none is given. Sending
+    the same id again is the same message: it is stored once, so a send whose
+    answer was lost can simply be repeated.
+
+    The recipient reads it with :func:`receive`, in order. A recipient that is
+    waiting is woken, and a recipient that has ended refuses it.
+
+    :raises MessageTooLarge: 413, the message is larger than the cap.
+    :raises MessageRateLimited: 429, this run sent too many in the last minute.
+    :raises MailboxFull: 429, the recipient has too many unread messages.
+    :raises MessageStorageFull: 429, the account's stored-logs budget is full.
+    :raises RecipientEnded: 409, the recipient has ended.
+    :raises RunNotFound: 404, no run has that id.
+    :raises RunAccessDenied: 403, the run is outside this run's tree.
+    """
+    return _send_as(
+        _environment_key("the key a message is sent with"), run_id, body, id
+    )
+
+
+def _send_as(api_key: str, run_id: str, body: Any, message_id: Optional[str]) -> Sent:
+    if not run_id:
+        raise ValueError("run_id must name the run the message is for.")
+    status, answer, retry_after = _http.request_json(
+        "POST",
+        "{0}/messages".format(_run_url(run_id)),
+        api_key=api_key,
+        ua=_user_agent(),
+        body={"id": message_id or str(uuid.uuid4()), "body": body},
+        repeatable=True,
+    )
+    if status in (200, 201):
+        message = answer.get("message") if isinstance(answer, dict) else None
+        recipient = answer.get("recipient") if isinstance(answer, dict) else None
+        if not (isinstance(message, dict) and isinstance(recipient, dict)):
+            raise MessageError(
+                "The message was accepted with {0} but the answer names no "
+                "message and recipient.".format(status),
+                status_code=status,
+            )
+        seq = message.get("seq")
+        return Sent(
+            message_id=str(message.get("id")),
+            seq=seq if _is_int(seq) else 0,
+            recipient_id=str(recipient.get("id")),
+            recipient_agent=recipient.get("agent"),
+            recipient_state=recipient.get("state"),
+            raw=answer,
+        )
+    raise _message_refusal(status, answer, retry_after, "Sending the message")
+
+
+def receive(
+    *, timeout_seconds: Optional[float] = None, from_run: Optional[str] = None
+) -> Optional[Union[Message, Ended]]:
+    """
+    The next message to this run, the oldest unread first; or the end of a run
+    this run started (:class:`Ended`), when one ends; or ``None`` when
+    ``timeout_seconds`` ran out first.
+
+    With nothing to read it WAITS: with no timeout, until something arrives;
+    with ``timeout_seconds=0``, not at all (one check). While it waits, nothing
+    is held open to the control plane, and a task run's machine sleeps after a
+    short grace, unbilled; a message wakes it where it left off.
+
+    ``from_run`` reads only what that run sent (and its end, if it is a run this
+    one started). Other senders' messages wait their turn: nothing is skipped.
+
+    One receive() at a time per run: a second call in another thread waits for
+    the first. A message is acknowledged on the NEXT call, so one whose answer
+    was lost is handed over again; ``id`` tells a repeat apart.
+
+    :raises SenderEnded: 409, ``from_run`` has ended and left nothing unread.
+    :raises RunNotFound, RunAccessDenied: as for every run call.
+    :raises MessageError: any other refusal, with its code.
+    """
+    return _receive_as(
+        _environment_key("the key a message is received with"),
+        _own_run_id("the run whose messages are received"),
+        timeout_seconds,
+        from_run,
+    )
+
+
+def _receive_as(
+    api_key: str,
+    run_id: str,
+    timeout_seconds: Optional[float],
+    from_run: Optional[str],
+) -> Optional[Union[Message, Ended]]:
+    if timeout_seconds is not None and timeout_seconds < 0:
+        raise ValueError(
+            "timeout_seconds must be 0 or more, or None to wait for as long as it takes."
+        )
+    # A call that may wait needs the supervisor's local call to wait on. Refused
+    # BEFORE any request: the request records the wait and puts the run to
+    # sleep after a short grace, under a process that would not be waiting.
+    local_wait_url = None
+    if timeout_seconds != 0:
+        local_wait_url = os.environ.get(SUPERVISOR_WAIT_URL_VARIABLE)
+        if not local_wait_url:
+            raise NotRunningOnAgent(
+                SUPERVISOR_WAIT_URL_VARIABLE,
+                "the local call a waiting receive() blocks on",
+                "Redeploy the agent: it runs on a platform older than waiting "
+                "for a message. receive(timeout_seconds=0) only checks, and "
+                "works without it.",
+            )
+    with _receive_lock(run_id):
+        pending = _pending_acks.setdefault(run_id, [])
+        while True:
+            wait_id = _pending_waits.get(run_id) or str(uuid.uuid4())
+            request: Dict[str, Any] = {"ack": list(pending), "wait_id": wait_id}
+            if from_run is not None:
+                request["from_run"] = from_run
+            if timeout_seconds is not None:
+                request["timeout_seconds"] = timeout_seconds
+            instance_id = os.environ.get(INSTANCE_ID_VARIABLE)
+            if instance_id:
+                request["instance_id"] = instance_id
+            # Kept until this call sees the wait through: if the request fails
+            # after it may have arrived, the next call names the same wait.
+            _pending_waits[run_id] = wait_id
+            status, answer, retry_after = _http.request_json(
+                "POST",
+                "{0}/messages/receive".format(_run_url(run_id)),
+                api_key=api_key,
+                ua=_user_agent(),
+                body=request,
+                repeatable=True,
+            )
+            if status != 200 or not isinstance(answer, dict):
+                # An answer, even a refusal, is the whole outcome: no wait of
+                # this id is outstanding.
+                _pending_waits.pop(run_id, None)
+                raise _message_refusal(
+                    status, answer, retry_after, "Receiving a message"
+                )
+            # What this call acknowledged is acknowledged: the next call starts clean.
+            del pending[:]
+            if not answer.get("waiting"):
+                _pending_waits.pop(run_id, None)
+            if isinstance(answer.get("message"), dict):
+                message = _message_from(answer["message"])
+                pending.append(message.id)
+                return message
+            if isinstance(answer.get("ended"), dict):
+                ended = answer["ended"]
+                child = str(ended.get("run_id"))
+                pending.append(child)
+                return Ended(run_id=child, state=str(ended.get("state")), raw=ended)
+            if not answer.get("waiting"):
+                return None
+            released = _wait_locally(
+                local_wait_url or "", api_key, str(answer.get("wait_id") or wait_id)
+            )
+            # Seen through: the wait was released.
+            _pending_waits.pop(run_id, None)
+            if released == "timeout":
+                return None
+            # Released by a message or a child's end: ask again, and it is there.
+
+
+def _wait_locally(base: str, api_key: str, wait_id: str) -> str:
+    """Block on the supervisor's local call at ``base`` until the control plane releases this wait. Returns why it
+    was released ("message", "ended" or "timeout"). No timeout of its own: the deadline, when there is one, is the
+    control plane's, and a machine asleep under this call does not count the time it slept.
+    """
+    last_error: Optional[Exception] = None
+    for _ in range(_LOCAL_WAIT_ATTEMPTS):
+        try:
+            status, answer, _ = _http.request_json(
+                "POST",
+                "{0}/wait".format(base.rstrip("/")),
+                api_key=api_key,
+                ua=_user_agent(),
+                body={"wait_id": wait_id},
+                timeout=None,
+                repeatable=True,
+            )
+        except AgentTransportError as error:
+            last_error = error
+            continue
+        if status == 200 and isinstance(answer, dict):
+            return str(answer.get("released") or "message")
+        raise MessageError(
+            "This run's supervisor answered {0} to the local wait.".format(status),
+            status_code=status,
+        )
+    raise AgentTransportError(
+        "The local wait on this run's supervisor did not hold after {0} attempts: "
+        "{1}".format(_LOCAL_WAIT_ATTEMPTS, last_error)
+    )
+
+
+def messages(*, after: int = 0) -> Iterator[Message]:
+    """
+    Every message this run's mailbox holds, in order, read or not: the history
+    a run that restarted rebuilds its state from. ``after`` skips the first
+    ``after`` (by ``seq``). Messages are kept as long as the account's plan
+    keeps logs, and for as long as the run lives.
+    """
+    return _messages_as(
+        _environment_key("the key a mailbox is read with"),
+        _own_run_id("the run whose mailbox is read"),
+        after,
+    )
+
+
+def _messages_as(api_key: str, run_id: str, after: int) -> Iterator[Message]:
+    cursor = after
+    while True:
+        status, answer, retry_after = _http.request_json(
+            "GET",
+            "{0}/messages?after={1}".format(_run_url(run_id), int(cursor)),
+            api_key=api_key,
+            ua=_user_agent(),
+            repeatable=True,
+        )
+        if status != 200 or not isinstance(answer, dict):
+            raise _message_refusal(status, answer, retry_after, "Reading the mailbox")
+        page = answer.get("messages")
+        if not isinstance(page, list) or not page:
+            return
+        for item in page:
+            if isinstance(item, dict):
+                message = _message_from(item)
+                cursor = max(cursor, message.seq)
+                yield message
+        if answer.get("next_after") is None:
+            return
+
+
+def restarted() -> bool:
+    """
+    Whether this process is a restart of its run: the run waited for a message,
+    its machine's memory was not kept, and the platform started it again. Its
+    code then rebuilds what it needs from its history (:func:`messages`) and its
+    payload; nothing in memory survived. False on a run's first start.
+    """
+    run = result(_own_run_id("the run asked about"))
+    attempt = run.raw.get("attempt")
+    return _is_int(attempt) and attempt > 1
+
+
+def parent() -> Optional[str]:
+    """
+    The id of the run that started this one, or ``None`` for a run started by a
+    person, a schedule or a service's public request. The usual recipient of a
+    child's progress and questions: ``send(parent(), {...})``.
+    """
+    run = result(_own_run_id("the run whose parent is read"))
+    found = run.raw.get("spawned_by_deployment_id")
+    return str(found) if found else None
+
+
+def _message_from(item: Dict[str, Any]) -> Message:
+    seq = item.get("seq")
+    sender_run = item.get("sender_run_id")
+    return Message(
+        id=str(item.get("id")),
+        seq=seq if _is_int(seq) else 0,
+        sender=str(item.get("sender") or ("run" if sender_run else "person")),
+        sender_run_id=str(sender_run) if sender_run else None,
+        body=item.get("body"),
+        created_at=item.get("created_at"),
+        raw=item,
+    )
+
+
+def _message_refusal(
+    status: int, body: Any, retry_after: Optional[float], doing: str
+) -> AgentError:
+    """The error a refused message call raises: THE CODE DECIDES, NOT THE STATUS ALONE, as in every call here."""
+    detail = _detail_of(body)
+    message = detail.get("message") or "{0} failed with status {1}.".format(
+        doing, status
+    )
+    code = detail.get("code")
+    shared = _shared_run_refusal(status, code, message, detail)
+    if shared is not None:
+        return shared
+    if status == 403 and code == AUTH_AGENT_KEY_OUT_OF_SCOPE:
+        return RunAccessDenied(
+            message, details=detail, error_code=AUTH_AGENT_KEY_OUT_OF_SCOPE
+        )
+    if status == 413 and code == RUN_MESSAGE_TOO_LARGE:
+        return MessageTooLarge(message, details=detail)
+    if status == 429 and code == RUN_MESSAGE_RATE_LIMITED:
+        return MessageRateLimited(message, details=detail, retry_after=retry_after)
+    if status == 429 and code == RUN_MAILBOX_FULL:
+        return MailboxFull(message, details=detail)
+    if status == 429 and code == RUN_MESSAGE_STORAGE_FULL:
+        return MessageStorageFull(message, details=detail)
+    if status == 409 and code == RUN_MESSAGE_RECIPIENT_ENDED:
+        return RecipientEnded(message, details=detail)
+    if status == 409 and code == RUN_MESSAGE_SENDER_ENDED:
+        return SenderEnded(message, details=detail)
+    return MessageError(
         message,
         status_code=status,
         error_code=code,
@@ -869,6 +1306,29 @@ class ServiceRun:
         """:func:`cancel`, with this run's key: it may cancel the runs below
         this run."""
         return _cancel_as(self._api_key, run_id)
+
+    def send(self, run_id: str, body: Any, *, id: Optional[str] = None) -> Sent:
+        """:func:`send`, from this run: to a run of its run tree."""
+        return _send_as(self._api_key, run_id, body, id)
+
+    def receive(
+        self, *, timeout_seconds: Optional[float] = None, from_run: Optional[str] = None
+    ) -> Optional[Union[Message, Ended]]:
+        """:func:`receive`, for this run's mailbox. A service run that waits
+        stays awake in its request (its service is billed as it always is), and
+        the wait still holds nothing open to the control plane."""
+        return _receive_as(self._api_key, self.run_id, timeout_seconds, from_run)
+
+    def messages(self, *, after: int = 0) -> Iterator[Message]:
+        """:func:`messages`, for this run's mailbox."""
+        return _messages_as(self._api_key, self.run_id, after)
+
+    def parent(self) -> Optional[str]:
+        """:func:`parent`, of this run."""
+        found = _read_run(_run_url(self.run_id), self._api_key).raw.get(
+            "spawned_by_deployment_id"
+        )
+        return str(found) if found else None
 
 
 def service_run(headers: HeaderSource) -> ServiceRun:
@@ -968,7 +1428,11 @@ def agent_url(name: str, *, fresh: bool = False) -> str:
         raise _still_waiting("Looking up '{0}'".format(name), *waiting)
 
     try:
-        body = _lookup("{0}/{1}".format(_peers_url(), quote(name, safe="")), name)
+        body = _lookup(
+            "{0}/{1}".format(_peers_url(), quote(name, safe="")),
+            name,
+            known=not fresh and _peers.cache.last_known_url(name) is not None,
+        )
     except (PeerNotFound, PeerHasNoUrl):
         _peers.cache.forget_url(name)
         raise
@@ -1028,7 +1492,11 @@ def agent_urls(*, fresh: bool = False) -> Dict[str, str]:
         raise _still_waiting("Listing the peers", *waiting)
 
     try:
-        body = _lookup(_peers_url(), None)
+        body = _lookup(
+            _peers_url(),
+            None,
+            known=not fresh and _peers.cache.last_known_list() is not None,
+        )
     except (PeerLookupError, AgentTransportError) as exc:
         if not _control_plane_could_not_answer(exc):
             raise
@@ -1230,11 +1698,18 @@ def _still_waiting(
     )
 
 
-def _lookup(url: str, name: Optional[str]) -> Dict[str, Any]:
+def _lookup(url: str, name: Optional[str], *, known: bool) -> Dict[str, Any]:
     """
     One GET against the peers route, shared by :func:`agent_url` and
     :func:`agent_urls`: the two answer in the same envelope and refuse in the
     same words, so there is one place that maps the refusal.
+
+    ``known``: an address (or a list) this call would serve if the lookup
+    cannot be answered. Then a control-plane refusal is not waited out: the
+    last known answer is served at once, and Retry-After is kept before asking
+    again. With nothing known (the first lookup in this process, or a fresh
+    one), a 503 RESOURCE_BUSY (nothing ran) is waited out once and asked again
+    before the lookup fails; any other 429 or 5xx fails as it came.
 
     THE CODE DECIDES, NOT THE STATUS ALONE, as in :func:`spawn`. 404 and 409
     are categories the control plane reuses; ``AGENT_NOT_FOUND`` and
@@ -1242,7 +1717,12 @@ def _lookup(url: str, name: Optional[str]) -> Dict[str, Any]:
     """
     api_key = _require("AETHERFY_API_KEY", "the key a peer lookup authenticates with")
     status, body, retry_after = _http.request_json(
-        "GET", url, api_key=api_key, ua=_user_agent()
+        "GET",
+        url,
+        api_key=api_key,
+        ua=_user_agent(),
+        repeatable=True,
+        refusals=_http.REFUSALS_NONE if known else _http.REFUSALS_RESOURCE_BUSY_ONLY,
     )
 
     if status == 200:
@@ -1403,7 +1883,7 @@ def _read_run(
     api_key: str,
     *,
     timeout: float = _http.DEFAULT_TIMEOUT,
-    retry_connection_errors: bool = True,
+    repeatable: bool = True,
 ) -> Run:
     """One GET, one Run — shared by :func:`result` and :func:`wait`, for
     whichever key they are given.
@@ -1419,7 +1899,7 @@ def _read_run(
         api_key=api_key,
         ua=_user_agent(),
         timeout=timeout,
-        retry_connection_errors=retry_connection_errors,
+        repeatable=repeatable,
     )
 
     if status == 200:

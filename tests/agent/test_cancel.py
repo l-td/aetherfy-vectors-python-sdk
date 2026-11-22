@@ -78,6 +78,9 @@ def test_cancel_posts_to_the_runs_cancel_route(transport):
     assert call["body"] is None
     assert call["api_key"] == "afy_test_key"
     assert call["ua"].startswith("aetherfy-agent-python/")
+    # REPEATABLE: a second cancel of the same run changes nothing (`stopping`
+    # with a count of 0, or `already_finished`), so a lost answer is sent again.
+    assert call["kwargs"]["repeatable"] is True
 
 
 def test_a_trailing_slash_on_the_base_url_does_not_double(transport, monkeypatch):

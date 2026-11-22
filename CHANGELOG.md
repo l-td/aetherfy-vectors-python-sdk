@@ -5,6 +5,43 @@ All notable changes to the Aetherfy Vectors Python SDK will be documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0] - not yet released
+
+Ships after 1.5.0, with messaging between running agents.
+
+### Added
+- **Messages between running runs.** `send(run_id, body)` puts a message in another run's mailbox, and `receive()`
+  hands over this run's next message, or the end of a run it started (`Ended`, once per child, unless `wait` or
+  `result` already saw it). `receive(timeout_seconds=...)` bounds the wait, and `0` only checks;
+  `receive(from_run=...)` waits for one run's messages. A task run that waits past a short grace is suspended and is
+  not billed until a message wakes it. A message is acknowledged when the run asks for the next one, so a run that
+  starts again on a new machine (`restarted()`) is handed again what it had not finished with, and `messages()` reads
+  the mailbox's whole history. `parent()` is the run that started this one. The service-run handle gains `send`,
+  `receive`, `messages` and `parent`.
+- A waiting `receive()` names the machine it runs on (`AETHERFY_INSTANCE_ID`, set by the platform), so a service
+  release's wait is released on the machine that holds its handler.
+- The mailbox the helpers read is the one `AETHERFY_DEPLOYMENT_ID` names, set by the platform on every machine: the
+  current run on a task agent, the release on a service. So a service's own code reads its release's mailbox (naming
+  `from_run`), what the runs its release spawned send to `parent()`.
+- New types `Message`, `Ended` and `Sent`, and the refusals `MessageError`, `MessageTooLarge`, `MessageRateLimited`
+  (`retry_after`), `MailboxFull`, `MessageStorageFull`, `RecipientEnded` and `SenderEnded`.
+
+### Fixed
+- **A spawn whose answer was lost no longer starts a second run.** Every `spawn()` now carries an id of its own
+  (`request_id`), and the control plane answers a repeat of the same id with the run it already made, so the helper
+  repeats a spawn whose answer did not arrive (a timeout or a dropped connection after the request was sent) without
+  starting the child twice. Until the control plane that stores the id is deployed, the id is ignored.
+- **The helper repeats a request only when that cannot do the work twice.** A request that never left (the name did
+  not resolve, the connection was refused) is retried once, as before. One that may have arrived is retried once only
+  for a call whose repeat gives the same result: a read, a cancel (a second cancel of the same run changes nothing), and
+  a spawn that carries its id. `call_agent` already raised "may or may not have run" on such a failure and still does.
+- **A request the control plane answers `503` with a `Retry-After` is repeated once, after it, when that cannot do
+  the work twice.** `RESOURCE_BUSY` means nothing ran, so any request is repeated. `REQUEST_TIMED_OUT` and
+  `SERVICE_UNAVAILABLE` can come partway through a request, so only a call whose repeat gives the same result is.
+  A `Retry-After` longer than the request's own timeout is left to the caller, with the 503. A peer lookup with a
+  last known address serves it at once instead; with none known, it repeats a `RESOURCE_BUSY` once before
+  failing.
+
 ## [1.5.0] - 2026-11-16
 
 This release contains a change marked BREAKING below.

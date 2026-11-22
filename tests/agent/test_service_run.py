@@ -303,6 +303,10 @@ def test_the_handle_makes_the_same_requests_as_the_module_functions(routed):
     cancel(CHILD_ID)
 
     through_handle, module_level = routed.calls[:4], routed.calls[4:]
+    # A spawn's request_id is made once per CALL (its idempotency), so the two
+    # spawns differ by it alone: both carry one, and nothing else differs.
+    for call in (through_handle[0], module_level[0]):
+        assert call["body"].pop("request_id")
     for a, b in zip(through_handle, module_level):
         assert {k: v for k, v in a.items() if k != "api_key"} == {
             k: v for k, v in b.items() if k != "api_key"
