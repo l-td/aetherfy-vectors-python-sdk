@@ -817,9 +817,17 @@ reply = receive(from_run=parent())           # waits for that run's message only
 `receive()` waits as long as it takes. `receive(timeout_seconds=30)` returns
 `None` when nothing came in that time, and `timeout_seconds=0` only checks. A
 task run that waits past a short grace is suspended and is not billed until a
-message wakes it; a service run waits awake, inside its request. A parent also
-receives the end of each run it started (an `Ended`, once per child), unless it
-already saw that end through `wait` or `result`.
+message wakes it; a service run waits awake, inside its request. A service's own
+code waiting outside any request does not keep its machine awake: the machine
+sleeps after its idle timeout with the `receive()` still waiting, and a message
+wakes it. A parent also receives the end of each run it started (an `Ended`,
+once per child), unless it already saw that end through `wait` or `result`.
+
+When the agent is paused, paused at the account's usage limit, or stopped at a
+suspension, a task run waiting for a message ends `failed` with the hold's
+`RUN_INTERRUPTED_*` code, as a run working when the hold comes does. A paused
+service is not woken by a message: the message stays unread, and the next
+`receive()` hands it over once the agent runs again.
 
 A message is acknowledged when its run asks for the next one, never by the
 answer that handed it over. If a run's machine is lost while it waits, the run
