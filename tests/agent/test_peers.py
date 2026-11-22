@@ -1337,3 +1337,119 @@ def test_a_failed_list_does_not_hold_back_a_lookup_by_name(lookup, clock):
         agent_urls()
 
     assert agent_url("analyst") == OLD  # asked, and answered: the two waits are separate
+
+
+# ---------------------------------------- a lookup the control plane answered 503 RESOURCE_BUSY
+#
+# With a last known address the peer policy stands: it is served at once, and Retry-After is kept before asking again.
+# With NOTHING known (the first lookup in this process, or a fresh one), a 503 RESOURCE_BUSY (nothing ran) is waited
+# out once and asked again before the lookup fails; any other 429 or 5xx fails as it came. These run the REAL
+# request_json: only `urlopen` is stubbed, and every wait is recorded (`_http._sleep`), never taken.
+
+
+class Wire:
+    """The control plane's peers route behind the real request_json: each lookup takes the next queued reply."""
+
+    def __init__(self):
+        self.replies = {}   # key (a name, or None for the list) -> [(status, body, retry_after), ...]
+        self.calls = []
+
+    def __call__(self, request, timeout=None):
+        url = request.full_url
+        key = None if url == PEERS else unquote(url[len(PEERS) + 1:])
+        self.calls.append(key)
+        queued = self.replies.get(key) or []
+        assert queued, "lookup {0}: a request the test did not expect".format(len(self.calls))
+        status, body, retry_after = queued.pop(0)
+        payload = io.BytesIO(json.dumps(body).encode("utf-8"))
+        if status != 200:
+            headers = {"Retry-After": retry_after} if retry_after else {}
+            raise urllib.error.HTTPError(url, status, "refused", headers, payload)
+
+        class Response(io.BytesIO):
+            headers = {}
+
+            def getcode(self):
+                return 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        return Response(payload.getvalue())
+
+
+BUSY = (503, envelope("RESOURCE_BUSY"), "5")
+
+
+@pytest.fixture
+def wire(monkeypatch, clock):
+    fake = Wire()
+    monkeypatch.setattr(_http.urllib.request, "urlopen", fake)
+    return fake
+
+
+@pytest.fixture
+def waits(monkeypatch):
+    waited = []
+    monkeypatch.setattr(_http, "_sleep", waited.append)
+    return waited
+
+
+def outcome(call):
+    """What a call returned, or the exception it raised: a test then fails on its assertion, naming both."""
+    try:
+        return call()
+    except Exception as exc:  # noqa: BLE001
+        return exc
+
+
+def found(name, url):
+    return (200, {"name": name, "url": url}, None)
+
+
+def test_with_no_known_address_resource_busy_is_waited_out_once_and_asked_again(wire, waits):
+    wire.replies["analyst"] = [BUSY, found("analyst", OLD)]
+    assert outcome(lambda: agent_url("analyst")) == OLD
+    assert (len(wire.calls), waits) == (2, [5.0])
+
+
+@pytest.mark.parametrize("code", ["REQUEST_TIMED_OUT", "SERVICE_UNAVAILABLE"])
+def test_with_no_known_address_any_other_503_fails_as_it_came(wire, waits, code):
+    wire.replies["analyst"] = [(503, envelope(code), "5")]
+    with pytest.raises(PeerLookupError):
+        agent_url("analyst")
+    assert (len(wire.calls), waits) == (1, [])
+
+
+def test_with_a_known_address_resource_busy_serves_it_at_once_and_waits_for_nothing(wire, waits, clock):
+    wire.replies["analyst"] = [found("analyst", OLD)]
+    assert agent_url("analyst") == OLD
+    clock.advance(PEER_CACHE_SECONDS + 1)
+    wire.replies["analyst"] = [BUSY]
+    assert agent_url("analyst") == OLD
+    assert (len(wire.calls), waits) == (2, [])
+
+
+def test_a_fresh_lookup_has_nothing_known_to_serve_so_resource_busy_is_waited_out_once(wire, waits):
+    wire.replies["analyst"] = [found("analyst", OLD), BUSY, found("analyst", NEW)]
+    assert agent_url("analyst") == OLD
+    assert outcome(lambda: agent_url("analyst", fresh=True)) == NEW
+    assert (len(wire.calls), waits) == (3, [5.0])
+
+
+def test_the_list_with_no_known_list_waits_out_resource_busy_once(wire, waits):
+    wire.replies[None] = [BUSY, (200, {"peers": [{"name": "analyst", "url": OLD}]}, None)]
+    assert agent_urls() == {"analyst": OLD}
+    assert (len(wire.calls), waits) == (2, [5.0])
+
+
+def test_the_list_with_a_known_list_serves_it_at_once(wire, waits, clock):
+    wire.replies[None] = [(200, {"peers": [{"name": "analyst", "url": OLD}]}, None)]
+    agent_urls()
+    clock.advance(PEER_CACHE_SECONDS + 1)
+    wire.replies[None] = [BUSY]
+    assert agent_urls() == {"analyst": OLD}
+    assert (len(wire.calls), waits) == (2, [])

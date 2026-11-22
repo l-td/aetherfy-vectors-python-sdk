@@ -90,8 +90,10 @@ class Run:
     One run, read back from the control plane.
 
     THE RUN ROW IS THE RECORD. A run's answer is not delivered anywhere — it is
-    stored on the run and read from it, so a parent hears from a child in
-    another region with no side channel and no shared storage between them.
+    stored on the run and read from it, so a parent reads a child's answer in
+    another region with no shared storage between them. What the two say to each
+    other WHILE both run is a message (:func:`~aetherfy_agent.send`,
+    :func:`~aetherfy_agent.receive`), not this.
 
     Only the fields a caller of :func:`~aetherfy_agent.result` or
     :func:`~aetherfy_agent.wait` reads are named here. The response carries a
@@ -194,3 +196,67 @@ class PeerResponse:
         :raises ValueError: the body is not JSON (an empty body included).
         """
         return _json.loads(self.text)
+
+
+@dataclass(frozen=True)
+class Message:
+    """
+    One message in a run's mailbox, as :func:`~aetherfy_agent.receive` hands
+    it over or :func:`~aetherfy_agent.messages` lists it.
+
+    ``id`` is the sender's own id for it (a resend of the same id is the same
+    message, stored once) and ``seq`` its place in this mailbox, 1 for the
+    first. ``sender`` is ``"run"`` (``sender_run_id`` says which) or
+    ``"person"`` (someone on the account, through the dashboard, the CLI or
+    the API with the account's key). ``body`` is what was sent.
+
+    A message is handed to the code at least once: after a restart from the
+    run's history it can come again, and ``id`` and ``seq`` are what to tell a
+    repeat by.
+    """
+
+    id: str
+    seq: int
+    sender: str
+    sender_run_id: Optional[str]
+    body: Any
+    created_at: Optional[str]
+    raw: Dict[str, Any] = field(
+        default_factory=dict, compare=False, hash=False, repr=False
+    )
+
+
+@dataclass(frozen=True)
+class Ended:
+    """
+    A run this run started has ended: what :func:`~aetherfy_agent.receive`
+    hands over in place of a message when a direct child ends. ``run_id`` is
+    the child and ``state`` how it ended (``completed``, ``failed`` or
+    ``cancelled``); its result is read with :func:`~aetherfy_agent.result`.
+
+    Each child's end is handed over once, unless this run already read that end
+    through :func:`~aetherfy_agent.wait` or :func:`~aetherfy_agent.result`.
+    """
+
+    run_id: str
+    state: str
+    raw: Dict[str, Any] = field(
+        default_factory=dict, compare=False, hash=False, repr=False
+    )
+
+
+@dataclass(frozen=True)
+class Sent:
+    """
+    What sending a message answered: the message as stored and the run it went
+    to. ``recipient_state`` is that run's state when the message arrived.
+    """
+
+    message_id: str
+    seq: int
+    recipient_id: str
+    recipient_agent: Optional[str]
+    recipient_state: Optional[str]
+    raw: Dict[str, Any] = field(
+        default_factory=dict, compare=False, hash=False, repr=False
+    )

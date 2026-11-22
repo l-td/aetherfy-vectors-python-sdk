@@ -563,3 +563,159 @@ class PeerHasNoUrl(PeerLookupError):
             error_code=PEER_HAS_NO_URL,
             details=details,
         )
+
+
+# --- MESSAGES BETWEEN RUNNING AGENTS -----------------------------------------
+#
+# The codes a message call refuses with (control plane, messaging between running
+# agents). The STATUS AND THE CODE together select a subclass; an unrecognised
+# pairing arrives as :class:`MessageError` reporting exactly what came back.
+
+#: A message larger than the inline cap (the run payload's).
+RUN_MESSAGE_TOO_LARGE = "RUN_MESSAGE_TOO_LARGE"
+#: More messages from one sending run in a minute than the rate allows.
+RUN_MESSAGE_RATE_LIMITED = "RUN_MESSAGE_RATE_LIMITED"
+#: The recipient's mailbox holds as many unread messages as it may.
+RUN_MAILBOX_FULL = "RUN_MAILBOX_FULL"
+#: The account's live runs' messages would pass its stored-logs budget.
+RUN_MESSAGE_STORAGE_FULL = "RUN_MESSAGE_STORAGE_FULL"
+#: The recipient has ended: its mailbox takes no more messages.
+RUN_MESSAGE_RECIPIENT_ENDED = "RUN_MESSAGE_RECIPIENT_ENDED"
+#: receive(from_run=...) on a run that has ended and left nothing unread.
+RUN_MESSAGE_SENDER_ENDED = "RUN_MESSAGE_SENDER_ENDED"
+
+
+class MessageError(AgentError):
+    """
+    Raised when the control plane refuses a message call (send, receive, the
+    history) for a reason with no type of its own.
+
+    ``error_code`` is the platform's stable code and the thing to branch on;
+    ``message`` is prose that may be reworded at any time. An id no run has is
+    :class:`RunNotFound`, and a run this key may not reach is
+    :class:`RunAccessDenied`, as for every run call.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: Optional[int] = None,
+        error_code: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None,
+        retry_after: Optional[float] = None,
+    ):
+        super().__init__(
+            message,
+            status_code=status_code,
+            details=details,
+            error_code=error_code,
+        )
+        self.retry_after = retry_after
+
+
+class MessageTooLarge(MessageError):
+    """
+    Raised on ``413 RUN_MESSAGE_TOO_LARGE``: the message is larger than the
+    inline cap, the same one a run's payload has. ``message_bytes`` is its size
+    and ``max_bytes`` the cap. A message is for instructions and answers: put
+    large data in a collection and send its id.
+    """
+
+    def __init__(self, message: str, *, details: Optional[Dict[str, Any]] = None):
+        super().__init__(
+            message, status_code=413, error_code=RUN_MESSAGE_TOO_LARGE, details=details
+        )
+        details = details or {}
+        self.message_bytes = details.get("message_bytes")
+        self.max_bytes = details.get("max_bytes")
+
+
+class MessageRateLimited(MessageError):
+    """
+    Raised on ``429 RUN_MESSAGE_RATE_LIMITED``: this run sent as many messages
+    in the last minute as it may. ``retry_after`` is the seconds until the next
+    one is taken.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        details: Optional[Dict[str, Any]] = None,
+        retry_after: Optional[float] = None,
+    ):
+        super().__init__(
+            message,
+            status_code=429,
+            error_code=RUN_MESSAGE_RATE_LIMITED,
+            details=details,
+            retry_after=retry_after,
+        )
+
+
+class MailboxFull(MessageError):
+    """
+    Raised on ``429 RUN_MAILBOX_FULL``: the recipient has as many unread
+    messages as its mailbox holds. It clears when the recipient reads, not with
+    time, so there is no ``retry_after``. ``unread`` and ``max_unread`` say how
+    many.
+    """
+
+    def __init__(self, message: str, *, details: Optional[Dict[str, Any]] = None):
+        super().__init__(
+            message, status_code=429, error_code=RUN_MAILBOX_FULL, details=details
+        )
+        details = details or {}
+        self.unread = details.get("unread")
+        self.max_unread = details.get("max_unread")
+
+
+class MessageStorageFull(MessageError):
+    """
+    Raised on ``429 RUN_MESSAGE_STORAGE_FULL``: the messages of the account's
+    live runs would pass its plan's stored-logs budget. It clears as runs read
+    and end, so there is no ``retry_after``.
+    """
+
+    def __init__(self, message: str, *, details: Optional[Dict[str, Any]] = None):
+        super().__init__(
+            message,
+            status_code=429,
+            error_code=RUN_MESSAGE_STORAGE_FULL,
+            details=details,
+        )
+
+
+class RecipientEnded(MessageError):
+    """
+    Raised on ``409 RUN_MESSAGE_RECIPIENT_ENDED``: the run the message is for
+    has ended, and an ended run's mailbox takes no more messages. Start a new
+    run instead. ``recipient_state`` is how it ended.
+    """
+
+    def __init__(self, message: str, *, details: Optional[Dict[str, Any]] = None):
+        super().__init__(
+            message,
+            status_code=409,
+            error_code=RUN_MESSAGE_RECIPIENT_ENDED,
+            details=details,
+        )
+        self.recipient_state = (details or {}).get("recipient_state")
+
+
+class SenderEnded(MessageError):
+    """
+    Raised by ``receive(from_run=...)`` on ``409 RUN_MESSAGE_SENDER_ENDED``:
+    that run has ended and nothing it sent is left unread, so no message from it
+    will come. ``sender_state`` is how it ended.
+    """
+
+    def __init__(self, message: str, *, details: Optional[Dict[str, Any]] = None):
+        super().__init__(
+            message,
+            status_code=409,
+            error_code=RUN_MESSAGE_SENDER_ENDED,
+            details=details,
+        )
+        self.sender_state = (details or {}).get("sender_state")
