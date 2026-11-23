@@ -5,7 +5,7 @@ All notable changes to the Aetherfy Vectors Python SDK will be documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.6.0] - not yet released
+## [1.5.0] - 2026-11-23
 
 Ships after 1.5.0, with messaging between running agents.
 
@@ -41,8 +41,6 @@ Ships after 1.5.0, with messaging between running agents.
   A `Retry-After` longer than the request's own timeout is left to the caller, with the 503. A peer lookup with a
   last known address serves it at once instead; with none known, it repeats a `RESOURCE_BUSY` once before
   failing.
-
-## [1.5.0] - 2026-11-16
 
 This release contains a change marked BREAKING below.
 
